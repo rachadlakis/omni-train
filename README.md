@@ -1,6 +1,6 @@
-# Distributed Training Mini-Project
+# Distributed Training Project
 
-This project is a modularized framework for distributed language model training using PyTorch. It is designed to compare and experiment with two parallel training strategies:
+This project is a framework for distributed language model training using PyTorch. It is designed to compare and experiment with two parallel training strategies:
 
 - **DDP** (`DistributedDataParallel`)
 - **FSDP** (`FullyShardedDataParallel`)
@@ -17,7 +17,7 @@ The codebase is organized into several modular components for ease of maintenanc
 - **`checkpoint.py`**: Manages distributed state persistence. It handles checkpoint saving and loading using both PyTorch DCP and DTensor APIs.
 - **`data.py`**: Handles dataset downloading, tokenization, and construction of the PyTorch `DistributedSampler` and `DataLoader`.
 - **`utils.py`**: Contains generic utilities, including training configuration formatting and terminal-based loss plotting.
-- **`model.py`**: (Optional) Custom model definitions.
+- **`model.py`**: (Optional) Custom model definitions (Transformer).
 
 ## 🚀 Key Features
 
@@ -174,8 +174,8 @@ This mini-project now includes a lightweight local web UI to launch training, vi
 From this folder:
 
 ```bash
-cd /home/rachad_lakkis/projects/dist-train-project
-source /home/rachad_lakkis/projects/dist-train-project/.venv/bin/activate
+cd dist-train-project
+source .venv/bin/activate
 bash ui/launch_ui.sh
 ```
 
