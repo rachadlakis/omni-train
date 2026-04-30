@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting Started - OMNI-Train</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Theme Toggle Button -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+  <span class="icon-moon">🌙</span>
+  <span class="icon-sun">☀️</span>
+  <span class="theme-label-dark">Dark</span>
+  <span class="theme-label-light">Light</span>
+</button>
+
+<!-- Guide Page -->
+<div class="guide-page">
+  <div class="guide-header">
+    <a href="/" class="btn-back">&larr; Back</a>
+    <h1>📚 Getting Started with <span>OMNI</span>-Train</h1>
+  </div>
+
+  <div class="guide-content">
+    <!-- Introduction -->
+    <div class="guide-section">
+      <h2>🚀 What is OMNI-Train?</h2>
+      <p>
+        <strong>OMNI-Train</strong> is a unified framework for fine-tuning machine learning models with distributed training support.
+        Whether you're training image classifiers, large language models, vision-language models, object detectors, or embedding models,
+        OMNI-Train provides a consistent interface with powerful features like LoRA, quantization, and multi-GPU training.
+      </p>
+
+      <div class="guide-grid">
+        <div class="guide-card">
+          <h4>🖼️ Image Classification (CNN)</h4>
+          <p>Fine-tune ResNet, ViT, EfficientNet, ConvNeXt, and more for image classification tasks.</p>
+        </div>
+        <div class="guide-card">
+          <h4>💬 Large Language Models (LLM)</h4>
+          <p>Train or fine-tune models like LLaMA, Mistral, Phi with full fine-tuning or LoRA.</p>
+        </div>
+        <div class="guide-card">
+          <h4>👁️ Vision-Language Models (VLM)</h4>
+          <p>Fine-tune multimodal models like LLaVA, BLIP-2, Qwen-VL for image understanding.</p>
+        </div>
+        <div class="guide-card">
+          <h4>📦 Object Detection</h4>
+          <p>Train YOLOv8/v11 models for real-time object detection with YOLO or COCO datasets.</p>
+        </div>
+        <div class="guide-card">
+          <h4>🔗 Embedding Models</h4>
+          <p>Fine-tune sentence-transformers, BERT, CLIP for semantic similarity and retrieval.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Distributed Training Strategies -->
+    <div class="guide-section">
+      <h2>⚡ Distributed Training Strategies</h2>
+      <p>
+        OMNI-Train supports three distributed training strategies. Choose based on your hardware and model size:
+      </p>
+
+      <div class="strategy-comparison">
+        <div class="strategy-card">
+          <h4>None (Single GPU)</h4>
+          <span class="badge single">1 GPU</span>
+          <p>Simple single-GPU training. Best for smaller models or when you have limited hardware.</p>
+          <ul>
+            <li>No setup required</li>
+            <li>Works with any GPU</li>
+            <li>Limited by single GPU memory</li>
+          </ul>
+        </div>
+        <div class="strategy-card">
+          <h4>DDP (Data Parallel)</h4>
+          <span class="badge multi">Multi-GPU</span>
+          <p>Distributes data across GPUs. Each GPU holds a full model copy. Fastest for models that fit in memory.</p>
+          <ul>
+            <li>Near-linear speedup</li>
+            <li>Model must fit on 1 GPU</li>
+            <li>Effective batch = batch x GPUs</li>
+          </ul>
+        </div>
+        <div class="strategy-card">
+          <h4>FSDP (Model Parallel)</h4>
+          <span class="badge large">Large Models</span>
+          <p>Shards model parameters across GPUs. Enables training models larger than single GPU memory.</p>
+          <ul>
+            <li>Train 7B+ models on consumer GPUs</li>
+            <li>Memory efficient</li>
+            <li>Slightly more overhead</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>When to Use Each Strategy</h3>
+      <table class="guide-table">
+        <tr>
+          <th>Scenario</th>
+          <th>Recommended Strategy</th>
+          <th>Why</th>
+        </tr>
+        <tr>
+          <td>Small model (ResNet, BERT-base)</td>
+          <td><code>none</code> or <code>ddp</code></td>
+          <td>Model fits easily in memory; DDP gives speed boost</td>
+        </tr>
+        <tr>
+          <td>Medium model (LLaMA-7B with LoRA)</td>
+          <td><code>ddp</code></td>
+          <td>LoRA reduces memory; DDP maximizes throughput</td>
+        </tr>
+        <tr>
+          <td>Large model (LLaMA-13B+ full fine-tune)</td>
+          <td><code>fsdp</code></td>
+          <td>Model sharding required to fit in memory</td>
+        </tr>
+        <tr>
+          <td>Limited VRAM (8GB or less)</td>
+          <td><code>none</code> + quantization</td>
+          <td>4-bit quantization reduces memory 4x</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- YAML Configuration -->
+    <div class="guide-section">
+      <h2>📝 YAML Configuration Examples</h2>
+      <p>
+        OMNI-Train uses YAML files for configuration. Here are examples for different model types:
+      </p>
+
+      <h3>LLM Fine-tuning with LoRA</h3>
+      <div class="guide-code-block">
+<pre><span class="comment"># Fine-tune LLaMA-2 with LoRA on a custom dataset</span>
+<span class="key">seed</span>: <span class="value">42</span>
+
+<span class="key">model</span>:
+  <span class="key">type</span>: <span class="string">llm</span>
+  <span class="key">name</span>: <span class="string">meta-llama/Llama-2-7b-hf</span>
+  <span class="key">finetune_mode</span>: <span class="string">lora</span>
+  <span class="key">quantize</span>: <span class="value">true</span>
+  <span class="key">quant_bits</span>: <span class="value">4</span>
+  <span class="key">lora_r</span>: <span class="value">16</span>
+  <span class="key">lora_alpha</span>: <span class="value">32</span>
+
+<span class="key">data</span>:
+  <span class="key">type</span>: <span class="string">hf_dataset</span>
+  <span class="key">name</span>: <span class="string">tatsu-lab/alpaca</span>
+  <span class="key">max_seq_len</span>: <span class="value">2048</span>
+
+<span class="key">distributed</span>:
+  <span class="key">strategy</span>: <span class="string">ddp</span>
+  <span class="key">mixed_precision</span>: <span class="value">true</span>
+
+<span class="key">training</span>:
+  <span class="key">epochs</span>: <span class="value">3</span>
+  <span class="key">batch_size</span>: <span class="value">4</span>
+  <span class="key">lr</span>: <span class="value">2e-4</span>
+  <span class="key">grad_accum_steps</span>: <span class="value">8</span></pre>
+      </div>
+
+      <h3>Image Classification (CNN)</h3>
+      <div class="guide-code-block">
+<pre><span class="comment"># Fine-tune ResNet50 for custom image classification</span>
+<span class="key">model</span>:
+  <span class="key">type</span>: <span class="string">cnn</span>
+  <span class="key">name</span>: <span class="string">resnet50</span>
+  <span class="key">num_classes</span>: <span class="value">10</span>
+  <span class="key">pretrained</span>: <span class="value">true</span>
+  <span class="key">freeze_backbone</span>: <span class="value">false</span>
+
+<span class="key">data</span>:
+  <span class="key">type</span>: <span class="string">image_folder</span>
+  <span class="key">name</span>: <span class="string">./data/my_images</span>
+  <span class="key">image_size</span>: <span class="value">224</span>
+
+<span class="key">distributed</span>:
+  <span class="key">strategy</span>: <span class="string">ddp</span>
+  <span class="key">mixed_precision</span>: <span class="value">true</span>
+
+<span class="key">training</span>:
+  <span class="key">epochs</span>: <span class="value">20</span>
+  <span class="key">batch_size</span>: <span class="value">32</span>
+  <span class="key">lr</span>: <span class="value">1e-3</span></pre>
+      </div>
+    </div>
+
+    <!-- Key Concepts -->
+    <div class="guide-section">
+      <h2>🎯 Key Concepts</h2>
+
+      <h3>LoRA (Low-Rank Adaptation)</h3>
+      <p>
+        LoRA is a parameter-efficient fine-tuning method that adds small trainable matrices to the model instead of updating all parameters.
+        This dramatically reduces memory usage (often 10-100x) and training time while achieving similar performance to full fine-tuning.
+      </p>
+      <ul>
+        <li><strong>lora_r</strong>: Rank of LoRA matrices. Higher = more capacity but more memory. Typical: 8-64</li>
+        <li><strong>lora_alpha</strong>: Scaling factor. Usually set to 2x lora_r</li>
+        <li><strong>lora_target_modules</strong>: Which layers to apply LoRA (e.g., q_proj, v_proj)</li>
+      </ul>
+
+      <h3>Quantization</h3>
+      <p>
+        Quantization reduces model precision from 32-bit to 4-bit or 8-bit, dramatically reducing memory usage.
+        Combined with LoRA, you can fine-tune a 7B parameter model on a single 24GB GPU.
+      </p>
+      <ul>
+        <li><strong>4-bit</strong>: Maximum memory savings (~4x reduction)</li>
+        <li><strong>8-bit</strong>: Better quality, moderate savings (~2x reduction)</li>
+        <li>Not compatible with FSDP (use DDP or single GPU)</li>
+      </ul>
+
+      <h3>Gradient Accumulation</h3>
+      <p>
+        When you can't fit a large batch in memory, gradient accumulation simulates larger batches by accumulating gradients over multiple forward passes before updating weights.
+      </p>
+      <ul>
+        <li><strong>Effective batch size</strong> = batch_size x grad_accum_steps x num_gpus</li>
+        <li>Example: batch_size=4, grad_accum=8, 2 GPUs = effective batch of 64</li>
+      </ul>
+
+      <h3>Tips for Training</h3>
+      <ul>
+        <li><strong>Learning rate:</strong> Lower LR for LoRA (1e-4 to 2e-4) vs full fine-tuning (1e-5 to 5e-5)</li>
+        <li><strong>Batch size:</strong> Larger effective batch sizes generally improve training stability</li>
+        <li><strong>Checkpoints:</strong> Save checkpoints regularly to resume if training crashes</li>
+        <li><strong>Warmup:</strong> Use warmup steps (100-1000) to stabilize early training</li>
+        <li><strong>Gradient clipping:</strong> Keep grad_clip around 1.0 to prevent exploding gradients</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- Message Modal -->
+<div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
+  <div class="message-modal" onclick="event.stopPropagation()">
+    <div class="message-modal-header">
+      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <h3 id="message-modal-title">Message</h3>
+      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+    </div>
+    <div class="message-modal-body">
+      <p id="message-modal-text"></p>
+    </div>
+    <div class="message-modal-footer">
+      <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

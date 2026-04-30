@@ -1,0 +1,30 @@
+seed: 42
+
+model:
+  type: detection
+  name: yolo
+  yolo_model: yolov8m.pt
+
+data:
+  type: coco
+  name: data/coco_yolo_converted  # Output directory for converted data
+  image_size: 640
+  num_workers: 8
+  # COCO annotation files and image directories
+  coco_train_json: /data/coco/annotations/instances_train2017.json
+  coco_val_json: /data/coco/annotations/instances_val2017.json
+  coco_train_images: /data/coco/train2017
+  coco_val_images: /data/coco/val2017
+
+distributed:
+  strategy: none
+
+training:
+  epochs: 50
+  batch_size: 8
+  lr: 0.01
+  min_lr: 1e-4
+  weight_decay: 5e-4
+  warmup_steps: 500
+  checkpoint_dir: checkpoints/yolov8m_coco
+  log_interval: 10

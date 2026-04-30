@@ -1,0 +1,33 @@
+seed: 42
+
+model:
+  type: cnn
+  name: vit_b_16
+  num_classes: 100
+  pretrained: true
+  freeze_backbone: false
+
+data:
+  type: image_folder
+  name: /data/imagenet-100
+  train_split: train
+  val_split: val
+  image_size: 224
+  augmentation: autoaugment
+  num_workers: 8
+
+distributed:
+  strategy: ddp
+
+training:
+  epochs: 20
+  batch_size: 64
+  lr: 3e-4
+  min_lr: 1e-6
+  weight_decay: 0.05
+  grad_clip: 1.0
+  warmup_steps: 1000
+  lr_schedule: cosine
+  checkpoint_dir: checkpoints/vit_b16_ddp
+  save_every_n_epochs: 5
+  log_interval: 20

@@ -1,0 +1,25 @@
+seed: 42
+
+model:
+  type: detection
+  name: yolo
+  yolo_model: yolov8n.pt  # yolov8n/s/m/l/x or yolo11n/s/m/l/x
+
+data:
+  type: yolo
+  data_yaml: /data/my_dataset/data.yaml  # YOLO format data.yaml
+  image_size: 640
+  num_workers: 8
+
+distributed:
+  strategy: none
+
+training:
+  epochs: 100
+  batch_size: 16
+  lr: 0.01
+  min_lr: 1e-4
+  weight_decay: 5e-4
+  warmup_steps: 300
+  checkpoint_dir: checkpoints/yolov8n_custom
+  log_interval: 10

@@ -1,0 +1,31 @@
+seed: 42
+
+model:
+  type: cnn
+  name: resnet50
+  num_classes: 10
+  pretrained: true
+  freeze_backbone: false
+
+data:
+  type: torchvision
+  name: CIFAR10
+  image_size: 224
+  augmentation: standard
+  num_workers: 4
+
+distributed:
+  strategy: none
+
+training:
+  epochs: 10
+  batch_size: 32
+  lr: 1e-3
+  min_lr: 1e-5
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  warmup_steps: 500
+  lr_schedule: cosine
+  checkpoint_dir: checkpoints/resnet50_cifar10
+  save_every_n_epochs: 2
+  log_interval: 50

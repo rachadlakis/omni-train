@@ -1,0 +1,74 @@
+ Core ML frameworks
+# Note: torch packages version may vary based on CUDA version
+# Install with: 
+# pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+
+# torch==2.10.0
+# torchvision==0.25.0
+# torchaudio==2.10.0
+
+## Image processing
+pillow==12.0.0
+
+## Configuration
+pyyaml==6.0.3
+
+## Web UI
+fastapi==0.129.0
+pydantic==2.12.3
+uvicorn==0.38.0
+starlette==0.48.0
+
+## HuggingFace ecosystem
+transformers==5.2.0
+peft==0.18.1
+datasets==4.6.0
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface_hub==1.5.0
+accelerate==1.12.0
+
+## Object detection
+ultralytics==8.4.18
+
+## Logging and progress
+wandb==0.25.0
+tqdm==4.67.1
+
+## Utilities
+numpy==2.2.6
+scipy==1.15.3
+requests==2.32.5
+filelock==3.24.3
+fsspec==2026.2.0
+regex==2026.2.19
+
+# Sentence embeddings (optional, for embedding models)
+# sentence-transformers==3.0.0
+
+# Quantization (Linux only)
+# bitsandbytes==0.41.3
+
+## Environment
+python-dotenv==1.1.0
+uniplot
+pyyaml==6.0.3
+plotext
+
+## Quantization
+bitsandbytes==0.46.1
+
+## Weights and Biases
+wandb==0.25.0
+tensorboard
+
+## PEFT & Quantization
+peft==0.18.1
+
+## UI dependencies
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pydantic>=2.6.0
+PyYAML>=6.0.0
+
+dotenv==0.9.9

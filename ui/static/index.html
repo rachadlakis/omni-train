@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OMNI-Train</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<!-- Theme Toggle Button -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+  <span class="icon-moon">🌙</span>
+  <span class="icon-sun">☀️</span>
+  <span class="theme-label-dark">Dark</span>
+  <span class="theme-label-light">Light</span>
+</button>
+
+<!-- Landing Page -->
+<div class="landing">
+  <!-- Animated Background -->
+  <div class="landing-bg">
+    <div class="bg-gradient"></div>
+    <div class="bg-grid"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+    <div class="bg-glow bg-glow-3"></div>
+  </div>
+
+  <div class="landing-content">
+    <div class="landing-header">
+      <div class="logo-badge">
+        <span class="logo-icon">🚀</span>
+      </div>
+      <h1><span>OMNI</span>-Train</h1>
+      <p class="tagline">Train and fine-tune <strong>CNN</strong>, <strong>LLM</strong>, <strong>VLM</strong>, <strong>Detection</strong>, and <strong>Embedding</strong> models with distributed training support</p>
+    </div>
+
+    <div class="landing-options">
+      <div class="landing-card" onclick="openTemplateModal()">
+        <div class="card-glow"></div>
+        <div class="landing-card-icon templates">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </div>
+        <h3>Browse Templates</h3>
+        <p>Start from a pre-configured template for common use cases</p>
+        <div class="landing-card-tags">
+          <span class="mini-tag cnn">CNN</span>
+          <span class="mini-tag llm">LLM</span>
+          <span class="mini-tag vlm">VLM</span>
+          <span class="mini-tag detection">Detection</span>
+          <span class="mini-tag embedding">Embedding</span>
+        </div>
+        <div class="card-arrow">→</div>
+      </div>
+
+      <div class="landing-card" onclick="openCustomSetup()">
+        <div class="card-glow"></div>
+        <div class="landing-card-icon custom">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </div>
+        <h3>Custom Setup</h3>
+        <p>Configure your training from scratch with full control</p>
+        <div class="landing-card-tags">
+          <span class="mini-tag custom">Full Control</span>
+          <span class="mini-tag yaml">From Options</span>
+        </div>
+        <div class="card-arrow">→</div>
+      </div>
+
+      <div class="landing-card" onclick="openYamlEditor()">
+        <div class="card-glow"></div>
+        <div class="landing-card-icon yaml">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+        </div>
+        <h3>Enter YAML Config</h3>
+        <p>Write or paste your configuration directly in YAML format</p>
+        <div class="landing-card-tags">
+          <span class="mini-tag yaml">For AI/ML Experts</span>
+        </div>
+        <div class="card-arrow">→</div>
+      </div>
+    </div>
+
+    <div class="landing-footer">
+      <a class="guide-link" onclick="openGuidePage()">
+        <span class="guide-icon">📚</span>
+        <span class="guide-text">
+          <strong>Getting Started Guide</strong>
+          <span>Learn about distributed training, YAML configs & more</span>
+        </span>
+        <span class="guide-arrow">→</span>
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Template Modal -->
+<div class="modal-overlay" id="template-modal" onclick="closeTemplateModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>Choose a Template</h2>
+      <button class="modal-close" onclick="closeTemplateModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="template-filters">
+        <button class="filter-btn active" data-filter="all" onclick="filterTemplates('all', this)">All</button>
+        <button class="filter-btn" data-filter="cnn" onclick="filterTemplates('cnn', this)">CNN</button>
+        <button class="filter-btn" data-filter="llm" onclick="filterTemplates('llm', this)">LLM</button>
+        <button class="filter-btn" data-filter="vlm" onclick="filterTemplates('vlm', this)">VLM</button>
+        <button class="filter-btn" data-filter="detection" onclick="filterTemplates('detection', this)">Detection</button>
+        <button class="filter-btn" data-filter="embedding" onclick="filterTemplates('embedding', this)">Embedding</button>
+      </div>
+      <div class="template-grid" id="template-grid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Message Modal -->
+<div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
+  <div class="message-modal" onclick="event.stopPropagation()">
+    <div class="message-modal-header">
+      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <h3 id="message-modal-title">Message</h3>
+      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+    </div>
+    <div class="message-modal-body">
+      <p id="message-modal-text"></p>
+    </div>
+    <div class="message-modal-footer">
+      <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

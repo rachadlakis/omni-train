@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuration - OMNI-Train</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Theme Toggle Button -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+  <span class="icon-moon">🌙</span>
+  <span class="icon-sun">☀️</span>
+  <span class="theme-label-dark">Dark</span>
+  <span class="theme-label-light">Light</span>
+</button>
+
+<!-- Config Page -->
+<div class="config-page">
+  <div class="header">
+    <div class="header-left">
+      <a href="/" class="btn-back">&larr; Back</a>
+    </div>
+    <div class="header-right">
+      <div class="queue-indicator" id="queue-indicator" style="display:none;">
+        <span class="queue-icon">&#128203;</span>
+        <span class="queue-text" id="queue-text">Queue: 0 pending</span>
+      </div>
+      <span id="status-badge" class="status-badge status-idle">IDLE</span>
+    </div>
+  </div>
+
+  <div class="config-layout">
+    <!-- Side Panel Toggle -->
+    <button class="side-panel-toggle" id="side-panel-toggle" onclick="toggleSidePanel()" title="Toggle panel">
+      <span id="panel-toggle-icon">&lt;</span>
+    </button>
+
+    <!-- Side Panel (Left) -->
+    <div class="side-panel" id="side-panel">
+      <div class="side-tabs">
+        <div class="side-tab active" onclick="switchSideTab('templates')">Templates</div>
+        <div class="side-tab" onclick="switchSideTab('logs')">Logs</div>
+      </div>
+
+      <!-- Templates Content -->
+      <div class="side-content active" id="side-templates">
+        <div class="side-filters">
+          <button class="side-filter-btn active" onclick="filterSideTemplates('all', this)">All</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('llm', this)">LLM</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('vlm', this)">VLM</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('cnn', this)">CNN</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('detection', this)">Detection</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('embedding', this)">Embedding</button>
+        </div>
+        <div class="templates-list" id="template-list"></div>
+      </div>
+
+      <!-- Logs Content -->
+      <div class="side-content" id="side-logs">
+        <div class="logs-container">
+          <div class="logs-toolbar">
+            <span id="log-count">0 lines</span>
+            <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+          </div>
+          <div class="logs-output" id="log-output"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Form Panel (Right) -->
+    <div class="form-panel">
+      <!-- Model Section -->
+      <div class="form-section">
+        <h3><span class="icon model">🧠</span> Model Configuration <span class="section-tooltip" data-tip="Configure the model architecture and fine-tuning method. Supports CNN, LLM, VLM, Detection, and Embedding models.">?</span></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Model Type <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Type of model architecture to fine-tune">?</span></label>
+            <select id="f-model-type" onchange="onModelTypeChange()">
+              <option value="" disabled selected hidden>Select model type...</option>
+              <option value="cnn">CNN (Image Classification)</option>
+              <option value="llm">LLM (Language Model)</option>
+              <option value="vlm">VLM (Vision Language Model)</option>
+              <option value="detection">Object Detection</option>
+              <option value="embedding">Embedding Model</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Model Source <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Where to load the model from">?</span></label>
+            <select id="f-model-source" onchange="onModelSourceChange()">
+              <option value="" disabled selected hidden>Select source...</option>
+              <option value="huggingface">HuggingFace</option>
+              <option value="torchvision">Torchvision</option>
+              <option value="ultralytics">Ultralytics</option>
+              <option value="url">External URL</option>
+              <option value="local">Local Path</option>
+              <option value="upload">Upload File</option>
+            </select>
+          </div>
+          <div class="form-group" id="fg-model-name" style="display:none;">
+            <label>Model Name <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-model-name" placeholder="e.g. facebook/opt-125m">
+          </div>
+          <div class="form-group" id="fg-model-url" style="display:none;">
+            <label>Model URL</label>
+            <input type="text" id="f-model-url" placeholder="https://example.com/model.safetensors">
+          </div>
+          <div class="form-group" id="fg-model-path" style="display:none;">
+            <label>Local Path</label>
+            <input type="text" id="f-model-path" placeholder="/path/to/model">
+          </div>
+          <div class="form-group" id="fg-model-upload" style="display:none;">
+            <label>Upload Model</label>
+            <div class="upload-area" id="upload-area" onclick="document.getElementById('f-model-file').click()">
+              <input type="file" id="f-model-file" style="display:none;" onchange="onModelFileSelect(this)" accept=".pt,.pth,.bin,.safetensors,.gguf">
+              <div class="upload-icon">📁</div>
+              <div class="upload-text">Click to select or drag & drop</div>
+              <div class="upload-hint">.pt, .pth, .bin, .safetensors, .gguf</div>
+            </div>
+            <div class="upload-selected" id="upload-selected" style="display:none;">
+              <span id="upload-filename"></span>
+              <button type="button" class="upload-clear" onclick="clearModelUpload()">x</button>
+            </div>
+          </div>
+          <div class="form-group" id="fg-num-classes" style="display:none;">
+            <label>Number of Classes</label>
+            <input type="number" id="f-num-classes" value="10">
+          </div>
+          <div class="form-group" id="fg-yolo-model" style="display:none;">
+            <label>YOLO Variant <span class="required-star" aria-hidden="true">*</span></label>
+            <select id="f-yolo-model">
+              <option value="" disabled selected hidden>Select YOLO variant...</option>
+              <optgroup label="YOLOv12">
+                <option value="yolov12n.pt">YOLOv12 Nano</option>
+                <option value="yolov12s.pt">YOLOv12 Small</option>
+                <option value="yolov12m.pt">YOLOv12 Medium</option>
+                <option value="yolov12l.pt">YOLOv12 Large</option>
+                <option value="yolov12x.pt">YOLOv12 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLOv11">
+                <option value="yolov11n.pt">YOLOv11 Nano</option>
+                <option value="yolov11s.pt">YOLOv11 Small</option>
+                <option value="yolov11m.pt">YOLOv11 Medium</option>
+                <option value="yolov11l.pt">YOLOv11 Large</option>
+                <option value="yolov11x.pt">YOLOv11 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLOv10">
+                <option value="yolov10n.pt">YOLOv10 Nano</option>
+                <option value="yolov10s.pt">YOLOv10 Small</option>
+                <option value="yolov10m.pt">YOLOv10 Medium</option>
+                <option value="yolov10l.pt">YOLOv10 Large</option>
+                <option value="yolov10x.pt">YOLOv10 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLOv9">
+                <option value="yolov9t.pt">YOLOv9 Nano</option>
+                <option value="yolov9s.pt">YOLOv9 Small</option>
+                <option value="yolov9m.pt">YOLOv9 Medium</option>
+                <option value="yolov9c.pt">YOLOv9 Large</option>
+                <option value="yolov9e.pt">YOLOv9 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLOv8">
+                <option value="yolov8n.pt">YOLOv8 Nano</option>
+                <option value="yolov8s.pt">YOLOv8 Small</option>
+                <option value="yolov8m.pt">YOLOv8 Medium</option>
+                <option value="yolov8l.pt">YOLOv8 Large</option>
+                <option value="yolov8x.pt">YOLOv8 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLOv5">
+                <option value="yolov5n.pt">YOLOv5 Nano</option>
+                <option value="yolov5s.pt">YOLOv5 Small</option>
+                <option value="yolov5m.pt">YOLOv5 Medium</option>
+                <option value="yolov5l.pt">YOLOv5 Large</option>
+                <option value="yolov5x.pt">YOLOv5 XLarge</option>
+              </optgroup>
+              <optgroup label="YOLO-World (Open Vocabulary)">
+                <option value="yolov8s-world.pt">YOLO-World Small</option>
+                <option value="yolov8m-world.pt">YOLO-World Medium</option>
+                <option value="yolov8l-world.pt">YOLO-World Large</option>
+              </optgroup>
+              <optgroup label="RT-DETR">
+                <option value="rtdetr-l.pt">RT-DETR Large</option>
+                <option value="rtdetr-x.pt">RT-DETR XLarge</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="form-group" id="fg-finetune-mode" style="display:none;">
+            <label>Fine-tune Mode <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="full: update all weights. lora: efficient adapter-based. qlora: quantized LoRA.">?</span></label>
+            <select id="f-finetune-mode" onchange="onFinetuneModeChange()">
+              <option value="" disabled selected hidden>Select mode...</option>
+              <option value="full">Full Fine-tuning</option>
+              <option value="lora">LoRA</option>
+              <option value="qlora">QLoRA (4-bit)</option>
+            </select>
+          </div>
+          <div id="lora-options" style="display:none;" class="form-group full">
+            <div class="form-grid">
+              <div class="form-group">
+                <label>LoRA Rank (r) <span class="tooltip" data-tip="Higher rank = more parameters. 8-64 typical.">?</span></label>
+                <input type="number" id="f-lora-r" placeholder="e.g., 16">
+              </div>
+              <div class="form-group">
+                <label>LoRA Alpha <span class="tooltip" data-tip="Scaling factor. Usually 2x rank.">?</span></label>
+                <input type="number" id="f-lora-alpha" placeholder="e.g., 32">
+              </div>
+              <div class="form-group">
+                <label>LoRA Dropout <span class="tooltip" data-tip="Dropout for LoRA layers. 0.05-0.1 typical.">?</span></label>
+                <input type="text" id="f-lora-dropout" placeholder="e.g., 0.05">
+              </div>
+            </div>
+          </div>
+          <div class="form-group" id="tr-quantize" style="display:none;">
+            <label>Quantization <span class="tooltip" data-tip="Reduce memory with 4/8-bit quantization">?</span></label>
+            <label><input type="checkbox" id="f-quantize" onchange="onQuantizeChange()"> Enable Quantization</label>
+          </div>
+          <div class="form-group" id="tr-quant-bits" style="display:none;">
+            <label>Quantization Bits</label>
+            <select id="f-quant-bits">
+              <option value="4">4-bit</option>
+              <option value="8">8-bit</option>
+            </select>
+          </div>
+          <div class="form-group" id="tr-freeze" style="display:none;">
+            <label>Freeze Backbone <span class="tooltip" data-tip="Only train classifier head, freeze feature extractor">?</span></label>
+            <label><input type="checkbox" id="f-freeze-backbone"> Freeze Backbone Layers</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Section -->
+      <div class="form-section">
+        <h3><span class="icon data">💾</span> Dataset Configuration <span class="section-tooltip" data-tip="Configure your training data source and format.">?</span></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Dataset Source <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Where to load your training data from">?</span></label>
+            <select id="f-data-source" onchange="onDataSourceChange()">
+              <option value="" disabled selected hidden>Select source...</option>
+              <option value="huggingface">HuggingFace Datasets</option>
+              <option value="kaggle">Kaggle Dataset</option>
+              <option value="torchvision">Torchvision Built-in</option>
+              <option value="local">Local Path</option>
+              <option value="url">External URL</option>
+              <option value="upload">Upload File</option>
+            </select>
+          </div>
+          <div class="form-group" id="fg-data-name" style="display:none;">
+            <label>Dataset Name <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-data-name" placeholder="e.g. tatsu-lab/alpaca">
+          </div>
+          <div class="form-group" id="fg-data-subset" style="display:none;">
+            <label>Dataset Subset</label>
+            <input type="text" id="f-data-subset" placeholder="e.g. wikitext-2-raw-v1">
+          </div>
+          <div class="form-group" id="fg-data-kaggle" style="display:none;">
+            <label>Kaggle Dataset <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-data-kaggle" placeholder="e.g. username/dataset-name">
+          </div>
+          <div class="form-group" id="fg-data-torchvision" style="display:none;">
+            <label>Torchvision Dataset</label>
+            <select id="f-data-torchvision">
+              <option value="cifar10">CIFAR-10</option>
+              <option value="cifar100">CIFAR-100</option>
+              <option value="mnist">MNIST</option>
+              <option value="imagenet">ImageNet</option>
+            </select>
+          </div>
+          <div class="form-group" id="fg-data-path" style="display:none;">
+            <label>Data Path <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-data-path" placeholder="/path/to/data">
+          </div>
+          <div class="form-group" id="fg-data-url" style="display:none;">
+            <label>Data URL <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-data-url" placeholder="https://example.com/data.zip">
+          </div>
+          <div class="form-group" id="fg-data-upload" style="display:none;">
+            <label>Upload Data</label>
+            <div class="upload-area" id="data-upload-area" onclick="document.getElementById('f-data-file').click()">
+              <input type="file" id="f-data-file" style="display:none;" onchange="onDataFileSelect(this)">
+              <div class="upload-icon">📁</div>
+              <div class="upload-text">Click to select or drag & drop</div>
+              <div class="upload-hint">.json, .jsonl, .csv, .parquet, .zip</div>
+            </div>
+            <div class="upload-selected" id="data-upload-selected" style="display:none;">
+              <span id="data-upload-filename"></span>
+              <button type="button" class="upload-clear" onclick="clearDataUpload()">x</button>
+            </div>
+          </div>
+          <div class="form-group" id="fg-data-format" style="display:none;">
+            <label>Data Format</label>
+            <select id="f-data-format">
+              <option value="" disabled selected hidden>Select format...</option>
+            </select>
+          </div>
+          <div class="form-group" id="fg-image-size" style="display:none;">
+            <label>Image Size <span class="tooltip" data-tip="Input image dimensions (square)">?</span></label>
+            <input type="number" id="f-image-size" placeholder="e.g., 224 or 640">
+          </div>
+          <div class="form-group" id="fg-max-seq-len" style="display:none;">
+            <label>Max Sequence Length <span class="tooltip" data-tip="Maximum token length for text inputs">?</span></label>
+            <input type="number" id="f-max-seq-len" placeholder="e.g., 2048">
+          </div>
+        </div>
+      </div>
+
+      <!-- Distributed Section -->
+      <div class="form-section">
+        <h3><span class="icon distributed">⚡</span> Distributed Training <span class="section-tooltip" data-tip="Configure multi-GPU training strategies.">?</span></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel.">?</span></label>
+            <select id="f-strategy" onchange="onStrategyChange()">
+              <option value="none">Solo (Single GPU)</option>
+              <option value="ddp">DDP (Data Parallel)</option>
+              <option value="fsdp">FSDP (Fully Sharded Data Parallel)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>GPU Count <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Number of GPUs to request for this training job">?</span></label>
+            <select id="f-gpu-count" onchange="onGpuCountChange()">
+              <option value="1">1 GPU</option>
+              <option value="2">2 GPUs</option>
+              <option value="4">4 GPUs</option>
+              <option value="8">8 GPUs</option>
+            </select>
+            <div class="gpu-availability" id="gpu-availability">
+              <span class="gpu-status-text">Checking availability...</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Mixed Precision <span class="tooltip" data-tip="Use fp16/bf16 for faster training and less memory">?</span></label>
+            <select id="f-mixed-precision">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Training Section -->
+      <div class="form-section">
+        <h3><span class="icon training">🎯</span> Training Parameters <span class="section-tooltip" data-tip="Configure training hyperparameters.">?</span></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Epochs <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Number of complete passes through the dataset">?</span></label>
+            <input type="number" id="f-epochs" placeholder="e.g., 3">
+          </div>
+          <div class="form-group">
+            <label>Batch Size <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Samples per GPU per step">?</span></label>
+            <input type="number" id="f-batch-size" placeholder="e.g., 8 (per GPU)">
+          </div>
+          <div class="form-group">
+            <label>Learning Rate <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Step size for gradient descent. 2e-4 for LoRA, 1e-5 for full.">?</span></label>
+            <input type="text" id="f-lr" placeholder="e.g., 2e-4">
+          </div>
+          <div class="form-group">
+            <label>LR Schedule <span class="tooltip" data-tip="How learning rate changes during training">?</span></label>
+            <select id="f-lr-schedule">
+              <option value="cosine">Cosine</option>
+              <option value="linear">Linear</option>
+              <option value="constant">Constant</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Grad Accumulation <span class="tooltip" data-tip="Accumulate gradients over N steps to simulate larger batches">?</span></label>
+            <input type="number" id="f-grad-accum" placeholder="e.g., 1 (increase if low memory)">
+          </div>
+          <div class="form-group">
+            <label>Warmup Steps <span class="tooltip" data-tip="Steps to gradually increase LR from 0 at start">?</span></label>
+            <input type="number" id="f-warmup-steps" placeholder="e.g., 100 (0-500 typical)">
+          </div>
+          <div class="form-group">
+            <label>Weight Decay <span class="tooltip" data-tip="L2 regularization factor to prevent overfitting">?</span></label>
+            <input type="text" id="f-weight-decay" placeholder="e.g., 0.01 (0-0.1)">
+          </div>
+          <div class="form-group">
+            <label>Grad Clipping <span class="tooltip" data-tip="Max gradient norm to prevent exploding gradients">?</span></label>
+            <input type="text" id="f-grad-clip" placeholder="e.g., 1.0 (0.5-2.0)">
+          </div>
+          <div class="form-group full">
+            <label>Checkpoint Dir <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Directory to save model checkpoints">?</span></label>
+            <input type="text" id="f-checkpoint-dir" placeholder="e.g., ./checkpoints or /path/to/save">
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Bar -->
+      <div class="form-action-bar">
+        <button class="btn btn-secondary" onclick="validateConfig()">Validate</button>
+        <button class="btn btn-primary" id="btn-review-yaml" onclick="showEnvPage()">Next →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Training Overlay -->
+<div class="training-overlay" id="training-overlay">
+  <div class="training-modal">
+    <div class="training-animation" id="training-animation">
+      <div class="spinner"></div>
+    </div>
+    <div class="training-status">
+      <h3 id="training-title">Starting Training...</h3>
+      <p id="training-subtitle">Initializing model and data loaders</p>
+    </div>
+    <!-- Queue Status (shown when job is queued) -->
+    <div class="queue-status-box" id="queue-status-box" style="display:none;">
+      <div class="queue-position">
+        <span class="queue-position-label">Queue Position</span>
+        <span class="queue-position-value" id="queue-position-value">#1</span>
+      </div>
+      <div class="queue-wait">
+        <span class="queue-wait-label">Estimated Wait</span>
+        <span class="queue-wait-value" id="queue-wait-value">--:--</span>
+      </div>
+    </div>
+    <div class="training-progress">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <span class="progress-text" id="progress-text">Preparing...</span>
+    </div>
+    <div class="training-timer" id="training-timer">
+      <div class="timer-label">Estimated Time Remaining</div>
+      <div class="timer-clock" id="timer-clock">--:--:--</div>
+      <div class="timer-info" id="timer-info">Calculating...</div>
+    </div>
+    <div class="training-live-panel">
+      <div class="training-live-header">
+        <span>Live Console Output</span>
+        <span id="training-log-meta">Waiting for logs...</span>
+      </div>
+      <div class="training-live-log" id="training-live-log"></div>
+      <div class="training-live-hint" id="training-live-hint">Full output is also available in the Logs tab.</div>
+    </div>
+    <button class="btn btn-danger" onclick="stopTraining()" id="btn-stop-training" style="margin-top: 20px;">Stop Training</button>
+    <button class="btn btn-secondary" onclick="cancelQueuedJob()" id="btn-cancel-queued" style="display:none; margin-top: 20px;">Cancel</button>
+  </div>
+</div>
+
+<!-- Message Modal -->
+<div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
+  <div class="message-modal" onclick="event.stopPropagation()">
+    <div class="message-modal-header">
+      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <h3 id="message-modal-title">Message</h3>
+      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+    </div>
+    <div class="message-modal-body">
+      <p id="message-modal-text"></p>
+    </div>
+    <div class="message-modal-footer">
+      <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ultralytics License Modal -->
+<div class="modal-overlay" id="ultralytics-license-modal">
+  <div class="license-modal" onclick="event.stopPropagation()">
+    <div class="license-modal-header">
+      <div class="license-icon">⚠️</div>
+      <h2>Ultralytics License Notice</h2>
+    </div>
+    <div class="license-modal-body">
+      <p class="license-intro">
+        YOLO models are provided by <strong>Ultralytics</strong> under the <strong>AGPL-3.0 license</strong>.
+      </p>
+
+      <div class="license-terms">
+        <div class="license-term free">
+          <span class="term-icon">✓</span>
+          <div>
+            <strong>FREE for:</strong>
+            <span>Personal, Educational, or Open-Source projects</span>
+          </div>
+        </div>
+        <div class="license-term paid">
+          <span class="term-icon">$</span>
+          <div>
+            <strong>LICENSE REQUIRED for:</strong>
+            <span>Commercial or Business use</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="license-action">
+        If you are using YOLO for <strong>commercial purposes</strong>, you must purchase an Enterprise License from Ultralytics.
+      </p>
+
+      <div class="license-links">
+        <a href="https://www.ultralytics.com/license" target="_blank" class="license-link">
+          📄 View License Details
+        </a>
+        <a href="mailto:licensing@ultralytics.com" class="license-link">
+          ✉️ Contact: licensing@ultralytics.com
+        </a>
+      </div>
+    </div>
+    <div class="license-modal-footer">
+      <button class="btn btn-secondary" onclick="closeUltralyticsLicenseModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="acceptUltralyticsLicense()">I Understand, Continue →</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    initConfigPage();
+  });
+</script>
+</body>
+</html>

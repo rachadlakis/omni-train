@@ -1,0 +1,65 @@
+# fsdp-mini-project style config that now works directly with omni_train.
+# You can run it with: python -m omni_train.train --config configs/llm_fsdp_mini_project_style.yaml
+
+model_name: facebook/opt-350m
+
+dataset:
+  name: wikitext
+  subset: wikitext-2-raw-v1
+  split: train[:1%]
+
+training:
+  epochs: 1
+  batch_size: 16
+  max_length: 128
+  learning_rate: 1e-5
+  warmup_steps: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gradient_checkpointing: true
+
+strategy: fsdp
+num_gpus: 1
+checkpoint_dir: checkpoints/mini_style_fsdp
+save: true
+
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: true
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: true
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: mini-style-fsdp

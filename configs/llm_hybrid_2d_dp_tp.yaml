@@ -1,0 +1,65 @@
+model_name: meta-llama/Llama-2-7b-hf  ## other models: facebook/opt-350m, meta-llama/Llama-3.3-70B-Instruct
+
+dataset:
+  name: wikitext                ## other datasets: wikitext-103, PennTreebank, c4
+  subset: wikitext-2-raw-v1     ## other subsets: wikitext-103-raw-v1
+  split: train[:10%]            ## fraction of the dataset to use for training
+
+training:
+  epochs: 1                     ## Number of epochs to train
+  batch_size: 2                 ## Batch size for training
+  max_length: 1024              ## Maximum sequence length for training
+  learning_rate: 1e-5           ## Learning rate for training
+  gradient_checkpointing: true  ## whether to use gradient checkpointing
+
+strategy: hybrid  ## choose from {ddp, fsdp, solo, hybrid}
+num_gpus: 4       ## must equal data_parallel_size * tensor_parallel_size * pipeline_parallel_size
+checkpoint_dir: checkpoints/llm_hybrid_2d_dp_tp  ## directory to save checkpoints
+save: true        ## whether to save checkpoints
+
+dist_parameters:
+  mixed_precision: true         ## Use Mixed Precision?
+  param_dtype: bfloat16         ## what dtype to use for parameters?
+  reduce_dtype: float32         ## what dtype to use for reduction?
+  output_dtype: bfloat16        ## what dtype to use for output?
+  cast_forward_inputs: false    ## whether to cast forward inputs to the dtype of the wrapped module
+  dcp_api: true                 ## whether to use DCP API
+  dtensor_api: false            ## whether to use DTensor API
+
+topology:  ## 2D/3D parallel topology (used when strategy: hybrid)
+  parallelism_mode: 2d            ## 1d | 2d | 3d
+  data_parallel_size: 2           ## number of data parallel replicas
+  tensor_parallel_size: 2         ## number of tensor parallel shards
+  pipeline_parallel_size: 1       ## number of pipeline stages (1 = no PP)
+  tensor_parallel_auto_plan: true ## auto-plan tensor parallel sharding
+
+save_load:
+  resume: false                 ## whether to resume from a checkpoint
+  resume_path: ""               ## path to checkpoint to resume from
+  load_model_from_hf: true      ## whether to load from HuggingFace
+
+prefetch:
+  explicit: true                ## explicit prefetching?
+  forward: 2                    ## number of forward passes to prefetch
+  backward: 2                   ## number of backward passes to prefetch
+
+peft:  ## Parameter Efficient Fine Tuning
+  enabled: false                ## full fine-tune: no PEFT
+  type: lora                    ## LoRA or QLoRA
+  r: 16                         ## rank for LoRA
+  alpha: 32                     ## scaling factor for LoRA
+  dropout: 0.05                 ## dropout rate for LoRA layers
+  target_modules: ["all-linear"]  ## modules to apply LoRA
+  bias: none                    ## whether to include bias in LoRA
+
+quantization:
+  enabled: false                ## whether to apply quantization
+  bits: 4                       ## number of bits for quantization, typically 4 or 8
+  quant_type: nf4               ## nf4 or fp4 for 4-bit
+  compute_dtype: bfloat16       ## dtype for computations with quantized models
+  double_quant: true            ## whether to apply double quantization (for 4-bit)
+
+wandb:
+  wandb_log_with_train: false   ## whether to log training metrics to Weights & Biases
+  wandb_entity: "your-entity"   ## your W&B entity (username or team)
+  wandb_project: "omni-train"   ## your W&B project name

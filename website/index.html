@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OMNI-Train — Fine-Tune Anything, Anywhere</title>
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #0b0d17;
+      --bg2:       #111422;
+      --bg3:       #161929;
+      --card:      #1a1e35;
+      --border:    #252a45;
+      --accent:    #6c63ff;
+      --accent2:   #a78bfa;
+      --teal:      #22d3ee;
+      --green:     #34d399;
+      --pink:      #f472b6;
+      --orange:    #fb923c;
+      --text:      #e2e8f0;
+      --muted:     #8892b0;
+      --radius:    12px;
+      --shadow:    0 8px 32px rgba(0,0,0,.45);
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      line-height: 1.65;
+      overflow-x: hidden;
+    }
+    a { color: var(--accent2); text-decoration: none; transition: color .2s; }
+    a:hover { color: var(--teal); }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    /* ── Utilities ── */
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+    .tag {
+      display: inline-block;
+      padding: 4px 14px;
+      border-radius: 99px;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      background: rgba(108,99,255,.15);
+      color: var(--accent2);
+      border: 1px solid rgba(108,99,255,.3);
+      margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: clamp(1.75rem, 3vw, 2.5rem);
+      font-weight: 800;
+      letter-spacing: -.02em;
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+    .section-sub {
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 540px;
+    }
+
+    /* ── Navbar ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; height: 64px;
+      background: rgba(11,13,23,.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      transition: box-shadow .3s;
+    }
+    nav.scrolled { box-shadow: 0 4px 24px rgba(0,0,0,.5); }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 1.2rem; font-weight: 800; color: var(--text);
+    }
+    .nav-logo .logo-icon {
+      width: 34px; height: 34px; border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), var(--teal));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; font-weight: 900; color: #fff;
+      box-shadow: 0 0 16px rgba(108,99,255,.5);
+    }
+    .nav-links { display: flex; align-items: center; gap: 8px; }
+    .nav-links a {
+      color: var(--muted);
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: .9rem;
+      font-weight: 500;
+      transition: all .2s;
+    }
+    .nav-links a:hover { color: var(--text); background: var(--bg3); }
+    .nav-cta {
+      background: var(--accent) !important;
+      color: #fff !important;
+      font-weight: 600 !important;
+      padding: 8px 20px !important;
+      box-shadow: 0 0 20px rgba(108,99,255,.4);
+    }
+    .nav-cta:hover { background: var(--accent2) !important; box-shadow: 0 0 28px rgba(108,99,255,.6) !important; }
+    .hamburger { display: none; flex-direction: column; gap: 5px; cursor: pointer; }
+    .hamburger span { display: block; width: 24px; height: 2px; background: var(--text); border-radius: 2px; transition: all .3s; }
+
+    /* ── Hero ── */
+    #hero {
+      position: relative;
+      padding: 160px 0 100px;
+      text-align: center;
+      overflow: hidden;
+    }
+    .hero-glow {
+      position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(108,99,255,.18) 0%, transparent 70%);
+    }
+    .hero-grid {
+      position: absolute; inset: 0; pointer-events: none;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      opacity: .25;
+      mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, black 0%, transparent 80%);
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 99px;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      font-size: .8rem; color: var(--muted);
+      margin-bottom: 28px;
+    }
+    .hero-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    h1 {
+      font-size: clamp(2.4rem, 6vw, 4.5rem);
+      font-weight: 900;
+      letter-spacing: -.04em;
+      line-height: 1.07;
+      margin-bottom: 24px;
+    }
+    h1 .grad {
+      background: linear-gradient(120deg, var(--accent2) 0%, var(--teal) 60%, var(--green) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--muted);
+      max-width: 620px;
+      margin: 0 auto 40px;
+    }
+    .hero-btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 64px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 14px 28px; border-radius: var(--radius);
+      font-weight: 700; font-size: .95rem;
+      transition: all .25s; cursor: pointer; border: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      color: #fff;
+      box-shadow: 0 0 32px rgba(108,99,255,.35);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 48px rgba(108,99,255,.55); color: #fff; }
+    .btn-outline {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--text);
+    }
+    .btn-outline:hover { border-color: var(--accent2); color: var(--accent2); transform: translateY(-2px); }
+    .hero-stats {
+      display: flex; justify-content: center; gap: 48px; flex-wrap: wrap;
+      padding: 28px 0;
+      border-top: 1px solid var(--border);
+    }
+    .stat { text-align: center; }
+    .stat-val { font-size: 2rem; font-weight: 800; background: linear-gradient(135deg, var(--accent2), var(--teal)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .stat-label { font-size: .8rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+
+    /* ── Section base ── */
+    section { padding: 100px 0; }
+    section:nth-child(even) { background: var(--bg2); }
+
+    /* ── Features ── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-top: 56px;
+    }
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      transition: all .3s;
+      position: relative;
+      overflow: hidden;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(108,99,255,.06) 0%, transparent 60%);
+      opacity: 0; transition: opacity .3s;
+    }
+    .feature-card:hover { border-color: rgba(108,99,255,.5); transform: translateY(-4px); box-shadow: var(--shadow); }
+    .feature-card:hover::before { opacity: 1; }
+    .feature-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem; margin-bottom: 18px;
+    }
+    .feature-card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; }
+    .feature-card p { color: var(--muted); font-size: .9rem; line-height: 1.6; }
+
+    /* ── Models Table ── */
+    .models-header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 24px; margin-bottom: 40px; }
+    .models-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tab-btn {
+      padding: 8px 18px; border-radius: 8px; border: 1.5px solid var(--border);
+      background: transparent; color: var(--muted); font-size: .88rem; font-weight: 600;
+      cursor: pointer; transition: all .2s;
+    }
+    .tab-btn.active, .tab-btn:hover { border-color: var(--accent); color: var(--accent2); background: rgba(108,99,255,.1); }
+    .model-panels > div { display: none; }
+    .model-panels > div.active { display: block; }
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .model-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 20px; transition: all .25s;
+    }
+    .model-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .model-card .model-name { font-weight: 700; font-size: .95rem; margin-bottom: 6px; }
+    .model-card .model-meta { color: var(--muted); font-size: .82rem; }
+    .pill {
+      display: inline-block; padding: 3px 10px; border-radius: 99px;
+      font-size: .72rem; font-weight: 600; margin-top: 10px; margin-right: 4px;
+    }
+    .pill-purple { background: rgba(108,99,255,.2); color: var(--accent2); }
+    .pill-teal   { background: rgba(34,211,238,.15); color: var(--teal); }
+    .pill-green  { background: rgba(52,211,153,.15); color: var(--green); }
+    .pill-pink   { background: rgba(244,114,182,.15); color: var(--pink); }
+    .pill-orange { background: rgba(251,146,60,.15);  color: var(--orange); }
+
+    /* ── How it works ── */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0;
+      margin-top: 56px;
+      position: relative;
+    }
+    .step {
+      padding: 32px 24px;
+      text-align: center;
+      position: relative;
+    }
+    .step:not(:last-child)::after {
+      content: '';
+      position: absolute; top: 50px; right: 0;
+      width: 1px; height: 32px;
+      background: linear-gradient(180deg, var(--border), transparent);
+    }
+    .step-num {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--teal));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem; font-weight: 900; color: #fff;
+      margin: 0 auto 20px;
+      box-shadow: 0 0 24px rgba(108,99,255,.4);
+    }
+    .step h3 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; }
+    .step p { color: var(--muted); font-size: .88rem; }
+
+    /* ── Code snippet ── */
+    .code-showcase {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 56px;
+      align-items: start;
+    }
+    .code-block {
+      background: #0d0f1a;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .code-header .dots { display: flex; gap: 6px; }
+    .code-header .dots span { width: 11px; height: 11px; border-radius: 50%; }
+    .code-header .dots span:nth-child(1) { background: #ff5f57; }
+    .code-header .dots span:nth-child(2) { background: #ffbd2e; }
+    .code-header .dots span:nth-child(3) { background: #28c840; }
+    .code-label { font-size: .78rem; color: var(--muted); font-family: monospace; }
+    pre {
+      padding: 20px 22px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: .82rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      tab-size: 2;
+    }
+    .kw   { color: #c792ea; }
+    .str  { color: #c3e88d; }
+    .cmt  { color: #546e7a; font-style: italic; }
+    .fn   { color: #82aaff; }
+    .num  { color: #f78c6c; }
+    .key  { color: var(--teal); }
+
+    /* ── Distributed ── */
+    .dist-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-top: 56px;
+    }
+    .dist-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 30px 24px; text-align: center;
+      transition: all .3s;
+    }
+    .dist-card:hover { border-color: var(--teal); transform: translateY(-3px); box-shadow: 0 8px 32px rgba(34,211,238,.1); }
+    .dist-icon { font-size: 2.5rem; margin-bottom: 16px; }
+    .dist-card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; }
+    .dist-card p { color: var(--muted); font-size: .88rem; }
+    .dist-tag { display: inline-block; margin-top: 14px; font-size: .75rem; font-weight: 700; color: var(--teal); background: rgba(34,211,238,.1); padding: 4px 12px; border-radius: 99px; }
+
+    /* ── About ── */
+    .about-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 64px;
+      align-items: center;
+    }
+    .about-text h2 { font-size: clamp(1.75rem, 3vw, 2.5rem); font-weight: 800; line-height: 1.2; margin-bottom: 20px; }
+    .about-text p { color: var(--muted); margin-bottom: 16px; }
+    .about-list { list-style: none; margin: 24px 0; display: flex; flex-direction: column; gap: 12px; }
+    .about-list li { display: flex; align-items: flex-start; gap: 12px; font-size: .95rem; }
+    .about-list li .check { color: var(--green); font-size: 1rem; margin-top: 2px; flex-shrink: 0; }
+    .about-visual {
+      background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+      padding: 32px; position: relative; overflow: hidden;
+    }
+    .about-visual::before {
+      content: '';
+      position: absolute; top: -40px; right: -40px;
+      width: 200px; height: 200px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(108,99,255,.2), transparent 70%);
+    }
+    .pipeline {
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .pipe-step {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 16px; border-radius: 10px;
+      background: var(--bg2); border: 1px solid var(--border);
+    }
+    .pipe-step .pipe-icon { font-size: 1.3rem; }
+    .pipe-step .pipe-label { font-size: .88rem; font-weight: 600; }
+    .pipe-step .pipe-desc { font-size: .78rem; color: var(--muted); }
+    .pipe-arrow { text-align: center; color: var(--muted); font-size: .9rem; }
+
+    /* ── Contact ── */
+    #contact { background: var(--bg); }
+    .contact-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      margin-top: 56px;
+    }
+    .contact-info h3 { font-size: 1.3rem; font-weight: 700; margin-bottom: 16px; }
+    .contact-info p { color: var(--muted); margin-bottom: 28px; }
+    .contact-links { display: flex; flex-direction: column; gap: 12px; }
+    .contact-link {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 18px; border-radius: 10px;
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--text); font-size: .9rem; font-weight: 500;
+      transition: all .2s;
+    }
+    .contact-link:hover { border-color: var(--accent); transform: translateX(4px); color: var(--text); }
+    .contact-link .cl-icon { font-size: 1.3rem; }
+    .contact-form { display: flex; flex-direction: column; gap: 16px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label { font-size: .85rem; font-weight: 600; color: var(--muted); }
+    .form-group input, .form-group textarea, .form-group select {
+      padding: 12px 16px; border-radius: 10px;
+      background: var(--card); border: 1.5px solid var(--border);
+      color: var(--text); font-size: .9rem; font-family: inherit;
+      transition: border-color .2s; resize: vertical;
+      outline: none;
+    }
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: var(--accent); }
+    .form-group textarea { min-height: 120px; }
+    .form-group select option { background: var(--card); }
+    .form-submit {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 14px 28px; border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      color: #fff; font-weight: 700; font-size: .95rem;
+      border: none; cursor: pointer; transition: all .25s;
+      width: 100%;
+    }
+    .form-submit:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(108,99,255,.4); }
+    .form-msg { display: none; padding: 12px 16px; border-radius: 10px; font-size: .9rem; font-weight: 600; }
+    .form-msg.success { background: rgba(52,211,153,.15); color: var(--green); border: 1px solid rgba(52,211,153,.3); display: block; }
+    .form-msg.error { background: rgba(248,113,113,.15); color: #f87171; border: 1px solid rgba(248,113,113,.3); display: block; }
+
+    /* ── Footer ── */
+    footer {
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+    .footer-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 20px;
+    }
+    .footer-logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1rem; color: var(--text); }
+    .footer-logo .logo-icon { width: 28px; height: 28px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--teal)); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: .85rem; color: #fff; }
+    .footer-links { display: flex; gap: 20px; flex-wrap: wrap; }
+    .footer-links a { color: var(--muted); font-size: .85rem; transition: color .2s; }
+    .footer-links a:hover { color: var(--text); }
+    .footer-right { color: var(--muted); font-size: .82rem; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      nav { padding: 0 18px; }
+      .nav-links { display: none; position: fixed; top: 64px; left: 0; right: 0; background: var(--bg2); border-bottom: 1px solid var(--border); flex-direction: column; padding: 16px; gap: 4px; }
+      .nav-links.open { display: flex; }
+      .nav-links a { padding: 12px 16px; }
+      .hamburger { display: flex; }
+      h1 { font-size: 2.2rem; }
+      .code-showcase { grid-template-columns: 1fr; }
+      .about-grid { grid-template-columns: 1fr; }
+      .contact-grid { grid-template-columns: 1fr; }
+      .dist-grid { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr 1fr; }
+      .hero-stats { gap: 28px; }
+    }
+    @media (max-width: 480px) {
+      .steps { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after { display: none; }
+    }
+
+    /* ── Scroll reveal ── */
+    .reveal { opacity: 0; transform: translateY(28px); transition: opacity .6s ease, transform .6s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    /* ── Gradient border card ── */
+    .grad-border {
+      background: linear-gradient(var(--card), var(--card)) padding-box,
+                  linear-gradient(135deg, var(--accent), var(--teal)) border-box;
+      border: 1.5px solid transparent;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navbar ── -->
+<nav id="navbar">
+  <div class="nav-logo">
+    <div class="logo-icon">O</div>
+    OMNI-Train
+  </div>
+  <div class="nav-links" id="navLinks">
+    <a href="#features">Features</a>
+    <a href="#models">Models</a>
+    <a href="#distributed">Distributed</a>
+    <a href="#how-it-works">How it Works</a>
+    <a href="#about">About</a>
+    <a href="#contact" class="nav-cta">Contact</a>
+  </div>
+  <div class="hamburger" id="hamburger" onclick="toggleMenu()">
+    <span></span><span></span><span></span>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section id="hero">
+  <div class="hero-glow"></div>
+  <div class="hero-grid"></div>
+  <div class="container">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      Open Source · Production Ready
+    </div>
+    <h1>
+      Fine-Tune <span class="grad">Anything</span>,<br>Anywhere
+    </h1>
+    <p class="hero-sub">
+      OMNI-Train is a unified framework for fine-tuning CNNs, LLMs, VLMs,
+      and object detection models — with distributed training support from
+      a single GPU to multi-node clusters.
+    </p>
+    <div class="hero-btns">
+      <a href="#how-it-works" class="btn btn-primary">
+        &#9654; Get Started
+      </a>
+      <a href="#features" class="btn btn-outline">
+        &#10024; Explore Features
+      </a>
+    </div>
+    <div class="hero-stats">
+      <div class="stat">
+        <div class="stat-val">5+</div>
+        <div class="stat-label">Model Types</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">30+</div>
+        <div class="stat-label">YOLO Variants</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">7</div>
+        <div class="stat-label">Data Sources</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">3</div>
+        <div class="stat-label">Distributed Strategies</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Features ── -->
+<section id="features">
+  <div class="container">
+    <span class="tag">&#9889; Features</span>
+    <h2 class="section-title">Everything you need to fine-tune at scale</h2>
+    <p class="section-sub">
+      From a simple local experiment to multi-node SLURM clusters — OMNI-Train has you covered with a clean YAML-first API and a rich web UI.
+    </p>
+    <div class="features-grid">
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(108,99,255,.15)">&#129302;</div>
+        <h3>Universal Model Support</h3>
+        <p>Fine-tune CNNs, LLMs, VLMs, and YOLO detection models through one unified config. Switch model types with a single YAML field.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(34,211,238,.12)">&#128200;</div>
+        <h3>LoRA &amp; Quantization</h3>
+        <p>Efficient fine-tuning with LoRA adapters and optional 4-bit / 8-bit quantization via bitsandbytes. Train billion-parameter models on consumer GPUs.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(52,211,153,.12)">&#127760;</div>
+        <h3>Distributed Training</h3>
+        <p>Built-in DDP and FSDP2 support with activation checkpointing, mixed precision, gradient accumulation, and torch.compile.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(244,114,182,.12)">&#127981;</div>
+        <h3>Web UI Dashboard</h3>
+        <p>Launch and monitor training jobs through a beautiful browser-based UI. Configure runs visually, view live logs, and manage a job queue.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(251,146,60,.12)">&#128190;</div>
+        <h3>Smart Checkpointing</h3>
+        <p>Automatic checkpoint management with best-model tracking, configurable save intervals, and seamless resume from any checkpoint.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(167,139,250,.12)">&#128202;</div>
+        <h3>W&amp;B Integration</h3>
+        <p>First-class Weights &amp; Biases support. Log loss curves, GPU metrics, learning rate schedules, and hyperparameters automatically.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(34,211,238,.1)">&#9729;</div>
+        <h3>Multi-Source Data</h3>
+        <p>Load datasets from HuggingFace Hub, S3/MinIO buckets, local files, torchvision, YOLO format, and COCO JSON — all via config.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(52,211,153,.1)">&#128338;</div>
+        <h3>Training Time Estimator</h3>
+        <p>Accurate GPU-aware time estimates before you start. Supports all model types with realistic FLOPs-based calculations and GPU auto-detection.</p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon" style="background:rgba(108,99,255,.1)">&#128736;</div>
+        <h3>SLURM Support</h3>
+        <p>Ready-made SLURM batch scripts and a Python launcher for multi-node training on HPC clusters — no manual sbatch editing required.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── Models ── -->
+<section id="models">
+  <div class="container">
+    <div class="models-header">
+      <div>
+        <span class="tag">&#127941; Supported Models</span>
+        <h2 class="section-title">One framework, every model</h2>
+        <p class="section-sub">Pick a category to explore supported architectures.</p>
+      </div>
+      <div class="models-tabs">
+        <button class="tab-btn active" onclick="switchTab('llm')">LLM</button>
+        <button class="tab-btn" onclick="switchTab('vlm')">VLM</button>
+        <button class="tab-btn" onclick="switchTab('cnn')">CNN</button>
+        <button class="tab-btn" onclick="switchTab('detection')">Detection</button>
+        <button class="tab-btn" onclick="switchTab('embedding')">Embedding</button>
+      </div>
+    </div>
+
+    <div class="model-panels">
+
+      <div id="panel-llm" class="active">
+        <div class="model-grid">
+          <div class="model-card"><div class="model-name">LLaMA 2 / 3</div><div class="model-meta">Meta AI · 7B – 70B params</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span><span class="pill pill-green">4-bit</span></div>
+          <div class="model-card"><div class="model-name">Mistral 7B</div><div class="model-meta">Mistral AI · 7B params</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span><span class="pill pill-green">8-bit</span></div>
+          <div class="model-card"><div class="model-name">Phi-3 / Phi-4</div><div class="model-meta">Microsoft · 3.8B – 14B params</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">GPT-2 / NeoX</div><div class="model-meta">OpenAI / EleutherAI</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">Falcon</div><div class="model-meta">TII UAE · 7B – 40B params</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">Any HuggingFace CausalLM</div><div class="model-meta">All transformers-compatible models</div><span class="pill pill-orange">Universal</span></div>
+        </div>
+      </div>
+
+      <div id="panel-vlm">
+        <div class="model-grid">
+          <div class="model-card"><div class="model-name">LLaVA</div><div class="model-meta">Vision-Language · 7B – 13B</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span><span class="pill pill-green">4-bit</span></div>
+          <div class="model-card"><div class="model-name">BLIP-2</div><div class="model-meta">Salesforce · Multimodal QA</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">Qwen-VL</div><div class="model-meta">Alibaba · Multimodal</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">InstructBLIP</div><div class="model-meta">Salesforce · Instruction-tuned</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">CogVLM</div><div class="model-meta">Zhipu AI · Visual Understanding</div><span class="pill pill-purple">LoRA</span></div>
+        </div>
+      </div>
+
+      <div id="panel-cnn">
+        <div class="model-grid">
+          <div class="model-card"><div class="model-name">ResNet Family</div><div class="model-meta">ResNet-18/34/50/101/152</div><span class="pill pill-teal">Full</span><span class="pill pill-pink">Freeze Backbone</span></div>
+          <div class="model-card"><div class="model-name">Vision Transformer</div><div class="model-meta">ViT-B/16, ViT-L/16, ViT-H/14</div><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">EfficientNet</div><div class="model-meta">EfficientNet-B0 to B7</div><span class="pill pill-teal">Full</span><span class="pill pill-pink">Freeze Backbone</span></div>
+          <div class="model-card"><div class="model-name">ConvNeXt</div><div class="model-meta">Tiny / Small / Base / Large</div><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">MobileNet V3</div><div class="model-meta">Efficient edge deployment</div><span class="pill pill-teal">Full</span></div>
+          <div class="model-card"><div class="model-name">All torchvision models</div><div class="model-meta">Pretrained on ImageNet</div><span class="pill pill-orange">Universal</span></div>
+        </div>
+      </div>
+
+      <div id="panel-detection">
+        <div class="model-grid">
+          <div class="model-card"><div class="model-name">YOLOv5</div><div class="model-meta">n / s / m / l / x variants</div><span class="pill pill-orange">Ultralytics</span></div>
+          <div class="model-card"><div class="model-name">YOLOv8</div><div class="model-meta">n / s / m / l / x variants</div><span class="pill pill-orange">Ultralytics</span></div>
+          <div class="model-card"><div class="model-name">YOLOv9</div><div class="model-meta">t / s / m / c / e variants</div><span class="pill pill-orange">Ultralytics</span></div>
+          <div class="model-card"><div class="model-name">YOLOv10</div><div class="model-meta">n / s / m / l / x variants</div><span class="pill pill-orange">Ultralytics</span></div>
+          <div class="model-card"><div class="model-name">YOLOv11 / v12</div><div class="model-meta">Latest generation variants</div><span class="pill pill-orange">Ultralytics</span></div>
+          <div class="model-card"><div class="model-name">RT-DETR</div><div class="model-meta">rtdetr-l / rtdetr-x</div><span class="pill pill-pink">Transformer</span></div>
+          <div class="model-card"><div class="model-name">YOLO-World</div><div class="model-meta">Open-vocabulary detection</div><span class="pill pill-teal">Zero-shot</span></div>
+        </div>
+      </div>
+
+      <div id="panel-embedding">
+        <div class="model-grid">
+          <div class="model-card"><div class="model-name">BERT / RoBERTa</div><div class="model-meta">Text embeddings · 110M – 340M</div><span class="pill pill-purple">LoRA</span><span class="pill pill-teal">InfoNCE</span><span class="pill pill-pink">Triplet</span></div>
+          <div class="model-card"><div class="model-name">CLIP</div><div class="model-meta">Vision-text contrastive · OpenAI</div><span class="pill pill-orange">Contrastive</span></div>
+          <div class="model-card"><div class="model-name">Sentence Transformers</div><div class="model-meta">All SBERT-compatible models</div><span class="pill pill-green">MNRL</span></div>
+          <div class="model-card"><div class="model-name">ResNet Embedding</div><div class="model-meta">Vision feature extraction</div><span class="pill pill-teal">Cosine</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── Distributed ── -->
+<section id="distributed">
+  <div class="container">
+    <span class="tag">&#127760; Distributed Training</span>
+    <h2 class="section-title">Scale from 1 GPU to 100+</h2>
+    <p class="section-sub">Choose the right strategy for your model size and hardware with zero code changes — just update the config.</p>
+    <div class="dist-grid reveal">
+
+      <div class="dist-card">
+        <div class="dist-icon">&#128192;</div>
+        <h3>Single GPU</h3>
+        <p>Standard training with mixed precision and gradient accumulation. Perfect for prototyping and smaller models.</p>
+        <div class="dist-tag">strategy: none</div>
+      </div>
+
+      <div class="dist-card">
+        <div class="dist-icon">&#128259;</div>
+        <h3>DDP</h3>
+        <p>DistributedDataParallel across multiple GPUs or nodes. Each GPU holds a full model copy for maximum throughput.</p>
+        <div class="dist-tag">strategy: ddp</div>
+      </div>
+
+      <div class="dist-card">
+        <div class="dist-icon">&#9889;</div>
+        <h3>FSDP2</h3>
+        <p>Fully Sharded Data Parallel — shard model parameters, gradients and optimizer states. Train 7B+ models efficiently.</p>
+        <div class="dist-tag">strategy: fsdp</div>
+      </div>
+
+    </div>
+    <div style="margin-top:32px;text-align:center;color:var(--muted);font-size:.9rem">
+      All strategies support <strong style="color:var(--text)">mixed precision</strong>, <strong style="color:var(--text)">activation checkpointing</strong>, <strong style="color:var(--text)">gradient clipping</strong>, and <strong style="color:var(--text)">SLURM multi-node</strong>.
+    </div>
+  </div>
+</section>
+
+<!-- ── How It Works ── -->
+<section id="how-it-works">
+  <div class="container">
+    <span class="tag">&#128218; How It Works</span>
+    <h2 class="section-title">From config to trained model in minutes</h2>
+    <p class="section-sub">A YAML-first workflow that's simple enough for beginners, powerful enough for researchers.</p>
+
+    <div class="steps">
+      <div class="step reveal">
+        <div class="step-num">1</div>
+        <h3>Write a YAML Config</h3>
+        <p>Define your model type, dataset, distributed strategy, and hyperparameters in a single YAML file. Use one of 15+ included templates.</p>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">2</div>
+        <h3>Launch Training</h3>
+        <p>Run from the CLI or the Web UI. Single GPU, DDP, FSDP, or SLURM cluster — same command, different config.</p>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">3</div>
+        <h3>Monitor in Real-time</h3>
+        <p>Watch live training logs, loss curves, and GPU metrics via the Web UI dashboard or Weights &amp; Biases.</p>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">4</div>
+        <h3>Export Your Model</h3>
+        <p>Checkpoints are saved automatically. The best model is tracked and ready for inference or further evaluation.</p>
+      </div>
+    </div>
+
+    <div class="code-showcase reveal" style="margin-top:56px">
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span class="code-label">config/llm_lora.yaml</span>
+        </div>
+<pre><span class="key">model</span>:
+  <span class="key">type</span>: <span class="str">llm</span>
+  <span class="key">name</span>: <span class="str">meta-llama/Llama-2-7b-hf</span>
+  <span class="key">finetune_mode</span>: <span class="str">lora</span>
+  <span class="key">lora_r</span>: <span class="num">16</span>
+  <span class="key">quantize</span>: <span class="kw">true</span>
+  <span class="key">quant_bits</span>: <span class="num">4</span>
+
+<span class="key">data</span>:
+  <span class="key">type</span>: <span class="str">hf_dataset</span>
+  <span class="key">name</span>: <span class="str">tatsu-lab/alpaca</span>
+  <span class="key">max_seq_len</span>: <span class="num">2048</span>
+
+<span class="key">distributed</span>:
+  <span class="key">strategy</span>: <span class="str">ddp</span>
+  <span class="key">mixed_precision</span>: <span class="kw">true</span>
+
+<span class="key">training</span>:
+  <span class="key">epochs</span>: <span class="num">3</span>
+  <span class="key">batch_size</span>: <span class="num">8</span>
+  <span class="key">lr</span>: <span class="num">2e-4</span>
+  <span class="key">grad_accum_steps</span>: <span class="num">4</span>
+  <span class="key">lr_schedule</span>: <span class="str">cosine</span>
+  <span class="key">wandb_enabled</span>: <span class="kw">true</span>
+  <span class="key">wandb_project</span>: <span class="str">my-llm-finetune</span></pre>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span class="code-label">terminal</span>
+        </div>
+<pre><span class="cmt"># Single GPU</span>
+<span class="fn">python</span> -m omni_train.train \
+  --config configs/llm_lora.yaml
+
+<span class="cmt"># Multi-GPU DDP</span>
+<span class="fn">torchrun</span> --nproc_per_node=<span class="num">4</span> \
+  -m omni_train.train \
+  --config configs/llm_lora.yaml
+
+<span class="cmt"># CLI overrides</span>
+<span class="fn">python</span> -m omni_train.train \
+  --config configs/llm_lora.yaml \
+  --lr <span class="num">1e-4</span> --epochs <span class="num">5</span>
+
+<span class="cmt"># FSDP for large models</span>
+<span class="fn">torchrun</span> --nproc_per_node=<span class="num">8</span> \
+  -m omni_train.train \
+  --config configs/llm_fsdp.yaml
+
+<span class="cmt"># Web UI</span>
+<span class="fn">python</span> -m omni_train.ui.app
+<span class="cmt"># → http://localhost:8000</span>
+
+<span class="cmt"># SLURM cluster</span>
+<span class="fn">sbatch</span> scripts/slurm_train.sh \
+  configs/llm_lora.yaml</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── About ── -->
+<section id="about">
+  <div class="container">
+    <div class="about-grid">
+      <div class="about-text reveal">
+        <span class="tag">&#128161; About</span>
+        <h2 class="section-title">Built for researchers &amp; practitioners</h2>
+        <p>OMNI-Train was designed to eliminate the boilerplate that gets in the way of real research. Instead of writing the same training loop, distributed setup, and checkpoint logic for every project, you write a YAML config and get straight to the science.</p>
+        <ul class="about-list">
+          <li><span class="check">&#10003;</span> <span>Clean, registry-based architecture — easily extend with new model or data types</span></li>
+          <li><span class="check">&#10003;</span> <span>YAML-first with full CLI override support for sweep-friendly experimentation</span></li>
+          <li><span class="check">&#10003;</span> <span>Production-grade distributed training with DDP and FSDP2</span></li>
+          <li><span class="check">&#10003;</span> <span>Handles the full training lifecycle: data → train → checkpoint → resume</span></li>
+          <li><span class="check">&#10003;</span> <span>Web UI with live log streaming, job queuing, and GPU monitoring</span></li>
+        </ul>
+      </div>
+      <div class="about-visual reveal">
+        <div class="pipeline">
+          <div class="pipe-step">
+            <span class="pipe-icon">&#128196;</span>
+            <div>
+              <div class="pipe-label">YAML Config</div>
+              <div class="pipe-desc">Validated against typed schemas</div>
+            </div>
+          </div>
+          <div class="pipe-arrow">&#8595;</div>
+          <div class="pipe-step">
+            <span class="pipe-icon">&#128200;</span>
+            <div>
+              <div class="pipe-label">Model &amp; Data Loading</div>
+              <div class="pipe-desc">Registry dispatches to the right builder</div>
+            </div>
+          </div>
+          <div class="pipe-arrow">&#8595;</div>
+          <div class="pipe-step">
+            <span class="pipe-icon">&#127760;</span>
+            <div>
+              <div class="pipe-label">Distributed Setup</div>
+              <div class="pipe-desc">Process groups, device mesh, wrapping</div>
+            </div>
+          </div>
+          <div class="pipe-arrow">&#8595;</div>
+          <div class="pipe-step">
+            <span class="pipe-icon">&#128260;</span>
+            <div>
+              <div class="pipe-label">Training Loop</div>
+              <div class="pipe-desc">Mixed precision, grad accum, checkpointing</div>
+            </div>
+          </div>
+          <div class="pipe-arrow">&#8595;</div>
+          <div class="pipe-step">
+            <span class="pipe-icon">&#128190;</span>
+            <div>
+              <div class="pipe-label">Best Model Checkpoint</div>
+              <div class="pipe-desc">Ready for inference or evaluation</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Contact ── -->
+<section id="contact">
+  <div class="container">
+    <span class="tag">&#9993; Contact</span>
+    <h2 class="section-title">Get in touch</h2>
+    <p class="section-sub">Have a question, bug report, or feature request? We'd love to hear from you.</p>
+
+    <div class="contact-grid">
+      <div class="contact-info reveal">
+        <h3>Reach us directly</h3>
+        <p>Whether you're running into issues, want to contribute, or just want to chat about distributed training — all channels are open.</p>
+        <div class="contact-links">
+          <a href="#" class="contact-link">
+            <span class="cl-icon">&#128027;</span>
+            <div>
+              <div style="font-weight:700">GitHub Issues</div>
+              <div style="font-size:.8rem;color:var(--muted)">Bug reports &amp; feature requests</div>
+            </div>
+          </a>
+          <a href="#" class="contact-link">
+            <span class="cl-icon">&#128172;</span>
+            <div>
+              <div style="font-weight:700">GitHub Discussions</div>
+              <div style="font-size:.8rem;color:var(--muted)">Questions &amp; community help</div>
+            </div>
+          </a>
+          <a href="#" class="contact-link">
+            <span class="cl-icon">&#128231;</span>
+            <div>
+              <div style="font-weight:700">Email</div>
+              <div style="font-size:.8rem;color:var(--muted)">team@omnitrain.dev</div>
+            </div>
+          </a>
+          <a href="#" class="contact-link">
+            <span class="cl-icon">&#128640;</span>
+            <div>
+              <div style="font-weight:700">Contributing</div>
+              <div style="font-size:.8rem;color:var(--muted)">Help build the future of fine-tuning</div>
+            </div>
+          </a>
+        </div>
+      </div>
+
+      <div class="reveal">
+        <form class="contact-form" id="contactForm" onsubmit="submitForm(event)">
+          <div class="form-group">
+            <label>Your Name</label>
+            <input type="text" placeholder="Jane Smith" required />
+          </div>
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" placeholder="jane@example.com" required />
+          </div>
+          <div class="form-group">
+            <label>Topic</label>
+            <select>
+              <option>General Question</option>
+              <option>Bug Report</option>
+              <option>Feature Request</option>
+              <option>Contributing</option>
+              <option>Enterprise / Licensing</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Message</label>
+            <textarea placeholder="Tell us what's on your mind..." required></textarea>
+          </div>
+          <div class="form-msg" id="formMsg"></div>
+          <button type="submit" class="form-submit">&#10148; Send Message</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-logo">
+        <div class="logo-icon">O</div>
+        OMNI-Train
+      </div>
+      <div class="footer-links">
+        <a href="#features">Features</a>
+        <a href="#models">Models</a>
+        <a href="#distributed">Distributed</a>
+        <a href="#how-it-works">Docs</a>
+        <a href="#contact">Contact</a>
+      </div>
+      <div class="footer-right">
+        &copy; 2025 OMNI-Train · MIT License
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  /* ── Navbar scroll effect ── */
+  const navbar = document.getElementById('navbar');
+  window.addEventListener('scroll', () => {
+    navbar.classList.toggle('scrolled', window.scrollY > 20);
+  });
+
+  /* ── Mobile menu ── */
+  function toggleMenu() {
+    document.getElementById('navLinks').classList.toggle('open');
+  }
+  document.getElementById('navLinks').querySelectorAll('a').forEach(a => {
+    a.addEventListener('click', () => document.getElementById('navLinks').classList.remove('open'));
+  });
+
+  /* ── Model tabs ── */
+  function switchTab(type) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.model-panels > div').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('panel-' + type).classList.add('active');
+  }
+
+  /* ── Scroll reveal ── */
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); }
+    });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  /* ── Contact form ── */
+  function submitForm(e) {
+    e.preventDefault();
+    const msg = document.getElementById('formMsg');
+    msg.className = 'form-msg success';
+    msg.textContent = '✓ Message sent! We\'ll get back to you soon.';
+    e.target.reset();
+    setTimeout(() => { msg.className = 'form-msg'; }, 5000);
+  }
+
+  /* ── Smooth active nav link highlight ── */
+  const sections = document.querySelectorAll('section[id]');
+  const navAs = document.querySelectorAll('.nav-links a[href^="#"]');
+  window.addEventListener('scroll', () => {
+    let current = '';
+    sections.forEach(s => { if (window.scrollY >= s.offsetTop - 80) current = s.id; });
+    navAs.forEach(a => {
+      a.style.color = a.getAttribute('href') === '#' + current ? 'var(--accent2)' : '';
+    });
+  }, { passive: true });
+</script>
+</body>
+</html>

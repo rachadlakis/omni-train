@@ -1,0 +1,35 @@
+seed: 42
+
+model:
+  type: embedding
+  name: sentence-transformers/all-MiniLM-L6-v2
+  embedding_type: text
+  embedding_backend: sentence_transformers
+  finetune_mode: full
+  pooling_mode: mean
+  loss_type: infonce
+  loss_temperature: 0.07
+
+data:
+  type: hf_dataset
+  name: sentence-transformers/all-nli
+  train_split: train
+  embedding_format: pairs
+  max_seq_len: 128
+  num_workers: 4
+
+distributed:
+  strategy: none
+  mixed_precision: true
+
+training:
+  epochs: 3
+  batch_size: 64
+  lr: 2e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 500
+  lr_schedule: cosine
+  checkpoint_dir: checkpoints/embedding_minilm
+  save_every_n_epochs: 1
+  log_interval: 100

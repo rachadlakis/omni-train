@@ -1,0 +1,75 @@
+## Sample config.yaml file
+## Change the values as needed to test different configurations and features of the training script.
+
+
+model_name: google/vit-base-patch16-224 ## image classification ViT | llm examples: facebook/opt-125m, gpt2
+model_type: vision                      ## supported: llm, seq2seq, vision, yolo, vlm, encoder
+## model_name suggestions:
+## vision: google/vit-base-patch16-224, google/vit-large-patch16-224
+## llm: facebook/opt-125m, facebook/opt-350m, gpt2, gpt2-medium, gpt2-large, gpt2-xl
+
+
+dataset:
+  name: cifar10           ## 10-class image classification (airplane, car, bird, cat, deer, dog, frog, horse, ship, truck)
+  subset: ~               ## no subset for cifar10 (null)
+  split: train[:1%]       ## which split and how much of it to use for training. Here we use 1% of the training set for quick tests.
+## dataset_name suggestions:
+## vision: cifar10, imagenet-1k
+## llm: wikitext, ptb_text_only, openwebtext, c4
+## wikitext-2-raw-v1 is a smaller version of wikitext-2 without any preprocessing, good for quick tests
+
+
+training:
+  epochs: 3                     ## Number of epochs to train
+  batch_size: 32                ## Batch size for training 
+  max_length: 128               ## Not used for vision models
+  learning_rate: 2e-5           ## Learning rate for training
+  gradient_checkpointing: false ## whether to use gradient checkpointing
+
+strategy: fsdp              ## choose from {ddp, fsdp, solo}
+num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+checkpoint_dir: checkpoints ## directory to save checkpoints
+save: false                 ## whether to save checkpoints
+
+dist_parameters:
+  mixed_precision: false      ## Use Mixed Precision? 
+  param_dtype: bfloat16       ## what dtype to use for parameters?  
+  reduce_dtype: float32       ## what dtype to use for reduction?  
+  output_dtype: bfloat16      ## what dtype to use for output? 
+  cast_forward_inputs: false  ## whether to cast forward inputs to the dtype of the wrapped module
+  distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
+
+save_load:
+  resume: false             ## whether to resume from a checkpoint
+  resume_path: ""           ## path to checkpoint to resume from
+  load_model_from_hf: true  ## whether to load  from Hugging Face
+
+prefetch:
+  explicit: true  ## explicit prefetching?
+  forward: 2      ## number of forward passes to prefetch
+  backward: 2     ## number of backward passes to prefetch
+
+peft: ## Parameter Efficient Fine Tuning
+  enabled: false    ## whether to apply PEFT 
+  type: lora        ## LoRA or QLoRA
+  r: 8              ## rank for LoRA, often set to a small value like 4, 8, 16, 64 etc.
+  alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4
+  dropout: 0.05     ## dropout rate for LoRA layers
+  target_modules: all-linear ## "all-linear" for all, or specific modules according to the architecture:
+                             ##   LLaMA/Mistral/Qwen:  ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+                             ##   GPT-2:               ["c_attn", "c_proj", "c_fc"]
+                             ##   Falcon:              ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"] 
+  bias: none ## whether to include bias in LoRA, options: "none", "all", "lora_only"
+
+quantization:
+  enabled: false          ## whether to apply quantization
+  bits: 4                 ## number of bits for quantization, typically 4 or 8
+  quant_type: nf4         ## nf4 or fp4 for 4-bit
+  compute_dtype: bfloat16 ## dtype for computations with quantized models
+  double_quant: true      ## whether to apply double quantization (for 4-bit)
+  
+wandb:
+  wandb_log_with_train: false         ## whether to log training metrics to Weights & Biases
+  wandb_entity: "fsdp-mini-project"   ## your W&B entity (username or team)
+  wandb_project: "fsdp-mini-project"  ## your W&B project name
+  

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YAML Editor - OMNI-Train</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/eclipse.min.css">
+</head>
+<body>
+
+<!-- Theme Toggle Button -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+  <span class="icon-moon">🌙</span>
+  <span class="icon-sun">☀️</span>
+  <span class="theme-label-dark">Dark</span>
+  <span class="theme-label-light">Light</span>
+</button>
+
+<!-- YAML Editor Page -->
+<div class="yaml-page">
+  <div class="yaml-header">
+    <div class="yaml-header-left">
+      <button class="btn-back" onclick="goBackFromYaml()">&larr; Back</button>
+    </div>
+    <span id="yaml-status-badge" class="status-badge status-idle">YAML EDITOR</span>
+  </div>
+
+  <div class="yaml-container">
+    <div class="yaml-toolbar">
+      <div class="yaml-toolbar-left">
+        <span class="yaml-toolbar-title">Configuration YAML</span>
+        <span class="yaml-toolbar-hint">Edit your training configuration below. Options are shown in comments.</span>
+      </div>
+      <div class="yaml-toolbar-right">
+        <label class="yaml-theme-label" for="yaml-theme-select">Theme</label>
+        <select class="yaml-theme-select" id="yaml-theme-select" aria-label="Editor theme">
+          <option value="material">Material</option>
+          <option value="dracula">Dracula</option>
+          <option value="monokai">Monokai</option>
+          <option value="eclipse">Eclipse</option>
+        </select>
+        <button class="btn btn-secondary" onclick="resetYamlTemplate()">Reset to Template</button>
+      </div>
+    </div>
+    <textarea class="yaml-editor" id="yaml-editor" spellcheck="false" placeholder="# Your YAML configuration will appear here..."></textarea>
+  </div>
+
+  <div class="yaml-action-bar">
+    <button class="btn btn-secondary" onclick="validateYaml()">Validate</button>
+    <button class="btn btn-primary" onclick="startTrainingFromYaml()">Start Training</button>
+  </div>
+</div>
+
+<!-- Training Overlay -->
+<div class="training-overlay" id="training-overlay">
+  <div class="training-modal">
+    <div class="training-animation" id="training-animation">
+      <div class="spinner"></div>
+    </div>
+    <div class="training-status">
+      <h3 id="training-title">Starting Training...</h3>
+      <p id="training-subtitle">Initializing model and data loaders</p>
+    </div>
+    <div class="training-progress">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <span class="progress-text" id="progress-text">Preparing...</span>
+    </div>
+    <div class="training-timer" id="training-timer">
+      <div class="timer-label">Estimated Time Remaining</div>
+      <div class="timer-clock" id="timer-clock">--:--:--</div>
+      <div class="timer-info" id="timer-info">Calculating...</div>
+    </div>
+    <div class="training-live-panel">
+      <div class="training-live-header">
+        <span>Live Console Output</span>
+        <span id="training-log-meta">Waiting for logs...</span>
+      </div>
+      <div class="training-live-log" id="training-live-log"></div>
+      <div class="training-live-hint" id="training-live-hint">Latest training output will appear here live.</div>
+    </div>
+    <button class="btn btn-danger" onclick="stopTraining()" style="margin-top: 20px;">Stop Training</button>
+  </div>
+</div>
+
+<!-- Message Modal -->
+<div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
+  <div class="message-modal" onclick="event.stopPropagation()">
+    <div class="message-modal-header">
+      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <h3 id="message-modal-title">Message</h3>
+      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+    </div>
+    <div class="message-modal-body">
+      <p id="message-modal-text"></p>
+    </div>
+    <div class="message-modal-footer">
+      <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+<script src="app.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    initYamlPage();
+  });
+</script>
+</body>
+</html>

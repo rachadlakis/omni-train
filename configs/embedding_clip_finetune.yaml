@@ -1,0 +1,37 @@
+seed: 42
+
+model:
+  type: embedding
+  name: openai/clip-vit-base-patch32
+  embedding_type: clip
+  finetune_mode: lora
+  loss_type: infonce
+  loss_temperature: 0.07
+  lora_r: 8
+  lora_alpha: 16
+  lora_target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+
+data:
+  type: hf_dataset
+  name: conceptual_captions
+  train_split: train
+  max_seq_len: 77
+  image_size: 224
+  num_workers: 4
+
+distributed:
+  strategy: fsdp
+  mixed_precision: true
+  activation_checkpointing: true
+
+training:
+  epochs: 10
+  batch_size: 32
+  lr: 5e-5
+  grad_accum_steps: 4
+  checkpoint_dir: checkpoints/clip_finetuned
+  save_every_n_epochs: 2
+  log_interval: 100

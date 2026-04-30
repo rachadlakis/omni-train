@@ -1,0 +1,60 @@
+model_name: meta-llama/Llama-2-7b-hf  ## other models: facebook/opt-350m, meta-llama/Llama-3.3-70B-Instruct
+
+dataset:
+  name: s3://my-bucket/training-data/dataset.jsonl  ## S3 URI to .jsonl, .json, .csv, or .txt
+  text_field: text                ## JSON field containing the text
+  split: train                    ## fraction of the dataset to use for training
+  s3_region: us-east-1            ## AWS region for S3 bucket
+  # s3_endpoint_url: https://minio.example.com  ## Uncomment for MinIO/S3-compatible
+
+training:
+  epochs: 3                     ## Number of epochs to train
+  batch_size: 4                 ## Batch size for training
+  max_length: 512               ## Maximum sequence length for training
+  learning_rate: 2e-4           ## Learning rate for training
+  gradient_checkpointing: false ## whether to use gradient checkpointing
+
+strategy: ddp     ## choose from {ddp, fsdp, solo}
+num_gpus: 4       ## number of GPUs to launch with torchrun for ddp/fsdp
+checkpoint_dir: checkpoints/llm_lora_s3  ## directory to save checkpoints
+save: true        ## whether to save checkpoints
+
+dist_parameters:
+  mixed_precision: true         ## Use Mixed Precision?
+  param_dtype: bfloat16         ## what dtype to use for parameters?
+  reduce_dtype: float32         ## what dtype to use for reduction?
+  output_dtype: bfloat16        ## what dtype to use for output?
+  cast_forward_inputs: false    ## whether to cast forward inputs to the dtype of the wrapped module
+  dcp_api: true                 ## whether to use DCP API
+  dtensor_api: false            ## whether to use DTensor API
+
+save_load:
+  resume: false                 ## whether to resume from a checkpoint
+  resume_path: ""               ## path to checkpoint to resume from
+  load_model_from_hf: true      ## whether to load from HuggingFace
+
+prefetch:
+  explicit: true                ## explicit prefetching?
+  forward: 2                    ## number of forward passes to prefetch
+  backward: 2                   ## number of backward passes to prefetch
+
+peft:  ## Parameter Efficient Fine Tuning
+  enabled: true                 ## whether to apply PEFT
+  type: lora                    ## LoRA or QLoRA
+  r: 16                         ## rank for LoRA, often set to a small value like 4, 8, 16, 64 etc.
+  alpha: 32                     ## scaling factor for LoRA, often set to r*2 or r*4
+  dropout: 0.05                 ## dropout rate for LoRA layers
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]  ## list of module names
+  bias: none                    ## whether to include bias in LoRA: "none" | "all" | "lora_only"
+
+quantization:
+  enabled: false                ## whether to apply quantization
+  bits: 4                       ## number of bits for quantization, typically 4 or 8
+  quant_type: nf4               ## nf4 or fp4 for 4-bit
+  compute_dtype: bfloat16       ## dtype for computations with quantized models
+  double_quant: true            ## whether to apply double quantization (for 4-bit)
+
+wandb:
+  wandb_log_with_train: false   ## whether to log training metrics to Weights & Biases
+  wandb_entity: "your-entity"   ## your W&B entity (username or team)
+  wandb_project: "omni-train"   ## your W&B project name

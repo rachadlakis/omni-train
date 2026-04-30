@@ -1,0 +1,37 @@
+seed: 42
+
+model:
+  type: embedding
+  name: bert-base-uncased
+  embedding_type: text
+  embedding_backend: transformers
+  finetune_mode: lora
+  pooling_mode: cls
+  loss_type: triplet
+  loss_margin: 0.3
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules:
+    - query
+    - value
+    - key
+
+data:
+  type: local_file
+  name: ./data/triplets.jsonl
+  embedding_format: triplets
+  max_seq_len: 256
+  num_workers: 4
+
+distributed:
+  strategy: ddp
+
+training:
+  epochs: 5
+  batch_size: 32
+  lr: 1e-4
+  grad_accum_steps: 2
+  checkpoint_dir: checkpoints/bert_lora_triplet
+  save_every_n_epochs: 1
+  log_interval: 50
