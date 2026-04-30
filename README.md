@@ -71,7 +71,7 @@ training:
 Pass a different config file:
 
 ```bash
-CONFIG_PATH=configs/llm_lora_ddp.yaml bash launch.sh
+CONFIG_PATH=configs/llm_lora_ddp.yaml bash scripts/launch.sh
 ```
 
 ---
@@ -80,10 +80,10 @@ CONFIG_PATH=configs/llm_lora_ddp.yaml bash launch.sh
 
 ```bash
 # Auto mode — reads strategy and num_gpus from config.yaml
-bash launch.sh
+bash scripts/launch.sh
 
 # Inline overrides
-STRATEGY=ddp NUM_GPUS=2 bash launch.sh
+STRATEGY=ddp NUM_GPUS=2 bash scripts/launch.sh
 
 # torchrun directly
 CONFIG_PATH=config.yaml torchrun --nproc_per_node=2 train.py
