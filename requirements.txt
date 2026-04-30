@@ -1,4 +1,4 @@
- Core ML frameworks
+## Core ML frameworks
 # Note: torch packages version may vary based on CUDA version
 # Install with: 
 # pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128

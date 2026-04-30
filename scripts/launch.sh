@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-CONFIG_PATH="${CONFIG_PATH:-config.yaml}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_PATH="${CONFIG_PATH:-$SCRIPT_DIR/../config.yaml}"
+cd "$SCRIPT_DIR/.."
 NUM_GPUS=""
 MASTER_ADDR="${MASTER_ADDR:-localhost}"
 MASTER_PORT="${MASTER_PORT:-29500}"
