@@ -8,7 +8,7 @@ dist_parameters:
   dcp_api: true
   distribute_api: dcp_api
   dtensor_api: false
-  mixed_precision: false
+  mixed_precision: true
   output_dtype: bfloat16
   param_dtype: bfloat16
   reduce_dtype: float32
@@ -40,11 +40,11 @@ save_load:
   resume_path: '""'
 strategy: fsdp
 training:
-  batch_size: 8
-  epochs: 3
+  batch_size: 32
+  epochs: 4
   grad_clip: 1
   gradient_checkpointing: true
-  learning_rate: 2.0e-05
+  learning_rate: 1.0e-05
   max_length: 128
   warmup_steps: 100
   weight_decay: 0.01

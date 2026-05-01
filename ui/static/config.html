@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Configuration - OMNI-Train</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
 <body>
 
@@ -79,7 +80,8 @@
             <label>Model Type <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Type of model architecture to fine-tune">?</span></label>
             <select id="f-model-type" onchange="onModelTypeChange()">
               <option value="" disabled selected hidden>Select model type...</option>
-              <option value="cnn">Vision</option>
+              <option value="cnn">Vision (CNN)</option>
+              <option value="vision">Vision Transformer (ViT / Swin / DeiT...)</option>
               <option value="llm">LLM</option>
               <option value="vlm">VLM</option>
               <option value="detection">Object Detection</option>
@@ -185,7 +187,7 @@
             </select>
           </div>
           <div class="form-group" id="fg-finetune-mode" style="display:none;">
-            <label>Fine-tune Mode <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="full: update all weights. lora: efficient adapter-based. qlora: quantized LoRA.">?</span></label>
+            <label>Fine-tune Mode <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="full: update all weights. lora: efficient adapter-based (transformers only). qlora: quantized LoRA (LLM/VLM only).">?</span></label>
             <select id="f-finetune-mode" onchange="onFinetuneModeChange()">
               <option value="" disabled selected hidden>Select mode...</option>
               <option value="full">Full Fine-tuning</option>

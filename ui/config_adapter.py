@@ -101,7 +101,23 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     peft_enabled = finetune_mode in {"lora", "qlora"}
     quant_enabled = bool(model.get("quantize", False)) or finetune_mode == "qlora"
 
+    # Map UI model type to backend model_type.
+    # "vision" = HuggingFace Vision Transformer (ViT/Swin/DeiT…) → LoRA-compatible.
+    # "cnn"/"detection" use their own training paths and default to "llm" only when
+    # they reach this adapter (which currently only handles transformer-based models).
+    _ui_to_model_type = {
+        "llm":       "llm",
+        "vlm":       "vlm",
+        "vision":    "vision",
+        "embedding": "encoder",
+        "detection": "yolo",
+        "cnn":       "llm",   # CNN goes through a separate training path
+    }
+    ui_model_type = str(model.get("type", "llm")).lower()
+    model_type = _ui_to_model_type.get(ui_model_type, "llm")
+
     mapped = {
+        "model_type": model_type,
         "model_name": model.get("name", base.get("model_name")),
         "dataset": {
             "name": data.get("name", base["dataset"].get("name", "wikitext")),

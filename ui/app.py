@@ -275,7 +275,7 @@ async def get_gpu_info():
         "available": True,
         "count": gpu_count,
         "gpus": gpus,
-        "cuda_version": getattr(torch.version, "cuda", None),
+        "cuda_version": getattr(torch.version, "cuda", None), # type: ignore
         "pytorch_version": torch.__version__,
     }
 
@@ -469,6 +469,7 @@ def _load_mini_utils_module(project_root: Path):
 
 
 
+@app.post("/api/estimate-time")
 async def api_estimate_training_time(payload: ConfigPayload):
     """
     Estimate training time based on model size and dataset size.
@@ -508,14 +509,11 @@ async def api_estimate_training_time(payload: ConfigPayload):
             steps_per_epoch=steps_per_epoch,
             epochs=epochs,
             batch_size=batch_size,
-            max_length=max_length,
             num_gpus=num_gpus,
             gpu_type=gpu_type,
-            mixed_precision=bool(getattr(args, "mixed_precision", True)),
             peft_enabled=bool(getattr(args, "peft_enabled", False)),
             peft_r=int(getattr(args, "peft_r", 16)),
-            activation_checkpointing=bool(getattr(args, "gradient_checkpointing", False)),
-            quantization_enabled=bool(getattr(args, "quantization_enabled", False)),
+            gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", False)),
             strategy=strategy,
             mfu=0.35,
             extra_overhead=1.0,
@@ -524,15 +522,16 @@ async def api_estimate_training_time(payload: ConfigPayload):
         num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
         param_dtype = str(getattr(args, "param_dtype", "bfloat16")).lower()
         param_dtype_bits = 32 if "32" in param_dtype else 16
+        model_type = str(getattr(args, "model_type", mini_cfg.get("model", {}).get("type", "llm"))).lower()
 
         vram_result = utils_mod.estimate_training_vram(
+            model_type=model_type,
             num_params=num_params,
             param_dtype_bits=param_dtype_bits,
             batch_size=batch_size,
             seq_len=max_length,
             num_layers=num_layers,
             hidden_dim=hidden_dim,
-            num_heads=num_heads,
             activation_checkpointing=bool(getattr(args, "gradient_checkpointing", False)),
         )
 
@@ -541,7 +540,7 @@ async def api_estimate_training_time(payload: ConfigPayload):
         total_steps = steps_per_epoch * max(1, epochs)
 
         return {
-            "model_type": "llm",
+            "model_type": model_type,
             "dataset_size": dataset_size,
             "epochs": epochs,
             "batch_size": batch_size,

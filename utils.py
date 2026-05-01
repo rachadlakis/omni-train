@@ -317,30 +317,110 @@ def build_args(cfg):
 # VRAM Estimator
 # ----------------------------------------------------------------------
 
+# def estimate_training_vram(
+#     model_type: str,       # llm, seq2seq, vision, yolo, vlm, encoder
+#     num_params: int,        # e.g. 125_000_000 for opt-125m
+#     param_dtype_bits: int,  # 16 for bfloat16, 32 for float32
+#     batch_size: int,
+#     seq_len: int,
+#     num_layers: int,
+#     hidden_dim: int,
+#     num_heads: int,
+#     activation_checkpointing: bool = False):
+    
+#     """ Estimates VRAM usage in GB for weights, gradients, optimizer states, and activations. """
+#     if model_type not in {"llm", "seq2seq", "vision", "yolo", "vlm", "encoder"}:
+#         raise ValueError(f"Unsupported model_type={model_type}. Use one of: llm, seq2seq, vision, yolo, vlm, encoder")
+    
+
+#     bytes_per_param = param_dtype_bits / 8 
+#     weights_gb    = num_params * bytes_per_param / 1e9
+#     gradients_gb  = weights_gb                          # same shape as weights
+#     optimizer_gb  = weights_gb * 3
+    
+#     if model_type in {"vision", "yolo"}:
+#         # Vision models often have large activations due to high-res inputs, but we'll use the same formula for simplicity.
+#         pass
+#     elif model_type == "vlm":
+#         # VLMs can have additional components (e.g. vision tower), but we'll use the same formula for simplicity.
+#         pass
+#     elif model_type == "encoder":
+#         # Encoder-only models may have slightly different activation patterns, but we'll use the same formula for simplicity.
+#         pass
+#     elif model_type in {"llm", "seq2seq"}:
+#         act_bytes = (num_layers * 2 * seq_len * batch_size * hidden_dim *
+#                     (16 + 2 / bytes_per_param +
+#                     2 * num_heads * seq_len / hidden_dim))
+#         activations_gb = act_bytes / 1e9
+#         if activation_checkpointing:
+#             activations_gb = activations_gb / (num_layers ** 0.5)
+#         total_gb = weights_gb + gradients_gb + optimizer_gb + activations_gb
+#         return {
+#         "weights_gb":     round(weights_gb, 2),
+#         "gradients_gb":   round(gradients_gb, 2),
+#         "optimizer_gb":   round(optimizer_gb, 2),
+#         "activations_gb": round(activations_gb, 2),
+#         "total_gb":       round(total_gb, 2),
+#     }
+
 def estimate_training_vram(
-    num_params: int,        # e.g. 125_000_000 for opt-125m
-    param_dtype_bits: int,  # 16 for bfloat16, 32 for float32
+    model_type: str,               # llm, seq2seq, vision, yolo, vlm, encoder
+    num_params: int,               # number of trainable parameters
+    param_dtype_bits: int,         # 16 for bfloat16/fp16, 32 for fp32
     batch_size: int,
     seq_len: int,
     num_layers: int,
     hidden_dim: int,
-    num_heads: int,
-    activation_checkpointing: bool = False):
-    """ Estimates VRAM usage in GB for weights, gradients, optimizer states, and activations. """
-    bytes_per_param = param_dtype_bits / 8 # 2 for bfloat16 and 4 for float32
+    activation_checkpointing: bool = False,
+) -> dict:
+    """
+    Estimates VRAM usage in GB for training with Adam optimizer.
 
-    weights_gb    = num_params * bytes_per_param / 1e9
-    gradients_gb  = weights_gb                          # same shape as weights
-    optimizer_gb  = weights_gb * 3 * 2                  # Adam: 2 moments in fp32 and 1 copy in fp32
+    Assumptions:
+    - Gradients use the same dtype as weights.
+    - For mixed precision (param_dtype_bits=16): Adam stores fp32 master weights + two fp32 moments
+      → 12 bytes per original fp16/bf16 parameter → 6× weight memory.
+    - For fp32: Adam stores fp32 weights + two fp32 moments → 12 bytes per param → 3× weight memory.
+    - Activation memory for transformer‑based models (llm, seq2seq, encoder):
+        approx = batch_size * seq_len * hidden_dim * num_layers * 2  (covers attention + MLP outputs).
+    - Activation checkpointing halves the activation memory (common practice).
+    - For vision/YOLO, activation memory is estimated as 20% of weights (very rough).
+    - For VLM, the LLM part dominates, so same as transformer.
+    """
+    valid_types = {"llm", "seq2seq", "vision", "yolo", "vlm", "encoder"}
+    if model_type not in valid_types:
+        raise ValueError(f"Unsupported model_type={model_type}. Use one of {valid_types}")
+    
+    bytes_per_param = param_dtype_bits / 8
+    weights_gb = num_params * bytes_per_param / 1e9
+    gradients_gb = weights_gb                     # same dtype as weights
 
-    # activations per layer (transformer formula)
-    act_bytes = (num_layers * 2 * seq_len * batch_size * hidden_dim *
-                 (16 + 2 / bytes_per_param +
-                  2 * num_heads * seq_len / hidden_dim))
-    activations_gb = act_bytes / 1e9
+    # ---- Optimizer memory (Adam) ----
+    if param_dtype_bits == 32:
+        # fp32: weights (4B) + two fp32 states (8B) = 12B per param → 3× weights_gb
+        optimizer_gb = weights_gb * 3
+    else:  # 16-bit (fp16/bf16) mixed precision
+        # weights are 2B, but optimizer keeps fp32 master (4B) + two fp32 moments (8B) = 12B per param
+        # 12B / 2B = 6× weights_gb
+        optimizer_gb = weights_gb * 6
+
+    # ---- Activation memory ----
+    if model_type in {"llm", "seq2seq", "encoder"}:
+        # Transformer: each layer stores ~ batch * seq_len * hidden_dim * 2 (forward pass)
+        act_bytes = batch_size * seq_len * hidden_dim * num_layers * 2
+    elif model_type in {"vision", "yolo"}:
+        # Crude heuristic: activations ~20% of weight memory (modify for your use case)
+        act_bytes = weights_gb * 0.2 * 1e9
+    elif model_type == "vlm":
+        # Assume the LLM component dominates
+        act_bytes = batch_size * seq_len * hidden_dim * num_layers * 2
+    else:
+        act_bytes = 0
+
     if activation_checkpointing:
-        activations_gb = activations_gb / (num_layers ** 0.5)  # checkpointing stores O(sqrt(N)) activations
+        act_bytes /= 2.0   # typical reduction factor
 
+    activations_gb = act_bytes / 1e9
     total_gb = weights_gb + gradients_gb + optimizer_gb + activations_gb
 
     return {

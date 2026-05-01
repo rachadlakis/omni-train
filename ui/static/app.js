@@ -456,18 +456,28 @@ function closeTemplateModal(event) {
 
 // Template name mappings
 const templateDisplayNames = {
+  // LLM
   'llm_full_finetune_ddp': 'LLM Full Fine Tuning',
   'llm_full_finetune_fsdp': 'LLM Full Fine Tuning',
   'llm_full_quantized_single_gpu': 'LLM Fine Tune with Quantization',
   'llm_lora_ddp': 'LLM Fine Tune with LoRA',
   'llm_lora_local_file': 'LLM Fine Tune with LoRA',
   'llm_lora_quantized_single_gpu': 'LLM Fine Tune with QLoRA',
-  'cnn_resnet_single_gpu': 'ResNet (Single GPU)',
-  'cnn_vit_ddp': 'ViT (DDP)',
   'llm_hybrid_2d_dp_tp': 'LLM Hybrid 2D (DP+TP)',
   'llm_fsdp_mini_project_style': 'LLM FSDP Mini Project Style',
-  'detection_coco_format': 'Detection COCO Format',
-  'detection_yolo_single_gpu': 'Detection YOLO',
+  // VLM
+  'vlm_llava_lora_single_gpu': 'VLM Fine Tune with LoRA',
+  // Vision (CNN)
+  'cnn_resnet_single_gpu': 'Vision Full Training (Single GPU)',
+  'cnn_vit_ddp': 'Vision Full Training (DDP)',
+  // Detection
+  'detection_coco_format': 'Detection Full Training (COCO)',
+  'detection_yolo_single_gpu': 'Detection Full Training (YOLO)',
+  // Embedding
+  'embedding_text_infonce': 'Embedding Text Training',
+  'embedding_bert_lora_triplet': 'Embedding BERT with LoRA',
+  'embedding_vision_resnet': 'Embedding Vision Training',
+  'embedding_clip_finetune': 'Embedding CLIP Fine-Tuning',
 };
 
 // Additional templates
@@ -484,6 +494,8 @@ const extraTemplates = [
   { name: 'llm_mistral_7b_lora', display: 'Mistral 7B', type: 'llm' },
   { name: 'llm_phi3_mini_lora', display: 'Phi-3 Mini', type: 'llm' },
   // Top Open Source VLMs (2026)
+  { name: 'vlm_full_finetune', display: 'VLM Full Fine Tuning', type: 'vlm', desc: 'Full parameter fine-tuning' },
+  { name: 'vlm_qlora_general', display: 'VLM Fine Tune with QLoRA', type: 'vlm', desc: 'Quantized LoRA fine-tuning' },
   { name: 'vlm_qwen2_vl_72b', display: 'Qwen2-VL 72B (Alibaba)', type: 'vlm', desc: 'State-of-the-art vision-language' },
   { name: 'vlm_internvl2_26b', display: 'InternVL2 26B', type: 'vlm', desc: 'Strong multimodal reasoning' },
   { name: 'vlm_llava_next_34b', display: 'LLaVA-NeXT 34B', type: 'vlm', desc: 'Enhanced visual instruction' },
@@ -505,28 +517,28 @@ const extraTemplates = [
   { name: 'cnn_resnet50', display: 'ResNet-50', type: 'cnn', desc: 'Classic strong baseline' },
   { name: 'cnn_resnet101', display: 'ResNet-101', type: 'cnn', desc: 'Deeper ResNet variant' },
   // ViT
-  { name: 'cnn_vit_base', display: 'ViT Base (16×16)', type: 'cnn', desc: 'Vision Transformer base' },
-  { name: 'cnn_vit_large', display: 'ViT Large (16×16)', type: 'cnn', desc: 'Vision Transformer large' },
-  { name: 'cnn_vit_huge', display: 'ViT Huge (14×14)', type: 'cnn', desc: 'Vision Transformer huge, ImageNet-21k' },
+  { name: 'cnn_vit_base', display: 'ViT Base (16×16)', type: 'vision', desc: 'Vision Transformer base' },
+  { name: 'cnn_vit_large', display: 'ViT Large (16×16)', type: 'vision', desc: 'Vision Transformer large' },
+  { name: 'cnn_vit_huge', display: 'ViT Huge (14×14)', type: 'vision', desc: 'Vision Transformer huge, ImageNet-21k' },
   // Swin Transformer
-  { name: 'cnn_swin_tiny', display: 'Swin Transformer Tiny', type: 'cnn', desc: 'Efficient hierarchical ViT' },
-  { name: 'cnn_swin_base', display: 'Swin Transformer Base', type: 'cnn', desc: 'Balanced accuracy/speed' },
-  { name: 'cnn_swin_large', display: 'Swin Transformer Large', type: 'cnn', desc: 'High-accuracy hierarchical ViT' },
+  { name: 'cnn_swin_tiny', display: 'Swin Transformer Tiny', type: 'vision', desc: 'Efficient hierarchical ViT' },
+  { name: 'cnn_swin_base', display: 'Swin Transformer Base', type: 'vision', desc: 'Balanced accuracy/speed' },
+  { name: 'cnn_swin_large', display: 'Swin Transformer Large', type: 'vision', desc: 'High-accuracy hierarchical ViT' },
   // DeiT
-  { name: 'cnn_deit_tiny', display: 'DeiT Tiny', type: 'cnn', desc: 'Data-efficient ViT, tiny' },
-  { name: 'cnn_deit_small', display: 'DeiT Small', type: 'cnn', desc: 'Data-efficient ViT, small' },
-  { name: 'cnn_deit_base', display: 'DeiT Base', type: 'cnn', desc: 'Data-efficient ViT, base' },
+  { name: 'cnn_deit_tiny', display: 'DeiT Tiny', type: 'vision', desc: 'Data-efficient ViT, tiny' },
+  { name: 'cnn_deit_small', display: 'DeiT Small', type: 'vision', desc: 'Data-efficient ViT, small' },
+  { name: 'cnn_deit_base', display: 'DeiT Base', type: 'vision', desc: 'Data-efficient ViT, base' },
   // EfficientNet
   { name: 'cnn_efficientnet_b0', display: 'EfficientNet B0', type: 'cnn', desc: 'Compact & efficient' },
-  { name: 'cnn_efficientnet_b4', display: 'EfficientNet B4', type: 'cnn', desc: 'Balanced accuracy/size' },
-  { name: 'cnn_efficientnet_b7', display: 'EfficientNet B7', type: 'cnn', desc: 'Highest accuracy in family' },
+  { name: 'cnn_efficientnet_b4', display: 'EfficientNet B4', type: 'vision', desc: 'Balanced accuracy/size' },
+  { name: 'cnn_efficientnet_b7', display: 'EfficientNet B7', type: 'vision', desc: 'Highest accuracy in family' },
   // ConvNeXT
-  { name: 'cnn_convnext_tiny', display: 'ConvNeXT Tiny', type: 'cnn', desc: 'Modern CNN with ViT-like design' },
-  { name: 'cnn_convnext_base', display: 'ConvNeXT Base', type: 'cnn', desc: 'Strong modern CNN baseline' },
-  { name: 'cnn_convnext_large', display: 'ConvNeXT Large', type: 'cnn', desc: 'High-capacity modern CNN' },
+  { name: 'cnn_convnext_tiny', display: 'ConvNeXT Tiny', type: 'vision', desc: 'Modern CNN with ViT-like design' },
+  { name: 'cnn_convnext_base', display: 'ConvNeXT Base', type: 'vision', desc: 'Strong modern CNN baseline' },
+  { name: 'cnn_convnext_large', display: 'ConvNeXT Large', type: 'vision', desc: 'High-capacity modern CNN' },
   // BEiT
-  { name: 'cnn_beit_base', display: 'BEiT Base', type: 'cnn', desc: 'BERT-style pre-trained ViT' },
-  { name: 'cnn_beit_large', display: 'BEiT Large', type: 'cnn', desc: 'Large BERT-style ViT' },
+  { name: 'cnn_beit_base', display: 'BEiT Base', type: 'vision', desc: 'BERT-style pre-trained ViT' },
+  { name: 'cnn_beit_large', display: 'BEiT Large', type: 'vision', desc: 'Large BERT-style ViT' },
   // Detection
   { name: 'detection_yolov8n', display: 'YOLOv8 Nano', type: 'detection' },
   { name: 'detection_yolov8s', display: 'YOLOv8 Small', type: 'detection' },
@@ -553,14 +565,24 @@ const extraTemplates = [
   { name: 'detection_yolov12m', display: 'YOLOv12 Medium', type: 'detection' },
   { name: 'detection_yolov12l', display: 'YOLOv12 Large', type: 'detection' },
   { name: 'detection_yolov12x', display: 'YOLOv12 XLarge', type: 'detection' },
-  // Embedding
-  { name: 'embedding_text_infonce', display: 'Embedding Text InfoNCE', type: 'embedding' },
-  { name: 'embedding_bert_lora_triplet', display: 'Embedding BERT LoRA Triplet', type: 'embedding' },
-  { name: 'embedding_vision_resnet', display: 'Embedding Vision ResNet', type: 'embedding' },
-  { name: 'embedding_clip_finetune', display: 'Embedding CLIP Fine-Tuning', type: 'embedding' },
+  // Embedding — text
+  { name: 'embedding_e5_large_v2', display: 'E5-Large-v2 (Microsoft)', type: 'embedding', desc: 'State-of-the-art text embeddings' },
+  { name: 'embedding_e5_mistral_7b', display: 'E5-Mistral-7B (Microsoft)', type: 'embedding', desc: 'LLM-based text embeddings' },
+  { name: 'embedding_gte_qwen2_7b', display: 'GTE-Qwen2-7B (Alibaba)', type: 'embedding', desc: 'Top multilingual embeddings' },
+  { name: 'embedding_bge_large_en', display: 'BGE-Large-EN (BAAI)', type: 'embedding', desc: 'Best English text embeddings' },
+  { name: 'embedding_bge_m3', display: 'BGE-M3 (BAAI)', type: 'embedding', desc: 'Multi-lingual, multi-granularity' },
+  { name: 'embedding_minilm_l6', display: 'all-MiniLM-L6-v2', type: 'embedding', desc: 'Fast, lightweight sentence model' },
+  { name: 'embedding_mpnet_base', display: 'all-mpnet-base-v2', type: 'embedding', desc: 'High quality sentence embeddings' },
+  { name: 'embedding_gte_large', display: 'GTE-Large (Alibaba)', type: 'embedding', desc: 'General text embeddings' },
+  { name: 'embedding_nomic_text', display: 'Nomic Embed Text v1.5', type: 'embedding', desc: '8192 token context, open source' },
+  // Embedding — vision
+  { name: 'embedding_dinov2_large', display: 'DINOv2 Large (Meta)', type: 'embedding', desc: 'Self-supervised vision features' },
+  { name: 'embedding_clip_vit_l14', display: 'CLIP ViT-L/14 (OpenAI)', type: 'embedding', desc: 'Strong visual + text alignment' },
+  { name: 'embedding_siglip_so400m', display: 'SigLIP SO400M (Google)', type: 'embedding', desc: 'Sigmoid image-text contrastive' },
+  { name: 'embedding_imagebind', display: 'ImageBind (Meta)', type: 'embedding', desc: 'Multi-modal joint embedding' },
 ];
 
-const hiddenTemplates = ['llm_lora_s3', 'vlm_llava_lora_single_gpu', 'config', 'llm_hybrid_2d_dp_tp'];
+const hiddenTemplates = ['llm_lora_s3', 'config', 'llm_hybrid_2d_dp_tp'];
 
 async function loadTemplatesForModal() {
   try {
@@ -608,12 +630,16 @@ function renderTemplateGrid(templates, filter = 'all') {
     }
   });
 
-  const finalItems = filter === 'all' ? items : items.filter(t => t.type === filter);
-  const typeOrder = { llm: 0, vlm: 1, cnn: 2, detection: 3, embedding: 4 };
+  const finalItems = filter === 'all' ? items : items.filter(t => {
+    if (filter === 'cnn') return t.type === 'cnn' || t.type === 'vision';
+    return t.type === filter;
+  });
+  const typeOrder = { llm: 0, vlm: 1, cnn: 2, vision: 2, detection: 3, embedding: 4 };
   finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
   finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'VISION' :
+    const tag = item.type === 'cnn' ? 'VISION CNN' :
+                item.type === 'vision' ? 'VIS TRANSF' :
                 item.type === 'vlm' ? 'VLM' :
                 item.type === 'detection' ? 'OBJ DET' :
                 item.type === 'embedding' ? 'EMBED' : 'LLM';
@@ -706,14 +732,18 @@ function onModelTypeChange() {
   setVal('f-image-size', '');
 
   toggle('fg-num-classes', t === 'cnn');
-  toggle('fg-finetune-mode', t === 'llm' || t === 'vlm' || t === 'embedding');
+  toggle('fg-finetune-mode', t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision');
   toggle('fg-yolo-model', t === 'detection');
   toggle('tr-quantize', t === 'llm' || t === 'vlm');
   toggle('tr-freeze', t === 'cnn');
   toggle('fg-max-seq-len', t === 'llm' || t === 'vlm' || t === 'embedding');
-  toggle('fg-image-size', t === 'cnn' || t === 'vlm' || t === 'detection');
+  toggle('fg-image-size', t === 'cnn' || t === 'vlm' || t === 'detection' || t === 'vision');
 
-  if (t === 'llm' || t === 'vlm' || t === 'embedding') {
+  // Hide QLoRA option for vision transformers (quantization not applicable)
+  const qloraOpt = document.querySelector('#f-finetune-mode option[value="qlora"]');
+  if (qloraOpt) qloraOpt.style.display = (t === 'vision' || t === 'embedding') ? 'none' : '';
+
+  if (t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision') {
     onFinetuneModeChange();
   } else {
     toggle('lora-options', false);
@@ -1013,12 +1043,16 @@ function renderSideTemplates(filter = 'all') {
     }
   });
 
-  const finalItems = filter === 'all' ? items : items.filter(t => t.type === filter);
-  const typeOrder = { llm: 0, vlm: 1, cnn: 2, detection: 3, embedding: 4 };
+  const finalItems = filter === 'all' ? items : items.filter(t => {
+    if (filter === 'cnn') return t.type === 'cnn' || t.type === 'vision';
+    return t.type === filter;
+  });
+  const typeOrder = { llm: 0, vlm: 1, cnn: 2, vision: 2, detection: 3, embedding: 4 };
   finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
   finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'VISION' :
+    const tag = item.type === 'cnn' ? 'CNN' :
+                item.type === 'vision' ? 'VIS-T' :
                 item.type === 'vlm' ? 'VLM' :
                 item.type === 'detection' ? 'OBJ DET' :
                 item.type === 'embedding' ? 'EMBED' : 'LLM';
@@ -1190,6 +1224,45 @@ function applyExtraTemplate(template) {
     setVal('f-data-source', 'torchvision');
     onDataSourceChange();
     setVal('f-data-torchvision', 'cifar10');
+  } else if (template.type === 'vision') {
+    let modelName = 'google/vit-base-patch16-224';
+    let finetuneMode = 'lora';
+
+    if (name.includes('vit_base')) { modelName = 'google/vit-base-patch16-224'; }
+    else if (name.includes('vit_large')) { modelName = 'google/vit-large-patch16-224'; }
+    else if (name.includes('vit_huge')) { modelName = 'google/vit-huge-patch14-224-in21k'; }
+    else if (name.includes('swin_tiny')) { modelName = 'microsoft/swin-tiny-patch4-window7-224'; }
+    else if (name.includes('swin_base')) { modelName = 'microsoft/swin-base-patch4-window7-224'; }
+    else if (name.includes('swin_large')) { modelName = 'microsoft/swin-large-patch4-window7-224'; }
+    else if (name.includes('deit_tiny')) { modelName = 'facebook/deit-tiny-patch16-224'; }
+    else if (name.includes('deit_small')) { modelName = 'facebook/deit-small-patch16-224'; }
+    else if (name.includes('deit_base')) { modelName = 'facebook/deit-base-patch16-224'; }
+    else if (name.includes('beit_base')) { modelName = 'microsoft/beit-base-patch16-224'; }
+    else if (name.includes('beit_large')) { modelName = 'microsoft/beit-large-patch16-224'; }
+    else if (name.includes('convnext_tiny')) { modelName = 'facebook/convnext-tiny-224'; }
+    else if (name.includes('convnext_base')) { modelName = 'facebook/convnext-base-224'; }
+    else if (name.includes('convnext_large')) { modelName = 'facebook/convnext-large-224'; }
+    else if (name.includes('efficientnet_b4')) { modelName = 'google/efficientnet-b4'; }
+    else if (name.includes('efficientnet_b7')) { modelName = 'google/efficientnet-b7'; }
+
+    if (name.includes('full')) finetuneMode = 'full';
+
+    setVal('f-model-source', 'huggingface');
+    toggle('fg-model-name', true);
+    setVal('f-model-name', modelName);
+    setVal('f-finetune-mode', finetuneMode);
+    setVal('f-image-size', '224');
+    setVal('f-lora-r', '16');
+    setVal('f-lora-alpha', '32');
+    setVal('f-lora-dropout', '0.05');
+
+    // Default dataset: ImageNet-1k subset via HuggingFace
+    setVal('f-data-source', 'huggingface');
+    onDataSourceChange();
+    setVal('f-data-name', 'ILSVRC/imagenet-1k');
+    setVal('f-data-split', 'train[:5%]');
+
+    onFinetuneModeChange();
   } else if (template.type === 'detection') {
     let yoloModel = 'yolov8n.pt';
     if (name.includes('yolov12')) {
@@ -1236,16 +1309,33 @@ function applyExtraTemplate(template) {
   } else if (template.type === 'embedding') {
     let modelName = 'sentence-transformers/all-MiniLM-L6-v2';
     let finetuneMode = 'lora';
+    let maxSeqLen = '128';
 
-    if (name.includes('bert')) modelName = 'bert-base-uncased';
-    else if (name.includes('clip')) modelName = 'openai/clip-vit-base-patch32';
-    else if (name.includes('vision')) modelName = 'microsoft/resnet-50';
+    // Text embedding models
+    if (name.includes('e5_large_v2')) { modelName = 'intfloat/e5-large-v2'; maxSeqLen = '512'; }
+    else if (name.includes('e5_mistral')) { modelName = 'intfloat/e5-mistral-7b-instruct'; maxSeqLen = '4096'; }
+    else if (name.includes('gte_qwen2')) { modelName = 'Alibaba-NLP/gte-Qwen2-7B-instruct'; maxSeqLen = '8192'; }
+    else if (name.includes('bge_large_en')) { modelName = 'BAAI/bge-large-en-v1.5'; maxSeqLen = '512'; }
+    else if (name.includes('bge_m3')) { modelName = 'BAAI/bge-m3'; maxSeqLen = '8192'; }
+    else if (name.includes('minilm_l6')) { modelName = 'sentence-transformers/all-MiniLM-L6-v2'; maxSeqLen = '256'; }
+    else if (name.includes('mpnet_base')) { modelName = 'sentence-transformers/all-mpnet-base-v2'; maxSeqLen = '384'; }
+    else if (name.includes('gte_large')) { modelName = 'thenlper/gte-large'; maxSeqLen = '512'; }
+    else if (name.includes('nomic_text')) { modelName = 'nomic-ai/nomic-embed-text-v1.5'; maxSeqLen = '8192'; }
+    // Vision embedding models
+    else if (name.includes('dinov2_large')) { modelName = 'facebook/dinov2-large'; finetuneMode = 'full'; }
+    else if (name.includes('clip_vit_l14')) { modelName = 'openai/clip-vit-large-patch14'; }
+    else if (name.includes('siglip_so400m')) { modelName = 'google/siglip-so400m-patch14-384'; }
+    else if (name.includes('imagebind')) { modelName = 'facebook/imagebind-huge'; }
+    // Legacy / YAML-backed
+    else if (name.includes('bert')) { modelName = 'bert-base-uncased'; }
+    else if (name.includes('clip')) { modelName = 'openai/clip-vit-base-patch32'; }
+    else if (name.includes('vision')) { modelName = 'microsoft/resnet-50'; }
 
     if (name.includes('full')) finetuneMode = 'full';
 
     setVal('f-model-name', modelName);
     setVal('f-finetune-mode', finetuneMode);
-    setVal('f-max-seq-len', '128');
+    setVal('f-max-seq-len', maxSeqLen);
     setVal('f-lora-r', '8');
     setVal('f-lora-alpha', '16');
     setVal('f-lora-dropout', '0.05');
@@ -1372,8 +1462,8 @@ function applyConfigToForm(cfg) {
     setVal('f-model-source', 'torchvision');
     setVal('f-model-name', modelName);
     toggle('fg-model-name', true);
-  } else if (modelType === 'llm' || modelType === 'vlm' || modelType === 'embedding') {
-    // Always default to HuggingFace for LLM/VLM/Embedding
+  } else if (modelType === 'vision' || modelType === 'llm' || modelType === 'vlm' || modelType === 'embedding') {
+    // Always default to HuggingFace for Vision-Transformer/LLM/VLM/Embedding
     setVal('f-model-source', 'huggingface');
     toggle('fg-model-name', true);
     if (modelName) {
@@ -1523,6 +1613,14 @@ function buildConfigFromForm() {
       cfg.model.lora_dropout = parseFloat(getVal('f-lora-dropout'));
       cfg.model.lora_target_modules = ['q_proj', 'v_proj', 'k_proj', 'o_proj'];
     }
+  } else if (modelType === 'vision') {
+    cfg.model.finetune_mode = finetuneMode;
+    if (finetuneMode === 'lora') {
+      cfg.model.lora_r = parseInt(getVal('f-lora-r'));
+      cfg.model.lora_alpha = parseInt(getVal('f-lora-alpha'));
+      cfg.model.lora_dropout = parseFloat(getVal('f-lora-dropout'));
+      cfg.model.lora_target_modules = 'all-linear';
+    }
   } else if (modelType === 'detection') {
     cfg.model.yolo_model = getVal('f-yolo-model');
   }
@@ -1534,7 +1632,7 @@ function buildConfigFromForm() {
   if (dataName) cfg.data.name = dataName;
   if (dataSubset) cfg.data.subset = dataSubset;
   if (dataSplit) cfg.data.split = dataSplit;
-  if (modelType === 'cnn' || modelType === 'vlm' || modelType === 'detection') {
+  if (modelType === 'cnn' || modelType === 'vision' || modelType === 'vlm' || modelType === 'detection') {
     cfg.data.image_size = parseInt(getVal('f-image-size'));
   }
   if (modelType === 'llm' || modelType === 'vlm') {
@@ -1640,6 +1738,49 @@ async function checkFsdpNeeded() {
 
   try {
     const cfg = buildConfigFromForm();
+    const modelType = getVal('f-model-type');
+    const usesSeqLen = modelType === 'llm' || modelType === 'vlm' || modelType === 'embedding';
+
+    // Helper to show an early-exit warning in the result panel
+    const showWarning = (msg) => {
+      verdictEl.textContent = 'Missing Input';
+      verdictEl.className = 'fsdp-verdict fsdp-unknown';
+      const vramPillEl = document.getElementById('fsdp-vram-pill');
+      if (vramPillEl) vramPillEl.textContent = '';
+      reasonEl.textContent = msg;
+      breakdownEl.innerHTML = '';
+      resultEl.style.display = 'block';
+    };
+
+    // Must have a model type selected
+    if (!modelType) {
+      showWarning('Please select a Model Type before running this check.');
+      return;
+    }
+
+    // Must have a model name for types where the estimate depends on it
+    const modelName = (getVal('f-model-name') || '').trim();
+    const requiresModelName = modelType === 'llm' || modelType === 'vlm' || modelType === 'vision' || modelType === 'embedding';
+    if (requiresModelName && !modelName) {
+      showWarning('Please enter a Model Name before running this check — the VRAM estimate is based on the number of parameters inferred from the model name.');
+      return;
+    }
+
+    // Read Max Sequence Length from the form field and inject into training config
+    // so the backend FSDP estimator uses the user-specified value.
+    const rawSeqLen = getVal('f-max-seq-len');
+    const seqLen = parseInt(rawSeqLen);
+
+    if (usesSeqLen) {
+      if (!rawSeqLen || isNaN(seqLen) || seqLen <= 0) {
+        showWarning('Please specify Max Sequence Length before running this check — it significantly affects VRAM estimation for sequence-based models.');
+        return;
+      }
+      // Ensure the value reaches the backend (which reads from training.max_length)
+      if (!cfg.training) cfg.training = {};
+      cfg.training.max_length = seqLen;
+    }
+
     const res = await fetch('/api/fsdp-check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1673,24 +1814,34 @@ async function checkFsdpNeeded() {
 
     // Build breakdown table
     const b = data.vram_breakdown || {};
-    const rows = [
+    const infoRows = [
       { label: 'Model', value: data.model_params_b ? `~${data.model_params_b}B params` : '—', icon: '🧠' },
       { label: 'GPU', value: data.gpu_memory_gb ? `${data.gpu_name} · ${data.gpu_memory_gb} GB` : 'Not detected', icon: '🖥️' },
+    ];
+    const memRows = [
       { label: 'Weights', value: `${b.weights_gb} GB`, icon: '⚖️' },
       { label: 'Gradients', value: `${b.gradients_gb} GB`, icon: '📐' },
       { label: 'Optimizer', value: `${b.optimizer_gb} GB`, icon: '🔧' },
       { label: 'Activations', value: `${b.activations_gb} GB`, icon: '⚡' },
-      { label: 'Total VRAM', value: `${data.vram_needed_gb} GB`, icon: '📊', bold: true },
+    ];
+    const totalRows = [
+      { label: 'Total VRAM', value: `${data.vram_needed_gb} GB`, icon: '📊' },
     ];
     if (data.fsdp_needed) {
-      rows.push({ label: `FSDP per-GPU (${data.gpu_count || '?'} GPUs)`, value: `~${data.fsdp_per_gpu_gb} GB`, icon: '🔀', bold: true });
+      totalRows.push({ label: `FSDP per-GPU (${data.gpu_count || '?'} GPUs)`, value: `~${data.fsdp_per_gpu_gb} GB`, icon: '🔀' });
     }
-    breakdownEl.innerHTML = rows.map(r =>
-      `<div class="fsdp-breakdown-row${r.bold ? ' bold' : ''}">
-        <span class="fsdp-breakdown-label">${r.icon} ${r.label}</span>
-        <span class="fsdp-breakdown-value">${r.value}</span>
-      </div>`
-    ).join('');
+    const renderRows = (rows, cls = '') =>
+      rows.map(r => `<tr class="${cls}"><td class="fsdp-table-label">${r.icon} ${r.label}</td><td class="fsdp-table-value">${r.value}</td></tr>`).join('');
+    breakdownEl.innerHTML = `
+      <table class="fsdp-table">
+        <thead><tr><th>Component</th><th>Value</th></tr></thead>
+        <tbody>
+          ${renderRows(infoRows)}
+          <tr class="fsdp-table-section-divider"><td colspan="2"></td></tr>
+          ${renderRows(memRows)}
+          ${renderRows(totalRows, 'fsdp-table-total')}
+        </tbody>
+      </table>`;
 
     resultEl.style.display = 'block';
   } catch (e) {
@@ -2358,7 +2509,7 @@ function startYamlPagePolling() {
         hideTrainingOverlay();
         stopTrainingTimer();
 
-        showTrainingSuccess();
+        showTrainingSuccess(data.logs || []);
 
       } else if (data.status === 'idle') {
         // Check if we have error logs (training failed very quickly)
@@ -2465,8 +2616,18 @@ function copyTrainingError(btn) {
   });
 }
 
-function showTrainingSuccess() {
+function extractWandbUrl(logs) {
+  for (const line of logs) {
+    const m = line.match(/https:\/\/wandb\.ai\/\S+\/runs\/\S+/);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+function showTrainingSuccess(logs = []) {
   const container = document.querySelector('.yaml-page') || document.body;
+
+  const wandbUrl = extractWandbUrl(logs);
 
   const successDiv = document.createElement('div');
   successDiv.id = 'training-error-display';
@@ -2478,15 +2639,27 @@ function showTrainingSuccess() {
     background: #1a1a2e;
     border: 2px solid #27ae60;
     border-radius: 12px;
-    padding: 24px;
+    padding: 24px 28px;
     z-index: 10000;
     box-shadow: 0 10px 40px rgba(0,0,0,0.5);
     text-align: center;
+    min-width: 320px;
   `;
 
+  const wandbSection = wandbUrl ? `
+    <div style="margin: 16px 0; padding: 12px 16px; background: rgba(255,149,0,0.08); border: 1px solid rgba(255,149,0,0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; justify-content: center;">
+      <span style="font-size: 20px;">📊</span>
+      <a href="${wandbUrl}" target="_blank" rel="noopener noreferrer"
+        style="color: #f59e0b; font-weight: 600; font-size: 13px; text-decoration: none; word-break: break-all;"
+        onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+        View run on Weights &amp; Biases ↗
+      </a>
+    </div>` : '';
+
   successDiv.innerHTML = `
-    <h3 style="color: #27ae60; margin: 0 0 16px 0; font-size: 18px;">Training Completed Successfully!</h3>
-    <button onclick="closeTrainingError()" style="margin-top: 16px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
+    <h3 style="color: #27ae60; margin: 0 0 8px 0; font-size: 18px;">✅ Training Completed Successfully!</h3>
+    ${wandbSection}
+    <button onclick="closeTrainingError()" style="margin-top: 12px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
   `;
 
   container.appendChild(successDiv);
@@ -2893,6 +3066,7 @@ async function pollJobStatus(jobId) {
       stopTrainingTimer();
       stopJobPolling();
       renderLogs(job.logs || []);
+      showTrainingSuccess(job.logs || []);
       setTimeout(() => updateStatusBadge('idle'), 3000);
     } else if (job.status === 'failed' || job.status === 'cancelled') {
       hideTrainingOverlay();
