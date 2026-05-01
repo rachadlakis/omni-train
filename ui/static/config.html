@@ -50,9 +50,9 @@
           <button class="side-filter-btn active" onclick="filterSideTemplates('all', this)">All</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('llm', this)">LLM</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('vlm', this)">VLM</button>
-          <button class="side-filter-btn" onclick="filterSideTemplates('cnn', this)">Vision</button>
-          <button class="side-filter-btn" onclick="filterSideTemplates('detection', this)">Detection</button>
-          <button class="side-filter-btn" onclick="filterSideTemplates('embedding', this)">Embedding</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('cnn', this)">VISION</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('detection', this)">OBJ DET</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('embedding', this)">EMBEDDING</button>
         </div>
         <div class="templates-list" id="template-list"></div>
       </div>
@@ -79,11 +79,11 @@
             <label>Model Type <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Type of model architecture to fine-tune">?</span></label>
             <select id="f-model-type" onchange="onModelTypeChange()">
               <option value="" disabled selected hidden>Select model type...</option>
-              <option value="cnn">Vision (Image Classification)</option>
-              <option value="llm">LLM (Language Model)</option>
-              <option value="vlm">VLM (Vision Language Model)</option>
+              <option value="cnn">Vision</option>
+              <option value="llm">LLM</option>
+              <option value="vlm">VLM</option>
               <option value="detection">Object Detection</option>
-              <option value="embedding">Embedding Model</option>
+              <option value="embedding">Embedding</option>
             </select>
           </div>
           <div class="form-group">
@@ -166,12 +166,12 @@
                 <option value="yolov8l.pt">YOLOv8 Large</option>
                 <option value="yolov8x.pt">YOLOv8 XLarge</option>
               </optgroup>
-              <optgroup label="YOLOv5">
-                <option value="yolov5n.pt">YOLOv5 Nano</option>
-                <option value="yolov5s.pt">YOLOv5 Small</option>
-                <option value="yolov5m.pt">YOLOv5 Medium</option>
-                <option value="yolov5l.pt">YOLOv5 Large</option>
-                <option value="yolov5x.pt">YOLOv5 XLarge</option>
+              <optgroup label="YOLOv7">
+                <option value="yolov7n.pt">YOLOv7 Nano</option>
+                <option value="yolov7s.pt">YOLOv7 Small</option>
+                <option value="yolov7m.pt">YOLOv7 Medium</option>
+                <option value="yolov7l.pt">YOLOv7 Large</option>
+                <option value="yolov7x.pt">YOLOv7 XLarge</option>
               </optgroup>
               <optgroup label="YOLO-World (Open Vocabulary)">
                 <option value="yolov8s-world.pt">YOLO-World Small</option>
@@ -309,6 +309,29 @@
       <!-- Distributed Section -->
       <div class="form-section">
         <h3><span class="icon distributed">⚡</span> Distributed Training <span class="section-tooltip" data-tip="Configure multi-GPU training strategies.">?</span></h3>
+        <div class="fsdp-check-row">
+          <button class="btn btn-secondary fsdp-check-btn" id="btn-fsdp-check" onclick="checkFsdpNeeded()">
+            🔍 Check if FSDP is needed
+          </button>
+          <button class="btn btn-secondary fsdp-check-btn" id="btn-gpu-check" onclick="checkGpuAvailability()">
+            🖥️ Check available GPUs
+          </button>
+        </div>
+        <div class="fsdp-check-result" id="fsdp-check-result" style="display:none;">
+          <div class="fsdp-result-header">
+            <span class="fsdp-verdict" id="fsdp-verdict"></span>
+            <span class="fsdp-vram-pill" id="fsdp-vram-pill"></span>
+          </div>
+          <p class="fsdp-reason" id="fsdp-reason"></p>
+          <div class="fsdp-breakdown" id="fsdp-breakdown"></div>
+        </div>
+        <div class="fsdp-check-result" id="gpu-check-result" style="display:none;">
+          <div class="fsdp-result-header">
+            <span class="fsdp-verdict" id="gpu-check-verdict"></span>
+            <span class="fsdp-vram-pill" id="gpu-check-pill"></span>
+          </div>
+          <div class="fsdp-breakdown" id="gpu-check-breakdown"></div>
+        </div>
         <div class="form-grid">
           <div class="form-group">
             <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel.">?</span></label>

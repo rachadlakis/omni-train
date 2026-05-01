@@ -2507,3 +2507,156 @@ body {
   0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
   50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
 }
+
+/* =========================================================================
+   FSDP Check
+   ========================================================================= */
+.fsdp-check-row {
+  margin-top: -12px;
+  margin-bottom: 16px;
+}
+
+.fsdp-check-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.fsdp-check-result {
+  margin-top: 14px;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  overflow: hidden;
+}
+
+.fsdp-result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fsdp-verdict {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.fsdp-verdict.fsdp-ok {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.fsdp-verdict.fsdp-needed {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.fsdp-verdict.fsdp-warn {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.fsdp-verdict.fsdp-unknown {
+  background: var(--surface3);
+  color: var(--text-secondary);
+}
+
+.fsdp-vram-pill {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface3);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.fsdp-reason {
+  margin: 0;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+
+.fsdp-breakdown {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0;
+  padding: 4px 0;
+}
+
+.fsdp-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fsdp-breakdown-row:last-child {
+  border-bottom: none;
+}
+
+.fsdp-breakdown-row.bold {
+  font-weight: 600;
+  background: var(--surface3);
+  color: var(--text);
+}
+
+.fsdp-breakdown-label {
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fsdp-breakdown-row.bold .fsdp-breakdown-label {
+  color: var(--text);
+}
+
+.fsdp-breakdown-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+/* GPU check memory bar */
+.gpu-check-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.gpu-check-bar-row:last-child {
+  border-bottom: none;
+}
+
+.gpu-check-bar-bg {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface3);
+  overflow: hidden;
+}
+
+.gpu-check-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.gpu-check-bar-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

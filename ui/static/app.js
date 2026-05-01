@@ -423,7 +423,7 @@ function goBack() {
 function goBackFromYaml() {
   const fromForm = localStorage.getItem('yaml_from_form') === 'true';
   if (fromForm) {
-    navigateTo('env.html');
+    navigateTo('config.html');
   } else {
     window.location.href = '/';
   }
@@ -465,6 +465,7 @@ const templateDisplayNames = {
   'cnn_resnet_single_gpu': 'ResNet (Single GPU)',
   'cnn_vit_ddp': 'ViT (DDP)',
   'llm_hybrid_2d_dp_tp': 'LLM Hybrid 2D (DP+TP)',
+  'llm_fsdp_mini_project_style': 'LLM FSDP Mini Project Style',
   'detection_coco_format': 'Detection COCO Format',
   'detection_yolo_single_gpu': 'Detection YOLO',
 };
@@ -499,9 +500,33 @@ const extraTemplates = [
   { name: 'llm_gpt2', display: 'GPT-2 (OpenAI)', type: 'llm', desc: 'Classic small language model' },
   { name: 'llm_gpt2_medium', display: 'GPT-2 Medium (OpenAI)', type: 'llm', desc: '345M params' },
   // Vision (CNN)
-  { name: 'cnn_resnet50', display: 'ResNet-50', type: 'cnn' },
-  { name: 'cnn_vit_base', display: 'ViT Base', type: 'cnn' },
-  { name: 'cnn_efficientnet_b0', display: 'EfficientNet B0', type: 'cnn' },
+  // ResNet
+  { name: 'cnn_resnet18', display: 'ResNet-18', type: 'cnn', desc: 'Lightweight, fast baseline' },
+  { name: 'cnn_resnet50', display: 'ResNet-50', type: 'cnn', desc: 'Classic strong baseline' },
+  { name: 'cnn_resnet101', display: 'ResNet-101', type: 'cnn', desc: 'Deeper ResNet variant' },
+  // ViT
+  { name: 'cnn_vit_base', display: 'ViT Base (16×16)', type: 'cnn', desc: 'Vision Transformer base' },
+  { name: 'cnn_vit_large', display: 'ViT Large (16×16)', type: 'cnn', desc: 'Vision Transformer large' },
+  { name: 'cnn_vit_huge', display: 'ViT Huge (14×14)', type: 'cnn', desc: 'Vision Transformer huge, ImageNet-21k' },
+  // Swin Transformer
+  { name: 'cnn_swin_tiny', display: 'Swin Transformer Tiny', type: 'cnn', desc: 'Efficient hierarchical ViT' },
+  { name: 'cnn_swin_base', display: 'Swin Transformer Base', type: 'cnn', desc: 'Balanced accuracy/speed' },
+  { name: 'cnn_swin_large', display: 'Swin Transformer Large', type: 'cnn', desc: 'High-accuracy hierarchical ViT' },
+  // DeiT
+  { name: 'cnn_deit_tiny', display: 'DeiT Tiny', type: 'cnn', desc: 'Data-efficient ViT, tiny' },
+  { name: 'cnn_deit_small', display: 'DeiT Small', type: 'cnn', desc: 'Data-efficient ViT, small' },
+  { name: 'cnn_deit_base', display: 'DeiT Base', type: 'cnn', desc: 'Data-efficient ViT, base' },
+  // EfficientNet
+  { name: 'cnn_efficientnet_b0', display: 'EfficientNet B0', type: 'cnn', desc: 'Compact & efficient' },
+  { name: 'cnn_efficientnet_b4', display: 'EfficientNet B4', type: 'cnn', desc: 'Balanced accuracy/size' },
+  { name: 'cnn_efficientnet_b7', display: 'EfficientNet B7', type: 'cnn', desc: 'Highest accuracy in family' },
+  // ConvNeXT
+  { name: 'cnn_convnext_tiny', display: 'ConvNeXT Tiny', type: 'cnn', desc: 'Modern CNN with ViT-like design' },
+  { name: 'cnn_convnext_base', display: 'ConvNeXT Base', type: 'cnn', desc: 'Strong modern CNN baseline' },
+  { name: 'cnn_convnext_large', display: 'ConvNeXT Large', type: 'cnn', desc: 'High-capacity modern CNN' },
+  // BEiT
+  { name: 'cnn_beit_base', display: 'BEiT Base', type: 'cnn', desc: 'BERT-style pre-trained ViT' },
+  { name: 'cnn_beit_large', display: 'BEiT Large', type: 'cnn', desc: 'Large BERT-style ViT' },
   // Detection
   { name: 'detection_yolov8n', display: 'YOLOv8 Nano', type: 'detection' },
   { name: 'detection_yolov8s', display: 'YOLOv8 Small', type: 'detection' },
@@ -529,8 +554,10 @@ const extraTemplates = [
   { name: 'detection_yolov12l', display: 'YOLOv12 Large', type: 'detection' },
   { name: 'detection_yolov12x', display: 'YOLOv12 XLarge', type: 'detection' },
   // Embedding
-  { name: 'embedding_text_infonce', display: 'Text Embedding (InfoNCE)', type: 'embedding' },
-  { name: 'embedding_bert_lora_triplet', display: 'BERT (Triplet Loss)', type: 'embedding' },
+  { name: 'embedding_text_infonce', display: 'Embedding Text InfoNCE', type: 'embedding' },
+  { name: 'embedding_bert_lora_triplet', display: 'Embedding BERT LoRA Triplet', type: 'embedding' },
+  { name: 'embedding_vision_resnet', display: 'Embedding Vision ResNet', type: 'embedding' },
+  { name: 'embedding_clip_finetune', display: 'Embedding CLIP Fine-Tuning', type: 'embedding' },
 ];
 
 const hiddenTemplates = ['llm_lora_s3', 'vlm_llava_lora_single_gpu', 'config', 'llm_hybrid_2d_dp_tp'];
@@ -649,6 +676,7 @@ function closeGuidePage() {
 let _licenseModalContext = null;
 
 function onModelTypeChange() {
+  resetFsdpCheck();
   const t = getVal('f-model-type');
 
   document.getElementById('f-model-source').selectedIndex = 0;
@@ -1020,6 +1048,13 @@ function renderSideTemplates(filter = 'all') {
 }
 
 async function selectSideTemplate(item, event) {
+  // Snap to top before any DOM changes — cover both window scroll and panel scroll
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  const panel = document.querySelector('.form-panel');
+  if (panel) panel.scrollTop = 0;
+
   document.querySelectorAll('.template-item').forEach(t => t.classList.remove('active'));
   if (event && event.currentTarget) event.currentTarget.classList.add('active');
 
@@ -1029,16 +1064,15 @@ async function selectSideTemplate(item, event) {
 
   if (item.isExtra) {
     applyExtraTemplate(item);
-    return;
-  }
-
-  try {
-    const res = await fetch(`/api/configs/${item.name}`);
-    const data = await res.json();
-    currentConfig = data.config;
-    applyConfigToForm(data.config);
-  } catch (e) {
-    console.error('Failed to load template:', e);
+  } else {
+    try {
+      const res = await fetch(`/api/configs/${item.name}`);
+      const data = await res.json();
+      currentConfig = data.config;
+      applyConfigToForm(data.config);
+    } catch (e) {
+      console.error('Failed to load template:', e);
+    }
   }
 }
 
@@ -1104,7 +1138,7 @@ function applyExtraTemplate(template) {
     setVal('f-data-subset', 'wikitext-2-raw-v1');
     // Use a tiny slice for small/test models, full train split for large ones
     const isSmall = name.includes('opt_125m') || name.includes('opt_350m') || name.includes('gpt2');
-    setVal('f-data-split', isSmall ? 'train[:1%]' : 'train');
+    setVal('f-data-split', '');
 
     onFinetuneModeChange();
   } else if (template.type === 'vlm') {
@@ -1140,7 +1174,7 @@ function applyExtraTemplate(template) {
     onDataSourceChange();
     setVal('f-data-name', 'HuggingFaceM4/the_cauldron');
     setVal('f-data-subset', 'ai2d');
-    setVal('f-data-split', 'train[:1%]');
+    setVal('f-data-split', '');
 
     onFinetuneModeChange();
   } else if (template.type === 'cnn') {
@@ -1198,7 +1232,32 @@ function applyExtraTemplate(template) {
     setVal('f-data-source', 'huggingface');
     onDataSourceChange();
     setVal('f-data-name', 'keremberke/coco128-object-detection');
-    setVal('f-data-split', 'train');
+    setVal('f-data-split', '');
+  } else if (template.type === 'embedding') {
+    let modelName = 'sentence-transformers/all-MiniLM-L6-v2';
+    let finetuneMode = 'lora';
+
+    if (name.includes('bert')) modelName = 'bert-base-uncased';
+    else if (name.includes('clip')) modelName = 'openai/clip-vit-base-patch32';
+    else if (name.includes('vision')) modelName = 'microsoft/resnet-50';
+
+    if (name.includes('full')) finetuneMode = 'full';
+
+    setVal('f-model-name', modelName);
+    setVal('f-finetune-mode', finetuneMode);
+    setVal('f-max-seq-len', '128');
+    setVal('f-lora-r', '8');
+    setVal('f-lora-alpha', '16');
+    setVal('f-lora-dropout', '0.05');
+
+    // Default dataset: all-nli — NLI sentence pairs, widely used for contrastive/triplet embedding training
+    setVal('f-data-source', 'huggingface');
+    onDataSourceChange();
+    setVal('f-data-name', 'sentence-transformers/all-nli');
+    setVal('f-data-subset', 'triplet');
+    setVal('f-data-split', '');
+
+    onFinetuneModeChange();
   }
 }
 
@@ -1490,19 +1549,162 @@ function buildConfigFromForm() {
   cfg.num_gpus = parseInt(getVal('f-gpu-count') || '1');
 
   cfg.training = {
-    epochs: parseInt(getVal('f-epochs')),
-    batch_size: parseInt(getVal('f-batch-size')),
-    lr: parseFloat(getVal('f-lr')),
-    weight_decay: parseFloat(getVal('f-weight-decay')),
-    grad_clip: parseFloat(getVal('f-grad-clip')),
-    grad_accum_steps: parseInt(getVal('f-grad-accum')),
-    warmup_steps: parseInt(getVal('f-warmup-steps')),
-    lr_schedule: getVal('f-lr-schedule'),
+    epochs: parseInt(getVal('f-epochs')) || 3,
+    batch_size: parseInt(getVal('f-batch-size')) || 8,
+    lr: parseFloat(getVal('f-lr')) || 2e-5,
+    weight_decay: parseFloat(getVal('f-weight-decay')) || 0.01,
+    grad_clip: parseFloat(getVal('f-grad-clip')) || 1.0,
+    grad_accum_steps: parseInt(getVal('f-grad-accum')) || 1,
+    warmup_steps: parseInt(getVal('f-warmup-steps')) || 100,
+    lr_schedule: getVal('f-lr-schedule') || 'cosine',
     checkpoint_dir: getVal('f-checkpoint-dir'),
     log_interval: 10,
   };
 
   return cfg;
+}
+
+// =========================================================================
+// FSDP Check
+// =========================================================================
+function resetFsdpCheck() {
+  const resultEl = document.getElementById('fsdp-check-result');
+  if (resultEl) resultEl.style.display = 'none';
+}
+
+async function checkGpuAvailability() {
+  const btn = document.getElementById('btn-gpu-check');
+  const resultEl = document.getElementById('gpu-check-result');
+  const verdictEl = document.getElementById('gpu-check-verdict');
+  const pillEl = document.getElementById('gpu-check-pill');
+  const breakdownEl = document.getElementById('gpu-check-breakdown');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Checking...';
+  resultEl.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/system/gpus');
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    const data = await res.json();
+
+    if (!data.available) {
+      verdictEl.textContent = 'No GPUs available';
+      verdictEl.className = 'fsdp-verdict fsdp-unknown';
+      pillEl.textContent = data.error || 'CUDA not available';
+      breakdownEl.innerHTML = '';
+    } else {
+      verdictEl.textContent = `${data.count} GPU${data.count > 1 ? 's' : ''} detected`;
+      verdictEl.className = 'fsdp-verdict fsdp-ok';
+      pillEl.textContent = `CUDA ${data.cuda_version || '?'} · PyTorch ${data.pytorch_version || '?'}`;
+
+      breakdownEl.innerHTML = data.gpus.map(g => {
+        const usedPct = g.total_memory_gb > 0 ? Math.round((g.used_memory_gb / g.total_memory_gb) * 100) : 0;
+        const barColor = usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#22c55e';
+        return `<div class="fsdp-breakdown-row">
+          <span class="fsdp-breakdown-label">🖥️ GPU ${g.index} — ${g.name}</span>
+          <span class="fsdp-breakdown-value">${g.free_memory_gb} / ${g.total_memory_gb} GB free</span>
+        </div>
+        <div class="gpu-check-bar-row">
+          <div class="gpu-check-bar-bg">
+            <div class="gpu-check-bar-fill" style="width:${usedPct}%; background:${barColor};"></div>
+          </div>
+          <span class="gpu-check-bar-label">${usedPct}% used · SM ${g.compute_capability}</span>
+        </div>`;
+      }).join('');
+    }
+
+    resultEl.style.display = 'block';
+  } catch (e) {
+    verdictEl.textContent = 'Error';
+    verdictEl.className = 'fsdp-verdict fsdp-unknown';
+    pillEl.textContent = e.message;
+    breakdownEl.innerHTML = '';
+    resultEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🖥️ Check available GPUs';
+  }
+}
+
+async function checkFsdpNeeded() {
+  const btn = document.getElementById('btn-fsdp-check');
+  const resultEl = document.getElementById('fsdp-check-result');
+  const verdictEl = document.getElementById('fsdp-verdict');
+  const reasonEl = document.getElementById('fsdp-reason');
+  const breakdownEl = document.getElementById('fsdp-breakdown');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Checking...';
+  resultEl.style.display = 'none';
+
+  try {
+    const cfg = buildConfigFromForm();
+    const res = await fetch('/api/fsdp-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg }),
+    });
+
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    const data = await res.json();
+
+    // Set verdict badge style
+    verdictEl.textContent = data.verdict;
+    verdictEl.className = 'fsdp-verdict';
+    if (data.fsdp_needed === true && data.verdict && data.verdict.includes('more GPUs')) {
+      verdictEl.classList.add('fsdp-warn');
+    } else if (data.fsdp_needed === true) {
+      verdictEl.classList.add('fsdp-needed');
+    } else if (data.fsdp_needed === false) {
+      verdictEl.classList.add('fsdp-ok');
+    } else {
+      verdictEl.classList.add('fsdp-unknown');
+    }
+
+    const vramPillEl = document.getElementById('fsdp-vram-pill');
+    if (vramPillEl) {
+      vramPillEl.textContent = data.gpu_memory_gb
+        ? `${data.vram_needed_gb} GB needed · ${data.gpu_memory_gb} GB available`
+        : `${data.vram_needed_gb} GB estimated`;
+    }
+
+    reasonEl.textContent = data.reason;
+
+    // Build breakdown table
+    const b = data.vram_breakdown || {};
+    const rows = [
+      { label: 'Model', value: data.model_params_b ? `~${data.model_params_b}B params` : '—', icon: '🧠' },
+      { label: 'GPU', value: data.gpu_memory_gb ? `${data.gpu_name} · ${data.gpu_memory_gb} GB` : 'Not detected', icon: '🖥️' },
+      { label: 'Weights', value: `${b.weights_gb} GB`, icon: '⚖️' },
+      { label: 'Gradients', value: `${b.gradients_gb} GB`, icon: '📐' },
+      { label: 'Optimizer', value: `${b.optimizer_gb} GB`, icon: '🔧' },
+      { label: 'Activations', value: `${b.activations_gb} GB`, icon: '⚡' },
+      { label: 'Total VRAM', value: `${data.vram_needed_gb} GB`, icon: '📊', bold: true },
+    ];
+    if (data.fsdp_needed) {
+      rows.push({ label: `FSDP per-GPU (${data.gpu_count || '?'} GPUs)`, value: `~${data.fsdp_per_gpu_gb} GB`, icon: '🔀', bold: true });
+    }
+    breakdownEl.innerHTML = rows.map(r =>
+      `<div class="fsdp-breakdown-row${r.bold ? ' bold' : ''}">
+        <span class="fsdp-breakdown-label">${r.icon} ${r.label}</span>
+        <span class="fsdp-breakdown-value">${r.value}</span>
+      </div>`
+    ).join('');
+
+    resultEl.style.display = 'block';
+  } catch (e) {
+    verdictEl.textContent = 'Error';
+    verdictEl.className = 'fsdp-verdict fsdp-unknown';
+    const vramPillElErr = document.getElementById('fsdp-vram-pill');
+    if (vramPillElErr) vramPillElErr.textContent = '';
+    reasonEl.textContent = e.message;
+    breakdownEl.innerHTML = '';
+    resultEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Check if FSDP is needed';
+  }
 }
 
 // =========================================================================
@@ -1595,13 +1797,15 @@ function generateEnvTemplate(keys) {
 
 function showEnvPage() {
   loadFormState();
-  proceedToEnvPage();
+  localStorage.setItem('yaml_from_form', 'true');
+  saveFormState();
+  navigateTo('yaml.html');
 }
 
 function proceedToEnvPage() {
   localStorage.setItem('yaml_from_form', 'true');
   saveFormState();
-  navigateTo('env.html');
+  navigateTo('yaml.html');
 }
 
 function showUltralyticsLicenseModal() {
@@ -3048,4 +3252,17 @@ async function initConfigPage() {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
   loadTheme();
+
+  // Reset FSDP check result when any config field that affects VRAM changes
+  const fsdpResetIds = [
+    'f-model-name', 'f-model-url', 'f-model-path',
+    'f-finetune-mode', 'f-lora-r', 'f-lora-alpha',
+    'f-max-seq-len', 'f-batch-size', 'f-mixed-precision',
+    'f-quantize', 'f-quant-bits', 'f-model-source',
+  ];
+  fsdpResetIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', resetFsdpCheck);
+    if (el && (el.tagName === 'INPUT')) el.addEventListener('input', resetFsdpCheck);
+  });
 });

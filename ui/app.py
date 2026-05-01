@@ -605,6 +605,120 @@ async def api_estimate_training_time(payload: ConfigPayload):
         }
 
 # ---------------------------------------------------------------------------
+# Routes: FSDP Check
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fsdp-check")
+async def fsdp_check(payload: ConfigPayload):
+    """Check if FSDP is needed based on estimated VRAM vs available GPU memory."""
+    config = payload.config
+    model_cfg = config.get("model", {})
+    training_cfg = config.get("training", {})
+    distributed_cfg = config.get("distributed", {})
+
+    model_name = model_cfg.get("name", "") or ""
+    batch_size = int(training_cfg.get("batch_size") or 8)
+    seq_len = int(training_cfg.get("max_length") or training_cfg.get("max_seq_len") or 512)
+    activation_checkpointing = bool(training_cfg.get("gradient_checkpointing", False))
+    mixed_precision = distributed_cfg.get("mixed_precision", True)
+
+    param_dtype_bits = 16 if mixed_precision else 32
+
+    num_params = _infer_num_params_from_model_name(model_name)
+    num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
+
+    try:
+        utils_mod = _load_mini_utils_module(PROJECT_ROOT)
+        vram = utils_mod.estimate_training_vram(
+            num_params=num_params,
+            param_dtype_bits=param_dtype_bits,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            num_layers=num_layers,
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            activation_checkpointing=activation_checkpointing,
+        )
+    except Exception:
+        # Fallback: rough estimate without utils module
+        bytes_per_param = param_dtype_bits / 8
+        weights_gb = num_params * bytes_per_param / 1e9
+        vram = {
+            "weights_gb": round(weights_gb, 2),
+            "gradients_gb": round(weights_gb, 2),
+            "optimizer_gb": round(weights_gb * 6, 2),
+            "activations_gb": round(batch_size * seq_len * hidden_dim * num_layers * 2 / 1e9, 2),
+            "total_gb": round(weights_gb * 8, 2),
+        }
+
+    # Detect GPU memory
+    gpu_memory_gb = None
+    gpu_name = "Unknown"
+    detected_gpu_count = 0
+    try:
+        import torch
+        if torch.cuda.is_available():
+            detected_gpu_count = torch.cuda.device_count()
+            props = torch.cuda.get_device_properties(0)
+            gpu_memory_gb = round(props.total_memory / (1024 ** 3), 2)
+            gpu_name = props.name
+    except Exception:
+        pass
+
+    num_gpus = detected_gpu_count if detected_gpu_count > 0 else 1
+
+    total_vram_needed = vram["total_gb"]
+
+    # With FSDP, weights/gradients/optimizer are sharded across GPUs;
+    # activations remain per-GPU
+    shardable_gb = vram["weights_gb"] + vram["gradients_gb"] + vram["optimizer_gb"]
+    fsdp_per_gpu_gb = round(shardable_gb / max(1, num_gpus) + vram["activations_gb"], 2)
+
+    if gpu_memory_gb is None:
+        fsdp_needed = None
+        verdict = "Unable to determine"
+        reason = "No GPU detected. Cannot compare VRAM requirements."
+    elif total_vram_needed <= gpu_memory_gb:
+        fsdp_needed = False
+        verdict = "FSDP not needed"
+        reason = (
+            f"Estimated VRAM ({total_vram_needed:.1f} GB) fits within a single GPU "
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}). DDP or Solo is sufficient."
+        )
+    elif fsdp_per_gpu_gb <= gpu_memory_gb:
+        fsdp_needed = True
+        verdict = "FSDP recommended"
+        reason = (
+            f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}), but FSDP across {num_gpus} GPU(s) "
+            f"reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
+        )
+    else:
+        fsdp_needed = True
+        gpus_needed = math.ceil(shardable_gb / (gpu_memory_gb - vram["activations_gb"])) if gpu_memory_gb > vram["activations_gb"] else None
+        gpus_hint = f" Try increasing GPU count to ~{gpus_needed}." if gpus_needed else ""
+        verdict = "FSDP needed — more GPUs required"
+        reason = (
+            f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}), and FSDP across {num_gpus} GPU(s) "
+            f"still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
+        )
+
+    return {
+        "fsdp_needed": fsdp_needed,
+        "verdict": verdict,
+        "reason": reason,
+        "vram_needed_gb": total_vram_needed,
+        "gpu_memory_gb": gpu_memory_gb,
+        "gpu_name": gpu_name,
+        "gpu_count": detected_gpu_count,
+        "fsdp_per_gpu_gb": fsdp_per_gpu_gb,
+        "vram_breakdown": vram,
+        "model_params_b": round(num_params / 1e9, 2),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Routes: Validation
 # ---------------------------------------------------------------------------
 

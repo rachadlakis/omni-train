@@ -6,12 +6,14 @@ dataset:
 dist_parameters:
   cast_forward_inputs: false
   dcp_api: true
+  distribute_api: dcp_api
   dtensor_api: false
-  mixed_precision: true
+  mixed_precision: false
   output_dtype: bfloat16
   param_dtype: bfloat16
   reduce_dtype: float32
 model_name: facebook/opt-350m
+model_type: llm
 num_gpus: 1
 peft:
   alpha: 32
@@ -25,7 +27,6 @@ prefetch:
   backward: 2
   explicit: true
   forward: 2
-
 quantization:
   bits: 4
   compute_dtype: bfloat16
@@ -33,24 +34,21 @@ quantization:
   enabled: false
   quant_type: nf4
 save: true
-
 save_load:
   load_model_from_hf: true
   resume: false
   resume_path: '""'
-
 strategy: fsdp
 training:
-  batch_size: 32
-  epochs: 4
+  batch_size: 8
+  epochs: 3
   grad_clip: 1
   gradient_checkpointing: true
-  learning_rate: 1.0e-05
+  learning_rate: 2.0e-05
   max_length: 128
   warmup_steps: 100
   weight_decay: 0.01
-
 wandb:
   wandb_entity: '"fsdp-mini-project"'
-  wandb_log_with_train: true
+  wandb_log_with_train: false
   wandb_project: '"fsdp-mini-project"'

@@ -8,10 +8,10 @@ model:
   freeze_backbone: false
 
 data:
-  type: image_folder
-  name: /data/imagenet-100
+  type: hf_dataset
+  name: cifar100
   train_split: train
-  val_split: val
+  val_split: test
   image_size: 224
   augmentation: autoaugment
   num_workers: 8

@@ -5,7 +5,13 @@
 model_name: facebook/opt-125m    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
 model_type: llm                ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 ## model_name suggestions:
-## vision: google/vit-base-patch16-224, google/vit-large-patch16-224
+## vision (ViT):        google/vit-base-patch16-224, google/vit-large-patch16-224, google/vit-huge-patch14-224-in21k
+## vision (Swin):       microsoft/swin-tiny-patch4-window7-224, microsoft/swin-base-patch4-window7-224, microsoft/swin-large-patch4-window7-224
+## vision (DeiT):       facebook/deit-tiny-patch16-224, facebook/deit-small-patch16-224, facebook/deit-base-patch16-224
+## vision (ResNet):     microsoft/resnet-18, microsoft/resnet-50, microsoft/resnet-101
+## vision (ConvNeXT):   facebook/convnext-tiny-224, facebook/convnext-base-224, facebook/convnext-large-224
+## vision (EfficientNet): google/efficientnet-b0, google/efficientnet-b4, google/efficientnet-b7
+## vision (BEiT):       microsoft/beit-base-patch16-224, microsoft/beit-large-patch16-224
 ## llm: facebook/opt-125m, facebook/opt-350m, gpt2, gpt2-medium, gpt2-large, gpt2-xl
 
 
