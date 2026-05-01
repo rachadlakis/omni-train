@@ -1168,8 +1168,94 @@ function applyExtraTemplate(template) {
   }
 }
 
+/**
+ * Normalize the flat LLM schema (used by llm_*.yaml configs) to the standard
+ * nested schema expected by applyConfigToForm.
+ *
+ * Flat schema keys: model_name, dataset, strategy, num_gpus, checkpoint_dir,
+ *   dist_parameters, peft, quantization, training.
+ * Standard schema keys: model.{type,name,...}, data.{name,...},
+ *   distributed.{strategy,...}, training.{...}.
+ */
+function normalizeLlmFlatConfig(cfg) {
+  const peft = cfg.peft || {};
+  const quant = cfg.quantization || {};
+  const distParams = cfg.dist_parameters || {};
+  const dataset = cfg.dataset || {};
+  const t = cfg.training || {};
+
+  // Determine finetune mode from peft block
+  let finetuneMode = 'full';
+  if (peft.enabled) {
+    finetuneMode = quant.enabled ? 'qlora' : 'lora';
+  }
+
+  // Map strategy: 'solo' → 'none' (UI uses 'none' for single-GPU)
+  let strategy = cfg.strategy || 'none';
+  if (strategy === 'solo') strategy = 'none';
+
+  // Determine data source from dataset.name value
+  const datasetName = dataset.name || '';
+  let dataSource = 'huggingface';
+  let dataName = datasetName;
+  let dataPath = '';
+  let dataUrl = '';
+  if (datasetName.startsWith('s3://') || datasetName.startsWith('http://') || datasetName.startsWith('https://')) {
+    dataSource = 'url';
+    dataUrl = datasetName;
+    dataName = '';
+  } else if (datasetName.startsWith('/') || datasetName.startsWith('./') || datasetName.startsWith('../')) {
+    dataSource = 'local';
+    dataPath = datasetName;
+    dataName = '';
+  }
+
+  return {
+    seed: cfg.seed || 42,
+    num_gpus: cfg.num_gpus || 1,
+    model: {
+      type: 'llm',
+      name: cfg.model_name || '',
+      finetune_mode: finetuneMode === 'qlora' ? 'lora' : finetuneMode,
+      quantize: quant.enabled === true,
+      quant_bits: quant.bits || 4,
+      lora_r: peft.r || 16,
+      lora_alpha: peft.alpha || 32,
+      lora_dropout: peft.dropout || 0.05,
+    },
+    data: {
+      _source: dataSource,
+      name: dataName,
+      subset: dataset.subset || '',
+      _path: dataPath,
+      _url: dataUrl,
+      max_seq_len: t.max_length || 2048,
+    },
+    distributed: {
+      strategy: strategy,
+      mixed_precision: distParams.mixed_precision !== false,
+    },
+    training: {
+      epochs: t.epochs || 3,
+      batch_size: t.batch_size || 8,
+      lr: t.learning_rate || t.lr || '2e-4',
+      weight_decay: t.weight_decay || 0.01,
+      grad_accum_steps: t.grad_accum_steps || 1,
+      warmup_steps: t.warmup_steps || 100,
+      grad_clip: t.grad_clip || 1.0,
+      lr_schedule: t.lr_schedule || 'cosine',
+      checkpoint_dir: cfg.checkpoint_dir || 'checkpoints',
+    },
+  };
+}
+
 function applyConfigToForm(cfg) {
   if (!cfg) return;
+
+  // Detect flat LLM schema (model_name at top level, no model.type)
+  if (cfg.model_name != null && cfg.model == null) {
+    cfg = normalizeLlmFlatConfig(cfg);
+  }
 
   const m = cfg.model || {};
   const d = cfg.data || {};
@@ -1225,11 +1311,36 @@ function applyConfigToForm(cfg) {
   setVal('f-lora-alpha', m.lora_alpha || 32);
   setVal('f-lora-dropout', m.lora_dropout || 0.05);
 
-  // Data settings
-  setVal('f-data-name', d.name || '');
-  setVal('f-data-subset', d.subset || d.dataset_full_name || '');
-  setVal('f-image-size', d.image_size || 224);
-  setVal('f-max-seq-len', d.max_seq_len || 2048);
+  // Data source and fields
+  // d._source is set by normalizeLlmFlatConfig; for standard configs derive from d.type
+  const rawDataType = d.type || '';
+  let dataSource = d._source || '';
+  if (!dataSource) {
+    if (rawDataType === 'torchvision') dataSource = 'torchvision';
+    else if (rawDataType === 'hf_dataset') dataSource = 'huggingface';
+    else if (rawDataType === 'local_file' || rawDataType === 'image_folder') dataSource = 'local';
+    else if (rawDataType === 'yolo' || rawDataType === 'coco') dataSource = 'local';
+    else if (d.name) dataSource = 'huggingface';
+  }
+  if (dataSource) {
+    setVal('f-data-source', dataSource);
+    onDataSourceChange();
+  }
+
+  if (dataSource === 'huggingface') {
+    setVal('f-data-name', d.name || '');
+    setVal('f-data-subset', d.subset || d.dataset_full_name || '');
+  } else if (dataSource === 'torchvision') {
+    const tvName = (d.name || '').toLowerCase();
+    setVal('f-data-torchvision', tvName || 'cifar10');
+  } else if (dataSource === 'local') {
+    setVal('f-data-path', d._path || d.name || d.data_yaml || '');
+  } else if (dataSource === 'url') {
+    setVal('f-data-url', d._url || d.name || '');
+  }
+
+  setVal('f-image-size', d.image_size || '');
+  setVal('f-max-seq-len', d.max_seq_len || '');
 
   // Distributed settings
   setVal('f-strategy', dist.strategy || 'none');

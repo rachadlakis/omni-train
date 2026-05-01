@@ -25,6 +25,7 @@ prefetch:
   backward: 2
   explicit: true
   forward: 2
+
 quantization:
   bits: 4
   compute_dtype: bfloat16
@@ -32,10 +33,12 @@ quantization:
   enabled: false
   quant_type: nf4
 save: true
+
 save_load:
   load_model_from_hf: true
   resume: false
   resume_path: '""'
+
 strategy: fsdp
 training:
   batch_size: 32
@@ -46,7 +49,8 @@ training:
   max_length: 128
   warmup_steps: 100
   weight_decay: 0.01
+
 wandb:
   wandb_entity: '"fsdp-mini-project"'
-  wandb_log_with_train: false
+  wandb_log_with_train: true
   wandb_project: '"fsdp-mini-project"'

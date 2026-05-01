@@ -275,7 +275,7 @@ async def get_gpu_info():
         "available": True,
         "count": gpu_count,
         "gpus": gpus,
-        "cuda_version": torch.version.cuda,
+        "cuda_version": getattr(torch.version, "cuda", None),
         "pytorch_version": torch.__version__,
     }
 
