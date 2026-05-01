@@ -50,7 +50,7 @@
           <button class="side-filter-btn active" onclick="filterSideTemplates('all', this)">All</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('llm', this)">LLM</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('vlm', this)">VLM</button>
-          <button class="side-filter-btn" onclick="filterSideTemplates('cnn', this)">CNN</button>
+          <button class="side-filter-btn" onclick="filterSideTemplates('cnn', this)">Vision</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('detection', this)">Detection</button>
           <button class="side-filter-btn" onclick="filterSideTemplates('embedding', this)">Embedding</button>
         </div>
@@ -79,7 +79,7 @@
             <label>Model Type <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Type of model architecture to fine-tune">?</span></label>
             <select id="f-model-type" onchange="onModelTypeChange()">
               <option value="" disabled selected hidden>Select model type...</option>
-              <option value="cnn">CNN (Image Classification)</option>
+              <option value="cnn">Vision (Image Classification)</option>
               <option value="llm">LLM (Language Model)</option>
               <option value="vlm">VLM (Vision Language Model)</option>
               <option value="detection">Object Detection</option>
@@ -250,6 +250,10 @@
           <div class="form-group" id="fg-data-subset" style="display:none;">
             <label>Dataset Subset</label>
             <input type="text" id="f-data-subset" placeholder="e.g. wikitext-2-raw-v1">
+          </div>
+          <div class="form-group" id="fg-data-split" style="display:none;">
+            <label>Dataset Split <span class="tooltip" data-tip="Which split to use, optionally with a size slice for quick test runs">?</span></label>
+            <input type="text" id="f-data-split" placeholder="e.g. train, train[:1%], train[:5000]">
           </div>
           <div class="form-group" id="fg-data-kaggle" style="display:none;">
             <label>Kaggle Dataset <span class="required-star" aria-hidden="true">*</span></label>

@@ -462,8 +462,9 @@ const templateDisplayNames = {
   'llm_lora_ddp': 'LLM Fine Tune with LoRA',
   'llm_lora_local_file': 'LLM Fine Tune with LoRA',
   'llm_lora_quantized_single_gpu': 'LLM Fine Tune with QLoRA',
-  'cnn_resnet_single_gpu': 'CNN ResNet',
-  'cnn_vit_ddp': 'CNN ViT',
+  'cnn_resnet_single_gpu': 'ResNet (Single GPU)',
+  'cnn_vit_ddp': 'ViT (DDP)',
+  'llm_hybrid_2d_dp_tp': 'LLM Hybrid 2D (DP+TP)',
   'detection_coco_format': 'Detection COCO Format',
   'detection_yolo_single_gpu': 'Detection YOLO',
 };
@@ -492,7 +493,12 @@ const extraTemplates = [
   // Other VLMs
   { name: 'vlm_llava_7b_lora', display: 'LLaVA 1.5 7B', type: 'vlm' },
   { name: 'vlm_blip2_flan_lora', display: 'BLIP-2 Flan-T5', type: 'vlm' },
-  // CNNs
+  // Small/test LLMs
+  { name: 'llm_opt_125m', display: 'OPT-125M (Facebook)', type: 'llm', desc: 'Tiny model, fast for testing' },
+  { name: 'llm_opt_350m', display: 'OPT-350M (Facebook)', type: 'llm', desc: 'Small model for quick runs' },
+  { name: 'llm_gpt2', display: 'GPT-2 (OpenAI)', type: 'llm', desc: 'Classic small language model' },
+  { name: 'llm_gpt2_medium', display: 'GPT-2 Medium (OpenAI)', type: 'llm', desc: '345M params' },
+  // Vision (CNN)
   { name: 'cnn_resnet50', display: 'ResNet-50', type: 'cnn' },
   { name: 'cnn_vit_base', display: 'ViT Base', type: 'cnn' },
   { name: 'cnn_efficientnet_b0', display: 'EfficientNet B0', type: 'cnn' },
@@ -527,7 +533,7 @@ const extraTemplates = [
   { name: 'embedding_bert_lora_triplet', display: 'BERT (Triplet Loss)', type: 'embedding' },
 ];
 
-const hiddenTemplates = ['llm_lora_s3', 'vlm_llava_lora_single_gpu'];
+const hiddenTemplates = ['llm_lora_s3', 'vlm_llava_lora_single_gpu', 'config', 'llm_hybrid_2d_dp_tp'];
 
 async function loadTemplatesForModal() {
   try {
@@ -580,7 +586,7 @@ function renderTemplateGrid(templates, filter = 'all') {
   finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
   finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'IMG CLASS' :
+    const tag = item.type === 'cnn' ? 'VISION' :
                 item.type === 'vlm' ? 'VLM' :
                 item.type === 'detection' ? 'OBJ DET' :
                 item.type === 'embedding' ? 'EMBED' : 'LLM';
@@ -644,12 +650,6 @@ let _licenseModalContext = null;
 
 function onModelTypeChange() {
   const t = getVal('f-model-type');
-
-  // Show Ultralytics license notice when YOLO/detection is selected
-  if (t === 'detection') {
-    _licenseModalContext = 'dropdown';
-    showUltralyticsLicenseModal();
-  }
 
   document.getElementById('f-model-source').selectedIndex = 0;
   setVal('f-model-name', '');
@@ -838,6 +838,7 @@ function onDataSourceChange() {
 
   toggle('fg-data-name', false);
   toggle('fg-data-subset', false);
+  toggle('fg-data-split', false);
   toggle('fg-data-kaggle', false);
   toggle('fg-data-torchvision', false);
   toggle('fg-data-path', false);
@@ -848,8 +849,9 @@ function onDataSourceChange() {
   if (source === 'huggingface') {
     toggle('fg-data-name', true);
     toggle('fg-data-subset', true);
+    toggle('fg-data-split', true);
     const el = document.getElementById('f-data-name');
-    if (el) el.placeholder = 'e.g. tatsu-lab/alpaca';
+    if (el) el.placeholder = 'e.g. wikitext, tatsu-lab/alpaca';
     const subsetEl = document.getElementById('f-data-subset');
     if (subsetEl) subsetEl.placeholder = 'e.g. wikitext-2-raw-v1';
   } else if (source === 'kaggle') {
@@ -988,7 +990,7 @@ function renderSideTemplates(filter = 'all') {
   finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
   finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'IMG CLASS' :
+    const tag = item.type === 'cnn' ? 'VISION' :
                 item.type === 'vlm' ? 'VLM' :
                 item.type === 'detection' ? 'OBJ DET' :
                 item.type === 'embedding' ? 'EMBED' : 'LLM';
@@ -1079,6 +1081,11 @@ function applyExtraTemplate(template) {
     else if (name.includes('llama2_7b')) modelName = 'meta-llama/Llama-2-7b-hf';
     else if (name.includes('mistral_7b')) modelName = 'mistralai/Mistral-7B-v0.1';
     else if (name.includes('phi3')) modelName = 'microsoft/Phi-3-mini-4k-instruct';
+    // Small/test models
+    else if (name.includes('opt_125m')) { modelName = 'facebook/opt-125m'; maxSeqLen = '512'; }
+    else if (name.includes('opt_350m')) { modelName = 'facebook/opt-350m'; maxSeqLen = '512'; }
+    else if (name.includes('gpt2_medium')) { modelName = 'gpt2-medium'; maxSeqLen = '1024'; }
+    else if (name.includes('gpt2')) { modelName = 'gpt2'; maxSeqLen = '1024'; }
 
     if (name.includes('qlora')) finetuneMode = 'qlora';
     else if (name.includes('full')) finetuneMode = 'full';
@@ -1089,6 +1096,15 @@ function applyExtraTemplate(template) {
     setVal('f-lora-r', '16');
     setVal('f-lora-alpha', '32');
     setVal('f-lora-dropout', '0.05');
+
+    // Default dataset: wikitext with small split for all LLMs
+    setVal('f-data-source', 'huggingface');
+    onDataSourceChange();
+    setVal('f-data-name', 'wikitext');
+    setVal('f-data-subset', 'wikitext-2-raw-v1');
+    // Use a tiny slice for small/test models, full train split for large ones
+    const isSmall = name.includes('opt_125m') || name.includes('opt_350m') || name.includes('gpt2');
+    setVal('f-data-split', isSmall ? 'train[:1%]' : 'train');
 
     onFinetuneModeChange();
   } else if (template.type === 'vlm') {
@@ -1119,6 +1135,13 @@ function applyExtraTemplate(template) {
     setVal('f-lora-alpha', '32');
     setVal('f-lora-dropout', '0.05');
 
+    // Default dataset: small image-text pairs from HuggingFace
+    setVal('f-data-source', 'huggingface');
+    onDataSourceChange();
+    setVal('f-data-name', 'HuggingFaceM4/the_cauldron');
+    setVal('f-data-subset', 'ai2d');
+    setVal('f-data-split', 'train[:1%]');
+
     onFinetuneModeChange();
   } else if (template.type === 'cnn') {
     let modelName = 'resnet50';
@@ -1128,6 +1151,11 @@ function applyExtraTemplate(template) {
     setVal('f-model-name', modelName);
     setVal('f-num-classes', '10');
     setVal('f-image-size', '224');
+
+    // Default dataset: CIFAR-10 via torchvision
+    setVal('f-data-source', 'torchvision');
+    onDataSourceChange();
+    setVal('f-data-torchvision', 'cifar10');
   } else if (template.type === 'detection') {
     let yoloModel = 'yolov8n.pt';
     if (name.includes('yolov12')) {
@@ -1165,6 +1193,12 @@ function applyExtraTemplate(template) {
     setVal('f-model-name', yoloModel);
     setVal('f-yolo-model', yoloModel);
     setVal('f-image-size', '640');
+
+    // Default dataset: COCO128 sample — small enough for quick runs
+    setVal('f-data-source', 'huggingface');
+    onDataSourceChange();
+    setVal('f-data-name', 'keremberke/coco128-object-detection');
+    setVal('f-data-split', 'train');
   }
 }
 
@@ -1213,6 +1247,7 @@ function normalizeLlmFlatConfig(cfg) {
   return {
     seed: cfg.seed || 42,
     num_gpus: cfg.num_gpus || 1,
+    _flatLlm: true,
     model: {
       type: 'llm',
       name: cfg.model_name || '',
@@ -1227,6 +1262,7 @@ function normalizeLlmFlatConfig(cfg) {
       _source: dataSource,
       name: dataName,
       subset: dataset.subset || '',
+      split: dataset.split || '',
       _path: dataPath,
       _url: dataUrl,
       max_seq_len: t.max_length || 2048,
@@ -1330,6 +1366,7 @@ function applyConfigToForm(cfg) {
   if (dataSource === 'huggingface') {
     setVal('f-data-name', d.name || '');
     setVal('f-data-subset', d.subset || d.dataset_full_name || '');
+    setVal('f-data-split', d.split || '');
   } else if (dataSource === 'torchvision') {
     const tvName = (d.name || '').toLowerCase();
     setVal('f-data-torchvision', tvName || 'cifar10');
@@ -1434,8 +1471,10 @@ function buildConfigFromForm() {
   cfg.data = { type: 'dummy', num_workers: 4 };
   const dataName = getVal('f-data-name');
   const dataSubset = getVal('f-data-subset');
+  const dataSplit = getVal('f-data-split');
   if (dataName) cfg.data.name = dataName;
   if (dataSubset) cfg.data.subset = dataSubset;
+  if (dataSplit) cfg.data.split = dataSplit;
   if (modelType === 'cnn' || modelType === 'vlm' || modelType === 'detection') {
     cfg.data.image_size = parseInt(getVal('f-image-size'));
   }
@@ -1556,15 +1595,6 @@ function generateEnvTemplate(keys) {
 
 function showEnvPage() {
   loadFormState();
-
-  // Check if model type is detection (Ultralytics/YOLO)
-  const modelType = getVal('f-model-type');
-  if (modelType === 'detection') {
-    _licenseModalContext = 'envpage';
-    showUltralyticsLicenseModal();
-    return;
-  }
-
   proceedToEnvPage();
 }
 
