@@ -86,9 +86,10 @@
               <option value="vlm">VLM</option>
               <option value="detection">Object Detection</option>
               <option value="embedding">Embedding</option>
+              <option value="custom_transformer">Custom Transformer (from scratch)</option>
             </select>
           </div>
-          <div class="form-group">
+          <div class="form-group" id="fg-model-source">
             <label>Model Source <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Where to load the model from">?</span></label>
             <select id="f-model-source" onchange="onModelSourceChange()">
               <option value="" disabled selected hidden>Select source...</option>
@@ -225,6 +226,37 @@
           <div class="form-group" id="tr-freeze" style="display:none;">
             <label>Freeze Backbone <span class="tooltip" data-tip="Only train classifier head, freeze feature extractor">?</span></label>
             <label><input type="checkbox" id="f-freeze-backbone"> Freeze Backbone Layers</label>
+          </div>
+          <!-- Custom Transformer Architecture Fields -->
+          <div id="fg-custom-arch" style="display:none;" class="form-group full">
+            <div style="font-size:0.78rem;font-weight:600;letter-spacing:0.06em;color:var(--accent);text-transform:uppercase;margin-bottom:8px;">Architecture Parameters</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Layers (n_layers) <span class="tooltip" data-tip="Number of transformer blocks stacked">?</span></label>
+                <input type="number" id="f-custom-n-layers" value="2" min="1">
+              </div>
+              <div class="form-group">
+                <label>Vocab Size <span class="tooltip" data-tip="Vocabulary size — must match tokenizer if using real text data">?</span></label>
+                <input type="number" id="f-custom-vocab-size" value="8" min="2">
+              </div>
+              <div class="form-group">
+                <label>Max Seq Length <span class="tooltip" data-tip="Maximum token sequence length">?</span></label>
+                <input type="number" id="f-custom-max-seq-len" value="16" min="1">
+              </div>
+              <div class="form-group">
+                <label>Embedding Dim <span class="tooltip" data-tip="Embedding/hidden dimension of the model">?</span></label>
+                <input type="number" id="f-custom-dim" value="16" min="1">
+              </div>
+              <div class="form-group">
+                <label>Attention Heads <span class="tooltip" data-tip="Number of attention heads — must divide Embedding Dim evenly">?</span></label>
+                <input type="number" id="f-custom-n-heads" value="4" min="1">
+              </div>
+              <div class="form-group">
+                <label>Dropout <span class="tooltip" data-tip="Dropout probability applied after attention and feed-forward">?</span></label>
+                <input type="text" id="f-custom-dropout-p" value="0.1">
+              </div>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">Training uses synthetic random token sequences matching your vocab size and sequence length.</div>
           </div>
         </div>
       </div>

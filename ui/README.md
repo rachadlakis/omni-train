@@ -7,8 +7,8 @@ Small guide for running the web UI locally.
 From the fsdp-mini-project directory:
 
 ```bash
-cd /home/rachad_lakkis/projects/distributed-training/Local/omni_train/testing/fsdp-mini-project
-source /home/rachad_lakkis/projects/distributed-training/.venv/bin/activate
+cd dist-train-project
+source /dist-train-project/.venv/bin/activate
 pip install fastapi uvicorn pydantic pyyaml
 ```
 
@@ -19,14 +19,14 @@ If you already have an environment set up, just activate it and install any miss
 Run the app from fsdp-mini-project:
 
 ```bash
-cd ./Local/omni_train/testing/fsdp-mini-project
+cd ./dist-train-project
 python -m ui.app
 ```
 
 Or with `uvicorn`:
 
 ```bash
-cd ./Local/omni_train/testing/fsdp-mini-project
+cd ./dist-train-project
 uvicorn ui.app:app --reload --port 8000
 ```
 

@@ -616,6 +616,7 @@ async def fsdp_check(payload: ConfigPayload):
     distributed_cfg = config.get("distributed", {})
 
     model_name = model_cfg.get("name", "") or ""
+    model_type = str(model_cfg.get("type", "")).lower()
     batch_size = int(training_cfg.get("batch_size") or 8)
     seq_len = int(training_cfg.get("max_length") or training_cfg.get("max_seq_len") or 512)
     activation_checkpointing = bool(training_cfg.get("gradient_checkpointing", False))
@@ -623,8 +624,28 @@ async def fsdp_check(payload: ConfigPayload):
 
     param_dtype_bits = 16 if mixed_precision else 32
 
-    num_params = _infer_num_params_from_model_name(model_name)
-    num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
+    if model_type == "custom_transformer":
+        # Compute exact param count from user-specified architecture
+        arch = model_cfg.get("arch", {})
+        n_layers  = int(arch.get("n_layers",   2))
+        dim       = int(arch.get("dim",        16))
+        n_heads   = int(arch.get("n_heads",     4))
+        vocab_size = int(arch.get("vocab_size", 8))
+        max_seq_len = int(arch.get("max_seq_len", 16))
+        seq_len = max_seq_len  # use the model's actual seq len
+
+        # Parameter count: embeddings + n_layers*(attn projections + FFN + norms) + final norm + output
+        embed_params      = vocab_size * dim + max_seq_len * dim          # tok + pos embeddings
+        attn_params       = 4 * dim * dim                                 # wq, wk, wv, wo
+        ffn_params        = dim * (4 * dim) + (4 * dim) * dim             # w1 + w2 (bias=False)
+        norm_params       = 2 * dim * 2 + dim * 2                        # 2x LayerNorm per block + final norm
+        block_params      = attn_params + ffn_params + norm_params
+        output_params     = dim * vocab_size
+        num_params        = embed_params + n_layers * block_params + output_params
+        num_layers, hidden_dim, num_heads = n_layers, dim, n_heads
+    else:
+        num_params = _infer_num_params_from_model_name(model_name)
+        num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
 
     try:
         utils_mod = _load_mini_utils_module(PROJECT_ROOT)

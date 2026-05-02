@@ -731,13 +731,16 @@ function onModelTypeChange() {
   document.getElementById('f-yolo-model').selectedIndex = 0;
   setVal('f-image-size', '');
 
+  const isCustom = t === 'custom_transformer';
+  toggle('fg-model-source', !isCustom);
   toggle('fg-num-classes', t === 'cnn');
-  toggle('fg-finetune-mode', t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision');
+  toggle('fg-finetune-mode', !isCustom && (t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision'));
   toggle('fg-yolo-model', t === 'detection');
   toggle('tr-quantize', t === 'llm' || t === 'vlm');
   toggle('tr-freeze', t === 'cnn');
-  toggle('fg-max-seq-len', t === 'llm' || t === 'vlm' || t === 'embedding');
+  toggle('fg-max-seq-len', !isCustom && (t === 'llm' || t === 'vlm' || t === 'embedding'));
   toggle('fg-image-size', t === 'cnn' || t === 'vlm' || t === 'detection' || t === 'vision');
+  toggle('fg-custom-arch', isCustom);
 
   // Hide QLoRA option for vision transformers (quantization not applicable)
   const qloraOpt = document.querySelector('#f-finetune-mode option[value="qlora"]');
@@ -1623,6 +1626,16 @@ function buildConfigFromForm() {
     }
   } else if (modelType === 'detection') {
     cfg.model.yolo_model = getVal('f-yolo-model');
+  } else if (modelType === 'custom_transformer') {
+    cfg.model.source = 'custom';
+    cfg.model.arch = {
+      n_layers: parseInt(getVal('f-custom-n-layers')) || 2,
+      vocab_size: parseInt(getVal('f-custom-vocab-size')) || 8,
+      max_seq_len: parseInt(getVal('f-custom-max-seq-len')) || 16,
+      dim: parseInt(getVal('f-custom-dim')) || 16,
+      n_heads: parseInt(getVal('f-custom-n-heads')) || 4,
+      dropout_p: parseFloat(getVal('f-custom-dropout-p')) || 0.1,
+    };
   }
 
   cfg.data = { type: 'dummy', num_workers: 4 };

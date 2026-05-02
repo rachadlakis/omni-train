@@ -319,6 +319,20 @@ def _apply_peft_quantization(model, args, rank):
 def apply_solo(device, rank, args):
     """Loads a single-process model and moves it to the selected device."""
     try:
+        if getattr(args, "model_type", "llm") == "custom_transformer":
+            from model import Transformer, ModelArgs
+            model_args = ModelArgs(
+                n_layers=args.custom_n_layers,
+                vocab_size=args.custom_vocab_size,
+                max_seq_len=args.custom_max_seq_len,
+                dim=args.custom_dim,
+                n_heads=args.custom_n_heads,
+                dropout_p=args.custom_dropout_p,
+            )
+            model = Transformer(model_args).to(device)
+            print_on_rank_0(rank, f"Custom Transformer built from scratch | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
+            return model
+
         print_on_rank_0(rank, f"Fetching pretrained weights: {args.model_name}", "🧠")
         # Build quantization config once and feed it into from_pretrained when requested.
         quant_cfg = _build_quantization_config(args, rank)
@@ -358,6 +372,22 @@ def apply_ddp(local_rank, rank, device, args):
     Returns model wrapped with DDP.
     """
     try:
+        if getattr(args, "model_type", "llm") == "custom_transformer":
+            from model import Transformer, ModelArgs
+            model_args = ModelArgs(
+                n_layers=args.custom_n_layers,
+                vocab_size=args.custom_vocab_size,
+                max_seq_len=args.custom_max_seq_len,
+                dim=args.custom_dim,
+                n_heads=args.custom_n_heads,
+                dropout_p=args.custom_dropout_p,
+            )
+            model = Transformer(model_args).to(device)
+            model = DDP(model, device_ids=[local_rank] if device.type == "cuda" else None,
+                        find_unused_parameters=False)
+            print_on_rank_0(rank, f"Custom Transformer (DDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
+            return model
+
         # Determine quant mode up front so resume/fresh/random paths share one config source.
         quant_cfg = _build_quantization_config(args, rank)
 
@@ -442,6 +472,26 @@ def apply_fsdp(local_rank, rank, device, args):
     Returns (model, checkpointer)."""
 
     try:
+        if getattr(args, "model_type", "llm") == "custom_transformer":
+            from model import Transformer, ModelArgs
+            model_args = ModelArgs(
+                n_layers=args.custom_n_layers,
+                vocab_size=args.custom_vocab_size,
+                max_seq_len=args.custom_max_seq_len,
+                dim=args.custom_dim,
+                n_heads=args.custom_n_heads,
+                dropout_p=args.custom_dropout_p,
+            )
+            model = Transformer(model_args).to(device)
+            # Wrap each TransformerBlock as a separate FSDP unit for fine-grained sharding
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            from model import TransformerBlock
+            for i, layer in enumerate(model.layers):
+                model.layers[i] = FSDP(layer)
+            model = FSDP(model)
+            print_on_rank_0(rank, f"Custom Transformer (FSDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
+            return model, None
+
         # PEFT/quantized runs must start from materialized pretrained weights (non-meta path)
         # before FSDP wrapping.
         use_peft_or_quant = bool(getattr(args, "peft_enabled", False) or getattr(args, "quantization_enabled", False))

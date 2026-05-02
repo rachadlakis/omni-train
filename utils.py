@@ -147,6 +147,14 @@ class Args:
         self.quantization_compute_dtype: str
         self.quantization_double_quant: bool
 
+        # Custom Transformer architecture (only used when model_type == "custom_transformer")
+        self.custom_n_layers: int = 2
+        self.custom_vocab_size: int = 8
+        self.custom_max_seq_len: int = 16
+        self.custom_dim: int = 16
+        self.custom_n_heads: int = 4
+        self.custom_dropout_p: float = 0.1
+
         self.wandb_log_with_train: bool
         self.wandb_entity: str
         self.wandb_project: str
@@ -168,8 +176,8 @@ def build_args(cfg):
     # --------------------------------------------------
     args.model_name = cfg["model_name"]
     args.model_type = str(cfg.get("model_type", "llm")).lower()
-    if args.model_type not in {"llm", "seq2seq", "yolo", "vlm", "vision", "encoder"}:
-        raise ValueError(f"Unsupported model_type={args.model_type}. Use one of: llm, seq2seq, yolo, vlm, vision, encoder")
+    if args.model_type not in {"llm", "seq2seq", "yolo", "vlm", "vision", "encoder", "custom_transformer"}:
+        raise ValueError(f"Unsupported model_type={args.model_type}. Use one of: llm, seq2seq, yolo, vlm, vision, encoder, custom_transformer")
 
     dataset = cfg["dataset"]
     args.dataset = dataset["name"]
@@ -253,7 +261,7 @@ def build_args(cfg):
         raise ValueError(f"Unsupported peft.type={args.peft_type}. Use one of: lora, qlora")
 
     _peft_compatible_types = {"llm", "seq2seq", "encoder", "vlm", "vision"}
-    if args.peft_enabled and args.model_type not in _peft_compatible_types:
+    if args.peft_enabled and args.model_type not in _peft_compatible_types and args.model_type != "custom_transformer":
         raise ValueError(
             f"PEFT is not supported for model_type='{args.model_type}'.\n"
             f"PEFT (LoRA/QLoRA) requires a transformer architecture. "
@@ -301,6 +309,22 @@ def build_args(cfg):
     args.explicit_prefetching = to_bool(p["explicit"])
     args.forward_prefetch = int(p["forward"])
     args.backward_prefetch = int(p["backward"])
+
+    # --------------------------------------------------
+    # CUSTOM TRANSFORMER ARCHITECTURE
+    # --------------------------------------------------
+    if args.model_type == "custom_transformer":
+        cta = cfg.get("custom_transformer_args", {})
+        args.custom_n_layers    = int(cta.get("n_layers",    2))
+        args.custom_vocab_size  = int(cta.get("vocab_size",  8))
+        args.custom_max_seq_len = int(cta.get("max_seq_len", 16))
+        args.custom_dim         = int(cta.get("dim",         16))
+        args.custom_n_heads     = int(cta.get("n_heads",     4))
+        args.custom_dropout_p   = float(cta.get("dropout_p", 0.1))
+        if args.custom_dim % args.custom_n_heads != 0:
+            raise ValueError(
+                f"custom_transformer: dim ({args.custom_dim}) must be divisible by n_heads ({args.custom_n_heads})"
+            )
 
     # --------------------------------------------------
     # WANDB

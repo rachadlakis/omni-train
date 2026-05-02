@@ -7,8 +7,39 @@ from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
 from distributed_utils import print_on_rank_0, print_on_all_ranks
 
-def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, world_size, batch_size, max_length, model_type="llm"):
-    try:        
+def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, world_size, batch_size, max_length, model_type="llm", **kwargs):
+    try:
+        # ---------------------------------------------------------------
+        # Synthetic dataloader for the custom transformer (no HF dataset)
+        # ---------------------------------------------------------------
+        if model_type == "custom_transformer":
+            vocab_size = int(kwargs.get("vocab_size") or 8)
+            seq_len    = max(2, int(max_length))
+            n_samples  = 2000  # fixed pool of synthetic sequences
+            print_on_rank_0(rank, f"Generating synthetic data | samples={n_samples} seq_len={seq_len} vocab_size={vocab_size}", "🎲")
+            data = torch.randint(0, vocab_size, (n_samples, seq_len))
+            from torch.utils.data import TensorDataset
+            tensor_dataset = TensorDataset(data)
+
+            use_distributed_sampler = dist.is_available() and dist.is_initialized()
+            sampler = None
+            shuffle = True
+            if use_distributed_sampler:
+                sampler = DistributedSampler(tensor_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+                shuffle = False
+
+            num_workers = 0  # TensorDataset doesn't need workers
+            dataloader = DataLoader(
+                tensor_dataset,
+                batch_size=batch_size,
+                sampler=sampler,
+                shuffle=shuffle,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+            )
+            print_on_rank_0(rank, f"Synthetic DataLoader ready | batches per rank: {len(dataloader)} | batch size: {batch_size}")
+            return dataloader
+
         print_on_rank_0(rank, f"Loading dataset: {dataset} / {dataset_full_name} | split: {dataset_split}", "📂")
         dataset = load_dataset(dataset, dataset_full_name, split=dataset_split, streaming=False) # type: ignore
         print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")

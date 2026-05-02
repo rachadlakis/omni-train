@@ -150,7 +150,9 @@ def main(args):
         # 2. TOKENIZER
         # --------------------------------------------------------------
         tokenizer = None
-        if args.model_type in {"llm", "seq2seq", "encoder", "vlm"}:
+        if args.model_type == "custom_transformer":
+            print_on_rank_0(rank, "Custom Transformer: skipping tokenizer (synthetic data will be used)", "⏩")
+        elif args.model_type in {"llm", "seq2seq", "encoder", "vlm"}:
             print_banner_on_rank_0(rank, "LOADING TOKENIZER")
             print_on_rank_0(rank, f"Fetching tokenizer: {args.model_name}", "🔤")
             tokenizer = AutoTokenizer.from_pretrained(args.model_name, token=HF_TOKEN)
@@ -221,7 +223,8 @@ def main(args):
         dataloader = get_dataloader(
             args.dataset, args.dataset_full_name, args.dataset_split, 
             tokenizer, rank, world_size, batch_size=args.batch_size,
-            max_length=args.max_length, model_type=args.model_type
+            max_length=args.max_length, model_type=args.model_type,
+            vocab_size=getattr(args, "custom_vocab_size", None),
         )
 
         if hasattr(dataloader, "__len__"):
@@ -283,7 +286,18 @@ def main(args):
                     #     model.unshard() # type: ignore
 
                     optimizer.zero_grad()
-                    if args.model_type in {"vision", "yolo"}:
+                    if args.model_type == "custom_transformer":
+                        import torch.nn.functional as F
+                        tokens = batch[0].to(device)  # TensorDataset yields (tensor,) tuples
+                        logits = model(tokens)  # [bsz, seq_len, vocab_size]
+                        # Next-token prediction loss
+                        logits_shift = logits[:, :-1, :].contiguous()
+                        labels_shift = tokens[:, 1:].contiguous()
+                        loss = F.cross_entropy(
+                            logits_shift.view(-1, logits_shift.size(-1)),
+                            labels_shift.view(-1),
+                        )
+                    elif args.model_type in {"vision", "yolo"}:
                         pixel_values = batch["pixel_values"].to(device)
                         labels = batch["labels"].to(device)
                         outputs = model(pixel_values=pixel_values, labels=labels)

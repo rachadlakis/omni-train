@@ -7,12 +7,12 @@ import torch.nn.functional as F
 
 @dataclass
 class ModelArgs:
-    n_layers: int = 2
-    vocab_size: int = 8
-    max_seq_len: int = 16
-    dim: int = 16
-    n_heads: int = 4
-    dropout_p: float = 0.1
+    n_layers: int = 2       ## Number of transformer layers
+    vocab_size: int = 8     ## Vocabulary size
+    max_seq_len: int = 16   ## Maximum sequence length
+    dim: int = 16           ## Embedding dimension
+    n_heads: int = 4        ## Number of attention heads
+    dropout_p: float = 0.1  ## Dropout probability
 
 
 class Attention(nn.Module):
@@ -116,7 +116,7 @@ class Transformer(nn.Module):
         self.max_seq_len = args.max_seq_len
 
         
-        self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+        self.tok_embeddings = nn.Embedding(args.vocab_size,  args.dim)
         self.pos_embeddings = nn.Embedding(args.max_seq_len, args.dim)
         self.dropout = nn.Dropout(args.dropout_p)
         

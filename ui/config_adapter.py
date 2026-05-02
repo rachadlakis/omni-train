@@ -106,12 +106,13 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     # "cnn"/"detection" use their own training paths and default to "llm" only when
     # they reach this adapter (which currently only handles transformer-based models).
     _ui_to_model_type = {
-        "llm":       "llm",
-        "vlm":       "vlm",
-        "vision":    "vision",
-        "embedding": "encoder",
-        "detection": "yolo",
-        "cnn":       "llm",   # CNN goes through a separate training path
+        "llm":                "llm",
+        "vlm":                "vlm",
+        "vision":             "vision",
+        "embedding":          "encoder",
+        "detection":          "yolo",
+        "cnn":                "llm",   # CNN goes through a separate training path
+        "custom_transformer": "custom_transformer",
     }
     ui_model_type = str(model.get("type", "llm")).lower()
     model_type = _ui_to_model_type.get(ui_model_type, "llm")
@@ -182,6 +183,20 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
             "wandb_run_name": wandb.get("wandb_run_name", base["wandb"].get("wandb_run_name", "")),
         },
     }
+
+    # Pass custom transformer architecture args when present
+    if model_type == "custom_transformer":
+        arch = model.get("arch", {})
+        mapped["custom_transformer_args"] = {
+            "n_layers":   int(arch.get("n_layers",   2)),
+            "vocab_size": int(arch.get("vocab_size", 8)),
+            "max_seq_len": int(arch.get("max_seq_len", 16)),
+            "dim":        int(arch.get("dim",        16)),
+            "n_heads":    int(arch.get("n_heads",    4)),
+            "dropout_p":  float(arch.get("dropout_p", 0.1)),
+        }
+        # Override max_length with the model's max_seq_len so data loading uses the right length
+        mapped["training"]["max_length"] = mapped["custom_transformer_args"]["max_seq_len"]
 
     return _deep_merge(base, mapped)
 
