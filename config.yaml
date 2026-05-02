@@ -79,6 +79,6 @@ quantization:
   
 wandb:
   wandb_log_with_train: true         ## whether to log training metrics to Weights & Biases
-  wandb_entity: "fsdp-mini-project"   ## your W&B entity (username or team)
-  wandb_project: "fsdp-mini-project"  ## your W&B project name
+  wandb_entity: "dist-train"   ## your W&B entity (username or team)
+  wandb_project: "dist-train-project"  ## your W&B project name
   

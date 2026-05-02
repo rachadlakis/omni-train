@@ -1289,6 +1289,11 @@ seed_checkpointer.load_model(model)</div>
         <span class="pain-text"><code>RANK</code> = global index (0…world_size−1) for barriers &amp; logging. <code>LOCAL_RANK</code> = per-node index used to bind <code>cuda:N</code>. Confusing them maps every process to <code>cuda:0</code> — silent parallelism failure.</span>
       </div>
 
+      <div class="pain-row">
+        <span class="pain-badge pb-green">ZeRO Stages</span>
+        <span class="pain-text">ZeRO (Zero Redundancy Optimizer) removes the redundant copies of model state that DDP keeps on every GPU. <strong>Stage 1</strong> shards optimizer states only. <strong>Stage 2</strong> also shards gradients. <strong>Stage 3</strong> shards weights too — equivalent to FSDP. Without understanding which stage is active, you cannot reason about memory usage, communication volume, or why a seemingly correct config still OOMs.</span>
+      </div>
+
     </div>
   </div>
 
