@@ -741,6 +741,7 @@ function onModelTypeChange() {
   toggle('fg-max-seq-len', !isCustom && (t === 'llm' || t === 'vlm' || t === 'embedding'));
   toggle('fg-image-size', t === 'cnn' || t === 'vlm' || t === 'detection' || t === 'vision');
   toggle('fg-custom-arch', isCustom);
+  if (isCustom) updateCustomParamCount();
 
   // Hide QLoRA option for vision transformers (quantization not applicable)
   const qloraOpt = document.querySelector('#f-finetune-mode option[value="qlora"]');
@@ -1629,11 +1630,11 @@ function buildConfigFromForm() {
   } else if (modelType === 'custom_transformer') {
     cfg.model.source = 'custom';
     cfg.model.arch = {
-      n_layers: parseInt(getVal('f-custom-n-layers')) || 2,
-      vocab_size: parseInt(getVal('f-custom-vocab-size')) || 8,
-      max_seq_len: parseInt(getVal('f-custom-max-seq-len')) || 16,
-      dim: parseInt(getVal('f-custom-dim')) || 16,
-      n_heads: parseInt(getVal('f-custom-n-heads')) || 4,
+      n_layers: parseInt(getVal('f-custom-n-layers')) || 6,
+      vocab_size: parseInt(getVal('f-custom-vocab-size')) || 8192,
+      max_seq_len: parseInt(getVal('f-custom-max-seq-len')) || 512,
+      dim: parseInt(getVal('f-custom-dim')) || 512,
+      n_heads: parseInt(getVal('f-custom-n-heads')) || 8,
       dropout_p: parseFloat(getVal('f-custom-dropout-p')) || 0.1,
     };
   }
@@ -1673,6 +1674,48 @@ function buildConfigFromForm() {
   };
 
   return cfg;
+}
+
+// =========================================================================
+// Custom Transformer live parameter count
+// =========================================================================
+function updateCustomParamCount() {
+  const el = document.getElementById('custom-param-count');
+  if (!el) return;
+
+  const nLayers   = parseInt(getVal('f-custom-n-layers'))   || 0;
+  const dim       = parseInt(getVal('f-custom-dim'))         || 0;
+  const nHeads    = parseInt(getVal('f-custom-n-heads'))     || 0;
+  const vocabSize = parseInt(getVal('f-custom-vocab-size'))  || 0;
+  const maxSeqLen = parseInt(getVal('f-custom-max-seq-len')) || 0;
+
+  if (!nLayers || !dim || !nHeads || !vocabSize || !maxSeqLen) {
+    el.textContent = '⚙️ Estimated parameters: fill all fields';
+    return;
+  }
+
+  if (dim % nHeads !== 0) {
+    el.style.color = 'var(--danger, #e74c3c)';
+    el.textContent = `⚠️ dim (${dim}) must be divisible by n_heads (${nHeads})`;
+    return;
+  }
+  el.style.color = '';
+
+  const embedParams  = vocabSize * dim + maxSeqLen * dim;
+  const attnParams   = 4 * dim * dim;
+  const ffnParams    = dim * (4 * dim) + (4 * dim) * dim;
+  const normParams   = 2 * dim * 2 + dim * 2;
+  const blockParams  = attnParams + ffnParams + normParams;
+  const outputParams = dim * vocabSize;
+  const total        = embedParams + nLayers * blockParams + outputParams;
+
+  let label;
+  if (total >= 1e9)      label = (total / 1e9).toFixed(2) + 'B';
+  else if (total >= 1e6) label = (total / 1e6).toFixed(1) + 'M';
+  else if (total >= 1e3) label = (total / 1e3).toFixed(0) + 'K';
+  else                   label = total.toString();
+
+  el.textContent = `⚙️ Estimated parameters: ${label}`;
 }
 
 // =========================================================================

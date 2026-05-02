@@ -188,11 +188,11 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     if model_type == "custom_transformer":
         arch = model.get("arch", {})
         mapped["custom_transformer_args"] = {
-            "n_layers":   int(arch.get("n_layers",   2)),
-            "vocab_size": int(arch.get("vocab_size", 8)),
-            "max_seq_len": int(arch.get("max_seq_len", 16)),
-            "dim":        int(arch.get("dim",        16)),
-            "n_heads":    int(arch.get("n_heads",    4)),
+            "n_layers":   int(arch.get("n_layers",   6)),
+            "vocab_size": int(arch.get("vocab_size", 8192)),
+            "max_seq_len": int(arch.get("max_seq_len", 512)),
+            "dim":        int(arch.get("dim",        512)),
+            "n_heads":    int(arch.get("n_heads",    8)),
             "dropout_p":  float(arch.get("dropout_p", 0.1)),
         }
         # Override max_length with the model's max_seq_len so data loading uses the right length

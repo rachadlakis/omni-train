@@ -233,29 +233,30 @@
             <div class="form-grid">
               <div class="form-group">
                 <label>Layers (n_layers) <span class="tooltip" data-tip="Number of transformer blocks stacked">?</span></label>
-                <input type="number" id="f-custom-n-layers" value="2" min="1">
+                <input type="number" id="f-custom-n-layers" value="6" min="1" oninput="updateCustomParamCount()">
               </div>
               <div class="form-group">
                 <label>Vocab Size <span class="tooltip" data-tip="Vocabulary size — must match tokenizer if using real text data">?</span></label>
-                <input type="number" id="f-custom-vocab-size" value="8" min="2">
+                <input type="number" id="f-custom-vocab-size" value="8192" min="2" oninput="updateCustomParamCount()">
               </div>
               <div class="form-group">
                 <label>Max Seq Length <span class="tooltip" data-tip="Maximum token sequence length">?</span></label>
-                <input type="number" id="f-custom-max-seq-len" value="16" min="1">
+                <input type="number" id="f-custom-max-seq-len" value="512" min="1" oninput="updateCustomParamCount()">
               </div>
               <div class="form-group">
                 <label>Embedding Dim <span class="tooltip" data-tip="Embedding/hidden dimension of the model">?</span></label>
-                <input type="number" id="f-custom-dim" value="16" min="1">
+                <input type="number" id="f-custom-dim" value="512" min="1" oninput="updateCustomParamCount()">
               </div>
               <div class="form-group">
                 <label>Attention Heads <span class="tooltip" data-tip="Number of attention heads — must divide Embedding Dim evenly">?</span></label>
-                <input type="number" id="f-custom-n-heads" value="4" min="1">
+                <input type="number" id="f-custom-n-heads" value="8" min="1" oninput="updateCustomParamCount()">
               </div>
               <div class="form-group">
                 <label>Dropout <span class="tooltip" data-tip="Dropout probability applied after attention and feed-forward">?</span></label>
                 <input type="text" id="f-custom-dropout-p" value="0.1">
               </div>
             </div>
+            <div id="custom-param-count" style="font-size:0.82rem;color:var(--text-muted);margin-top:8px;padding:6px 10px;background:var(--bg-secondary,rgba(255,255,255,0.05));border-radius:6px;display:inline-block;">⚙️ Estimated parameters: calculating…</div>
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">Training uses synthetic random token sequences matching your vocab size and sequence length.</div>
           </div>
         </div>
