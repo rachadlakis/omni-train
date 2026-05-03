@@ -46,8 +46,8 @@ class ParallelismArgs:
     """Holds the resolved (dp, tp, pp) mesh topology and pipeline schedule."""
 
     dp_size: int = 1          ## data-parallel replicas
-    tp_size: int = 1          ## tensor-parallel shards per replica
     pp_size: int = 1          ## pipeline stages
+    tp_size: int = 1          ## tensor-parallel shards per replica
     n_microbatches: int = 4   ## micro-batches per step when pp_size > 1
     pp_schedule: str = "1f1b" ## pipeline schedule: {gpipe, 1f1b}
     auto_detected: bool = True ## True when at least one dim was auto-resolved
@@ -66,21 +66,21 @@ class ParallelismArgs:
         from the built-in ``_DEFAULT_MESH`` table.
 
         Args:
-            cfg:      the full parsed YAML config dict.
-            num_gpus: total GPU count (e.g. from ``cfg["num_gpus"]``).
+            cfg      : the full parsed YAML config dict.
+            num_gpus : total GPU count (e.g. from ``cfg["num_gpus"]``).
 
         Returns:
             A fully resolved ``ParallelismArgs``.
         """
-        pm = cfg.get("parallelism", {}) or {}
+        parallelism = cfg.get("parallelism", {}) or {}
 
-        user_dp = pm.get("dp_size", None)
-        user_tp = pm.get("tp_size", None)
-        user_pp = pm.get("pp_size", None)
+        user_dp = parallelism.get("dp_size", None)
+        user_pp = parallelism.get("pp_size", None)
+        user_tp = parallelism.get("tp_size", None)
 
-        dp, tp, pp, auto = resolve_device_mesh(num_gpus, user_dp, user_tp, user_pp)
+        dp, pp, tp, auto = resolve_device_mesh(num_gpus, user_dp, user_pp, user_tp)
 
-        schedule = str(pm.get("pp_schedule", "1f1b")).lower()
+        schedule = str(parallelism.get("pp_schedule", "1f1b")).lower()
         if schedule not in {"gpipe", "1f1b"}:
             raise ValueError(
                 f"parallelism.pp_schedule='{schedule}' is not supported. "
@@ -89,9 +89,9 @@ class ParallelismArgs:
 
         return cls(
             dp_size=dp,
-            tp_size=tp,
             pp_size=pp,
-            n_microbatches=int(pm.get("n_microbatches", 4)),
+            tp_size=tp,
+            n_microbatches=int(parallelism.get("n_microbatches", 4)),
             pp_schedule=schedule,
             auto_detected=auto,
         )
@@ -100,18 +100,18 @@ class ParallelismArgs:
     @property
     def is_3d(self) -> bool:
         """True when at least one of TP or PP is enabled."""
-        return self.tp_size > 1 or self.pp_size > 1
+        return self.pp_size > 1 or self.tp_size > 1
 
     @property
     def is_flat_dp(self) -> bool:
         """True when only data parallelism is active (FSDP-only path)."""
-        return self.tp_size == 1 and self.pp_size == 1
+        return self.pp_size == 1 and self.tp_size == 1
 
     def __str__(self) -> str:
         tag = "(auto)" if self.auto_detected else "(user)"
         return (
-            f"Mesh {tag}: dp={self.dp_size} × tp={self.tp_size} × pp={self.pp_size} "
-            f"[total={self.dp_size * self.tp_size * self.pp_size}]"
+            f"Mesh {tag}: dp={self.dp_size} × pp={self.pp_size} × tp={self.tp_size} "
+            f"[total={self.dp_size * self.pp_size * self.tp_size}]"
         )
 
 
@@ -122,8 +122,8 @@ class ParallelismArgs:
 def resolve_device_mesh(
     num_gpus: int,
     user_dp: "int | None",
-    user_tp: "int | None",
     user_pp: "int | None",
+    user_tp: "int | None",
 ) -> "tuple[int, int, int, bool]":
     """Return ``(dp_size, tp_size, pp_size, auto_flag)``.
 
@@ -135,20 +135,20 @@ def resolve_device_mesh(
     Raises:
         ValueError: if the user-supplied combination is inconsistent.
     """
-    any_auto = (user_dp is None) or (user_tp is None) or (user_pp is None)
+    any_auto = (user_dp is None) or (user_pp is None) or (user_tp is None)
 
     # ---- All three specified → just validate ----
     if not any_auto:
-        dp, tp, pp = int(user_dp), int(user_tp), int(user_pp)   # type: ignore[arg-type]
-        if dp * tp * pp != num_gpus:
+        dp, pp, tp = int(user_dp), int(user_pp), int(user_tp)   # type: ignore[arg-type]
+        if dp * pp * tp != num_gpus:
             raise ValueError(
-                f"parallelism: dp_size ({dp}) × tp_size ({tp}) × pp_size ({pp}) = "
-                f"{dp * tp * pp}, but num_gpus = {num_gpus}. They must be equal."
+                f"parallelism: dp_size ({dp}) × pp_size ({pp}) × tp_size ({tp}) = "
+                f"{dp * pp * tp}, but num_gpus = {num_gpus}. They must be equal."
             )
-        for name, val in [("dp_size", dp), ("tp_size", tp), ("pp_size", pp)]:
+        for name, val in [("dp_size", dp), ("pp_size", pp), ("tp_size", tp)]:
             if val < 1:
                 raise ValueError(f"parallelism.{name} must be ≥ 1, got {val}")
-        return dp, tp, pp, False
+        return dp, pp, tp, False
 
     # ---- At least one is auto → look up defaults then fill gaps ----
     if num_gpus in _DEFAULT_MESH:
@@ -157,32 +157,33 @@ def resolve_device_mesh(
         # Unusual GPU count: safe fallback is pure data-parallel
         default_dp, default_tp, default_pp = num_gpus, 1, 1
 
+
     dp = int(user_dp) if user_dp is not None else default_dp
-    tp = int(user_tp) if user_tp is not None else default_tp
     pp = int(user_pp) if user_pp is not None else default_pp
+    tp = int(user_tp) if user_tp is not None else default_tp
 
     # If only one dim was pinned by the user, derive dp so the product holds
-    n_pinned = sum(x is not None for x in [user_dp, user_tp, user_pp])
+    n_pinned = sum(x is not None for x in [user_dp, user_pp, user_tp])
     if n_pinned == 1:
-        if user_tp is not None:
-            pp = 1
-            dp = num_gpus // (tp * pp)
-        elif user_pp is not None:
+        if user_pp is not None:
             tp = 1
-            dp = num_gpus // (tp * pp)
-        # user_dp only → tp and pp come from the table; dp is already set
+            dp = num_gpus // (pp * tp)
+        elif user_tp is not None:
+            pp = 1
+            dp = num_gpus // (pp * tp)
+        # user_dp only → pp and tp come from the table; dp is already set
 
-    if dp * tp * pp != num_gpus:
+    if dp * pp * tp != num_gpus:
         raise ValueError(
-            f"parallelism auto-resolution produced dp={dp} × tp={tp} × pp={pp} = "
-            f"{dp * tp * pp}, but num_gpus={num_gpus}. "
-            "Please specify dp_size, tp_size, and pp_size explicitly."
+            f"parallelism auto-resolution produced dp={dp} × pp={pp} × tp={tp} = "
+            f"{dp * pp * tp}, but num_gpus={num_gpus}. "
+            "Please specify dp_size, pp_size, and tp_size explicitly."
         )
-    for name, val in [("dp_size", dp), ("tp_size", tp), ("pp_size", pp)]:
+    for name, val in [("dp_size", dp), ("pp_size", pp), ("tp_size", tp)]:
         if val < 1:
             raise ValueError(f"parallelism.{name} must be ≥ 1, got {val}")
 
-    return dp, tp, pp, True
+    return dp, pp, tp, True
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +210,9 @@ def setup_device_mesh(args: ParallelismArgs) -> "DeviceMesh | None":
     Raises:
         RuntimeError: if called before ``dist.init_process_group()``.
     """
-    dp, tp, pp = args.dp_size, args.tp_size, args.pp_size
+    dp, pp, tp = args.dp_size, args.pp_size, args.tp_size
 
-    if dp == 1 and tp == 1 and pp == 1:
+    if dp == 1 and pp == 1 and tp == 1:
         _log("DeviceMesh: flat (1×1×1) — no mesh constructed 🔲")
         return None
 
