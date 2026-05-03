@@ -7,8 +7,7 @@ source .venv/bin/activate
 
 # Install dependencies
 pip install --upgrade pip
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
 # Configure git
@@ -18,6 +17,9 @@ git config --global user.email "rachadlakis@gmail.com"
 # Set environment variables
 export HF_TOKEN="${HF_TOKEN:-***REDACTED-HF-TOKEN***}"
 
-# Run training
-cd ./testing/fsdp-mini-project
-bash launch.sh
+
+## activate the virtual environment and run the training script
+source .venv/bin/activate
+bash scripts/launch.sh
+
+## run it with: bash scripts/start_runpod.sh

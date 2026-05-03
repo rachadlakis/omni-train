@@ -2,7 +2,7 @@
 ## Change the values as needed to test different configurations and features of the training script.
 
 
-model_name: meta-llama/Meta-Llama-3-70B    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
+model_name: meta-llama/Meta-Llama-3-70B #meta-llama/Meta-Llama-3-70B    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
 model_type: llm                ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 ## model_name suggestions:
 ## vision (ViT):        google/vit-base-patch16-224, google/vit-large-patch16-224, google/vit-huge-patch14-224-in21k
@@ -31,7 +31,7 @@ training:
   weight_decay: 0.01
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+num_gpus: 4                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: false                 ## whether to save checkpoints
 
