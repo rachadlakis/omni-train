@@ -647,28 +647,38 @@ async def fsdp_check(payload: ConfigPayload):
         num_params = _infer_num_params_from_model_name(model_name)
         num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
 
+    # Map UI model_type to values accepted by estimate_training_vram
+    _type_map = {
+        "llm": "llm", "seq2seq": "seq2seq", "vlm": "vlm",
+        "encoder": "encoder", "embedding": "encoder",
+        "vision": "vision", "cnn": "vision",
+        "yolo": "yolo", "detection": "yolo",
+    }
+    vram_model_type = _type_map.get(model_type, "llm")
+
     try:
         utils_mod = _load_mini_utils_module(PROJECT_ROOT)
         vram = utils_mod.estimate_training_vram(
+            model_type=vram_model_type,
             num_params=num_params,
             param_dtype_bits=param_dtype_bits,
             batch_size=batch_size,
             seq_len=seq_len,
             num_layers=num_layers,
             hidden_dim=hidden_dim,
-            num_heads=num_heads,
             activation_checkpointing=activation_checkpointing,
         )
     except Exception:
         # Fallback: rough estimate without utils module
         bytes_per_param = param_dtype_bits / 8
         weights_gb = num_params * bytes_per_param / 1e9
+        activations_gb = round(batch_size * seq_len * hidden_dim * num_layers * 2 / 1e9, 2)
         vram = {
             "weights_gb": round(weights_gb, 2),
             "gradients_gb": round(weights_gb, 2),
             "optimizer_gb": round(weights_gb * 6, 2),
-            "activations_gb": round(batch_size * seq_len * hidden_dim * num_layers * 2 / 1e9, 2),
-            "total_gb": round(weights_gb * 8, 2),
+            "activations_gb": activations_gb,
+            "total_gb": round(weights_gb * 8 + activations_gb, 2),
         }
 
     # Detect GPU memory

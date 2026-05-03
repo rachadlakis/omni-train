@@ -49,6 +49,10 @@ from utils import build_args, load_config
 import transformers
 transformers.logging.disable_progress_bar()
 
+## If 3d parallelism is enabled
+# from parallelism import ParallelismArgs, setup_device_mesh
+# from parallelism import ParallelismArgs
+
 ## -------------------------------
 # wandb 
 # ----------------------------
@@ -137,6 +141,21 @@ def main(args):
         print_on_all_ranks(rank, f"Process joined | world_size={world_size} | pid={os.getpid()}", "🚀",
                            local_rank=local_rank, device=device)
         if dist.is_initialized(): dist.barrier()
+
+
+
+        ## If 3d parallelism is enabled:
+        ## ── Optional 3D Parallelism ─────────────────────────────────
+        # try:
+        #     with open("parallelism_config.yaml") as f:
+        #         pm_cfg = yaml.safe_load(f)
+        # except FileNotFoundError:
+        #     pm_cfg = {}
+
+        # pm_args = ParallelismArgs.from_config(pm_cfg, num_gpus=args.num_gpus)
+        # mesh = setup_device_mesh(pm_args)  # None → pure FSDP, no mesh needed
+        ## ─────────────────────────────────────────────────────────
+
 
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(local_rank)
@@ -288,8 +307,8 @@ def main(args):
                     optimizer.zero_grad()
                     if args.model_type == "custom_transformer":
                         import torch.nn.functional as F
-                        tokens = batch[0].to(device)  # TensorDataset yields (tensor,) tuples
-                        logits = model(tokens)  # [bsz, seq_len, vocab_size]
+                        tokens = batch[0].to(device)    ## TensorDataset yields (tensor,) tuples
+                        logits = model(tokens)          ## [bsz, seq_len, vocab_size]
                         # Next-token prediction loss
                         logits_shift = logits[:, :-1, :].contiguous()
                         labels_shift = tokens[:, 1:].contiguous()
@@ -301,12 +320,13 @@ def main(args):
                         pixel_values = batch["pixel_values"].to(device)
                         labels = batch["labels"].to(device)
                         outputs = model(pixel_values=pixel_values, labels=labels)
+                        loss = outputs.loss
                     else:
                         input_ids = batch["input_ids"].to(device)
                         labels = batch["labels"].to(device)
                         attention_mask = batch["attention_mask"].to(device)
                         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-                    loss = outputs.loss
+                        loss = outputs.loss
 
                     loss.backward()
 

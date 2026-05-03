@@ -167,7 +167,6 @@ def to_bool(x):
         return x.lower() in ["true", "1", "yes", "y", "on"]
     return bool(x)
 
-
 def build_args(cfg):
     args = Args()
 

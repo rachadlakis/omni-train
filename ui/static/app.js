@@ -464,7 +464,7 @@ const templateDisplayNames = {
   'llm_lora_local_file': 'LLM Fine Tune with LoRA',
   'llm_lora_quantized_single_gpu': 'LLM Fine Tune with QLoRA',
   'llm_hybrid_2d_dp_tp': 'LLM Hybrid 2D (DP+TP)',
-  'llm_fsdp_mini_project_style': 'LLM FSDP Mini Project Style',
+  'llm_fsdp_mini_project_style': 'LLM FSDP Example Small Model',
   // VLM
   'vlm_llava_lora_single_gpu': 'VLM Fine Tune with LoRA',
   // Vision (CNN)
@@ -1065,6 +1065,7 @@ function renderSideTemplates(filter = 'all') {
     div.className = 'template-item';
     div.setAttribute('data-type', item.type);
     div.setAttribute('data-name', item.name);
+    div.title = item.display;
     div.innerHTML = `
       <span class="template-tag ${item.type}">${tag}</span>
       <span class="template-name">${item.display}</span>
@@ -1508,7 +1509,7 @@ function applyConfigToForm(cfg) {
     if (rawDataType === 'torchvision') dataSource = 'torchvision';
     else if (rawDataType === 'hf_dataset') dataSource = 'huggingface';
     else if (rawDataType === 'local_file' || rawDataType === 'image_folder') dataSource = 'local';
-    else if (rawDataType === 'yolo' || rawDataType === 'coco') dataSource = 'local';
+    else if (rawDataType === 'yolo' || rawDataType === 'coco') dataSource = 'url';
     else if (d.name) dataSource = 'huggingface';
   }
   if (dataSource) {
@@ -1526,7 +1527,14 @@ function applyConfigToForm(cfg) {
   } else if (dataSource === 'local') {
     setVal('f-data-path', d._path || d.name || d.data_yaml || '');
   } else if (dataSource === 'url') {
-    setVal('f-data-url', d._url || d.name || '');
+    // For detection configs the YAML paths are local paths, not download URLs — leave blank
+    const isDetectionFmt = rawDataType === 'coco' || rawDataType === 'yolo';
+    setVal('f-data-url', isDetectionFmt ? '' : (d._url || d.name || ''));
+  }
+
+  // Pre-select data format for detection templates
+  if (rawDataType === 'coco' || rawDataType === 'yolo') {
+    setVal('f-data-format', rawDataType);
   }
 
   setVal('f-image-size', d.image_size || '');
