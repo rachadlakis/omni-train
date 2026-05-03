@@ -14,7 +14,7 @@ dist_parameters:
   reduce_dtype: float32
 model_name: facebook/opt-350m
 model_type: llm
-num_gpus: 1
+num_gpus: 4
 peft:
   alpha: 32
   bias: none

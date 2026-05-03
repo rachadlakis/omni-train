@@ -487,8 +487,8 @@ def apply_fsdp(local_rank, rank, device, args):
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
             from model import TransformerBlock
             for i, layer in enumerate(model.layers):
-                model.layers[i] = FSDP(layer)
-            model = FSDP(model)
+                model.layers[i] = fully_shard(layer)
+            model = fully_shard(model)
             print_on_rank_0(rank, f"Custom Transformer (FSDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
             return model, None
 

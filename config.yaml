@@ -2,7 +2,7 @@
 ## Change the values as needed to test different configurations and features of the training script.
 
 
-model_name: meta-llama/Meta-Llama-3-70B #meta-llama/Meta-Llama-3-70B    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
+model_name: facebook/opt-350m  # meta-llama/Llama-2-7b #meta-llama/Meta-Llama-3-70B    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
 model_type: llm                ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 ## model_name suggestions:
 ## vision (ViT):        google/vit-base-patch16-224, google/vit-large-patch16-224, google/vit-huge-patch14-224-in21k
@@ -19,6 +19,7 @@ dataset:
 ## vision: cifar10, imagenet-1k
 ## llm: wikitext, ptb_text_only, openwebtext, c4
 ## wikitext-2-raw-v1 is a smaller version of wikitext-2 without any preprocessing, good for quick tests
+## facebook/opt-350m 
 
 training:
   epochs: 12                     ## Number of epochs to train
@@ -30,7 +31,7 @@ training:
   warmup_steps: 100
   weight_decay: 0.01
 
-strategy: fsdp              ## choose from {ddp, fsdp, solo}
+strategy: ddp              ## choose from {ddp, fsdp, solo}
 num_gpus: 4                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: false                 ## whether to save checkpoints
