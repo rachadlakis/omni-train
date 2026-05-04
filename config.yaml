@@ -5,21 +5,19 @@
 model_name: facebook/opt-125m  # meta-llama/Llama-2-7b #meta-llama/Meta-Llama-3-70B    ## image classification ViT | llm examples: facebook/opt-125m, gpt2
 model_type: llm                ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 ## model_name suggestions:
-## vision (ViT):        google/vit-base-patch16-224, google/vit-large-patch16-224, google/vit-huge-patch14-224-in21k
-## vision (ResNet):     microsoft/resnet-18, microsoft/resnet-50, microsoft/resnet-101
-## llm: facebook/opt-125m, facebook/opt-350m, meta-llama/Meta-Llama-3-70B, gpt2, gpt2-medium, gpt2-large, gpt2-xl
-## custom: custom_transformer
+## vision (ViT)   : google/vit-base-patch16-224, google/vit-large-patch16-224, google/vit-huge-patch14-224-in21k
+## vision (ResNet): microsoft/resnet-18, microsoft/resnet-50, microsoft/resnet-101
+## llm            : facebook/opt-125m, facebook/opt-350m, meta-llama/Meta-Llama-3-70B, gpt2, gpt2-medium, gpt2-large, gpt2-xl
+## custom         : custom_transformer
 
 
 dataset:
   name: wikitext            ## dataset name from Hugging Face datasets library, e.g. wikitext, ptb_text_only, openwebtext, c4 for llm; cifar10, imagenet-1k for vision
-  subset: wikitext-2-raw-v1 ## no subset for cifar10 (null)
+  subset: wikitext-2-raw-v1 ## smaller version of wikitext-2
   split: train[:2%]         ## which split and how much of it to use for training. 
 ## dataset_name suggestions:
-## vision: cifar10, imagenet-1k
-## llm: wikitext, ptb_text_only, openwebtext, c4
-## wikitext-2-raw-v1 is a smaller version of wikitext-2 without any preprocessing, good for quick tests
-## facebook/opt-350m 
+## vision : cifar10, imagenet-1k
+## llm    : wikitext, ptb_text_only, openwebtext, c4
 
 training:
   epochs: 8                     ## Number of epochs to train
