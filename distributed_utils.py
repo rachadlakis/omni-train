@@ -172,7 +172,9 @@ def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
     
 def get_model_layers(model):
     """Returns (layers, layer_type_name) or (None, None) if not found.""" 
-
+    # Unwrap PeftModel if present
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        model = model.base_model.model
     if hasattr(model, 'model') and hasattr(model.model, 'decoder'):
         return model.model.decoder.layers, 'decoder'    
     if hasattr(model, 'model') and hasattr(model.model, 'encoder'):
@@ -279,7 +281,7 @@ def _apply_peft_quantization(model, args, rank):
         from peft import prepare_model_for_kbit_training
         model = prepare_model_for_kbit_training(
             model,
-            use_gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", True)),
+            use_gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", True))
         )
         print_on_rank_0(rank, "Prepared quantized model for k-bit training", "🔧")
     
@@ -487,13 +489,12 @@ def apply_fsdp(local_rank, rank, device, args):
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
             from model import TransformerBlock
             for i, layer in enumerate(model.layers):
-                model.layers[i] = fully_shard(layer)
+                model.layers[i] = fully_shard(layer) # type: ignore
             model = fully_shard(model)
             print_on_rank_0(rank, f"Custom Transformer (FSDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
             return model, None
 
-        # PEFT/quantized runs must start from materialized pretrained weights (non-meta path)
-        # before FSDP wrapping.
+        # PEFT/quantized runs must start from materialized pretrained weights (non-meta path) before FSDP wrapping.
         use_peft_or_quant = bool(getattr(args, "peft_enabled", False) or getattr(args, "quantization_enabled", False))
 
         if use_peft_or_quant:
@@ -524,6 +525,7 @@ def apply_fsdp(local_rank, rank, device, args):
                 if not torch.is_floating_point(param) and param.requires_grad:
                     param.requires_grad_(False)
                     non_float_frozen += 1
+
             if non_float_frozen > 0:
                 print_on_rank_0(
                     rank,
@@ -720,6 +722,139 @@ def apply_fsdp(local_rank, rank, device, args):
         print_on_rank_0(rank, f"❌ Failed in apply_fsdp: {e}", "❌")
         cleanup()
         raise
+
+
+# def apply_fsdp(local_rank, rank, device, args):
+#     """
+#     Clean FSDP pipeline:
+#     1. Load pretrained model (real weights, not meta)
+#     2. Apply PEFT / quantization if enabled
+#     3. Wrap with FSDP
+#     """
+
+#     try:
+#         print_on_rank_0(rank, "Loading model from HuggingFace...", "🧠")
+
+#         # -----------------------------
+#         # 1. Load model (REAL tensors)
+#         # -----------------------------
+#         model = _get_auto_model_class(
+#             getattr(args, "model_type", "llm")
+#         ).from_pretrained(
+#             args.model_name,
+#             token=HF_TOKEN,
+#             torch_dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+#             low_cpu_mem_usage=True,
+#         )
+
+#         model.config.use_cache = False
+#         model.config.tie_word_embeddings = False
+
+#         # -----------------------------
+#         # 2. Apply PEFT / Quantization
+#         # -----------------------------
+#         if getattr(args, "peft_enabled", False) or getattr(args, "quantization_enabled", False):
+#             print_on_rank_0(rank, "Applying PEFT / Quantization", "⚙️")
+
+#             quant_cfg = _build_quantization_config(args, rank)
+
+#             if quant_cfg is not None:
+#                 model = _get_auto_model_class(
+#                     getattr(args, "model_type", "llm")
+#                 ).from_pretrained(
+#                     args.model_name,
+#                     quantization_config=quant_cfg,
+#                     device_map={"": local_rank} if torch.cuda.is_available() else {"": "cpu"},
+#                     token=HF_TOKEN,
+#                 )
+
+#             model = _apply_peft_quantization(model, args, rank)
+
+#             # Freeze non-floating params (important for quantized models)
+#             for _, p in model.named_parameters():
+#                 if not torch.is_floating_point(p):
+#                     p.requires_grad_(False)
+
+#         # -----------------------------
+#         # 3. Gradient checkpointing
+#         # -----------------------------
+#         if getattr(args, "gradient_checkpointing", False):
+#             if hasattr(model, "gradient_checkpointing_enable"):
+#                 model.gradient_checkpointing_enable()
+#                 print_on_rank_0(rank, "Gradient checkpointing enabled", "💾")
+
+#         # -----------------------------
+#         # 4. Move to device
+#         # -----------------------------
+#         model.to(device)
+
+#         # -----------------------------
+#         # 5. Mixed precision policy
+#         # -----------------------------
+#         fsdp_kwargs = {}
+
+#         if args.mixed_precision and not getattr(args, "quantization_enabled", False):
+#             if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+#                 fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+#                     param_dtype=DTYPE_MAP[args.param_dtype],
+#                     reduce_dtype=DTYPE_MAP[args.reduce_dtype],
+#                     output_dtype=DTYPE_MAP[args.output_dtype],
+#                     cast_forward_inputs=args.cast_forward_inputs,
+#                 )
+#                 print_on_rank_0(rank, "Mixed precision enabled", "⚡")
+#             else:
+#                 print_on_rank_0(rank, "BF16 not supported, disabling MP", "⚠️")
+#                 args.mixed_precision = False
+
+#         # -----------------------------
+#         # 6. FSDP wrapping
+#         # -----------------------------
+#         layers, layer_type = get_model_layers(model)
+
+#         if layers is not None:
+#             print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers", "🔀")
+#             for layer in layers:
+#                 fully_shard(layer, **fsdp_kwargs)
+
+#         fully_shard(model, **fsdp_kwargs)
+
+#         print_on_rank_0(rank, "FSDP applied ✓", "✅")
+
+#         # -----------------------------
+#         # 7. Prefetching
+#         # -----------------------------
+#         if args.explicit_prefetching and layers is not None:
+#             set_modules_to_forward_prefetch(model, args.forward_prefetch)
+#             set_modules_to_backward_prefetch(model, args.backward_prefetch)
+
+#         # -----------------------------
+#         # 8. Checkpointer
+#         # -----------------------------
+#         checkpointer = None
+
+#         if args.resume and args.resume_path:
+#             print_on_rank_0(rank, f"Resuming from {args.resume_path}", "♻️")
+#             checkpointer = Checkpointer(
+#                 folder=os.path.dirname(args.resume_path),
+#                 dcp_api=args.dcp_api,
+#                 run_tag=_checkpoint_run_tag(args),
+#             )
+#             checkpointer.load_model(model)
+#         else:
+#             checkpointer = Checkpointer(
+#                 folder=args.checkpoint_dir,
+#                 dcp_api=args.dcp_api,
+#                 run_tag=_checkpoint_run_tag(args),
+#             )
+
+#         return model, checkpointer
+
+#     except Exception as e:
+#         print_on_rank_0(rank, f"❌ Failed in apply_fsdp: {e}", "❌")
+#         cleanup()
+#         raise
+
+
 
 def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkpointer = None): # type: ignore
     """Saves the model checkpoint.
