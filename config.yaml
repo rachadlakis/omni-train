@@ -12,9 +12,9 @@ model_type: llm                ## supported: llm, seq2seq, vision, yolo, vlm, en
 
 
 dataset:
-  name: wikitext         ## dataset name from Hugging Face datasets library, e.g. wikitext, ptb_text_only, openwebtext, c4 for llm; cifar10, imagenet-1k for vision
-  subset: wikitext-2-raw-v1              ## no subset for cifar10 (null)
-  split: train[:1%]       ## which split and how much of it to use for training. Here we use 1% of the training set for quick tests.
+  name: wikitext            ## dataset name from Hugging Face datasets library, e.g. wikitext, ptb_text_only, openwebtext, c4 for llm; cifar10, imagenet-1k for vision
+  subset: wikitext-2-raw-v1 ## no subset for cifar10 (null)
+  split: train[:2%]         ## which split and how much of it to use for training. 
 ## dataset_name suggestions:
 ## vision: cifar10, imagenet-1k
 ## llm: wikitext, ptb_text_only, openwebtext, c4
@@ -22,8 +22,8 @@ dataset:
 ## facebook/opt-350m 
 
 training:
-  epochs: 4                     ## Number of epochs to train
-  batch_size: 4                ## Batch size for training 
+  epochs: 8                     ## Number of epochs to train
+  batch_size: 16                ## Batch size for training 
   max_length: 64               ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
   gradient_checkpointing: false ## whether to use gradient checkpointing
@@ -33,11 +33,11 @@ training:
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
 num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
-save: false                 ## whether to save checkpoints
+save: true                 ## whether to save checkpoints
 
 
 dist_parameters:
-  mixed_precision: false      ## Use Mixed Precision? 
+  mixed_precision: true      ## Use Mixed Precision? 
   param_dtype: bfloat16       ## what dtype to use for parameters?  
   reduce_dtype: float32       ## what dtype to use for reduction?  
   output_dtype: bfloat16      ## what dtype to use for output? 
@@ -45,7 +45,7 @@ dist_parameters:
   distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
 
 save_load:
-  resume: false             ## whether to resume from a checkpoint
+  resume: true             ## whether to resume from a checkpoint
   resume_path: ""           ## path to checkpoint to resume from
   load_model_from_hf: true  ## whether to load  from Hugging Face
 
@@ -64,14 +64,14 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA, options: "none", "all", "lora_only"
 
 quantization:
-  enabled: false          ## whether to apply quantization
+  enabled: true          ## whether to apply quantization
   bits: 4                 ## number of bits for quantization, typically 4 or 8
   quant_type: nf4         ## nf4 or fp4 for 4-bit
   compute_dtype: bfloat16 ## dtype for computations with quantized models
   double_quant: true      ## whether to apply double quantization (for 4-bit)
   
 wandb:
-  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases
+  wandb_log_with_train: true          ## whether to log training metrics to Weights & Biases
   wandb_entity: "dist-train"          ## your W&B entity (username or team)
   wandb_project: "dist-train-project" ## your W&B project name
   

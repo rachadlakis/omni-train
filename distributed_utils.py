@@ -310,6 +310,13 @@ def _apply_peft_quantization(model, args, rank):
             task_type=_task_type,
         )
         model = get_peft_model(model, peft_cfg)
+        # LoRA adapter weights default to float32; cast all floating params to param_dtype
+        # so FSDP sees a uniform dtype across base weights and adapter weights.
+        if not getattr(args, "quantization_enabled", False):
+            target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
+            for param in model.parameters():
+                if param.is_floating_point():
+                    param.data = param.data.to(target_dtype)
         if rank == 0 and hasattr(model, "print_trainable_parameters"):
             model.print_trainable_parameters()
         print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')})", "🧩")
@@ -509,10 +516,13 @@ def apply_fsdp(local_rank, rank, device, args):
                 pretrained_kwargs["device_map"] = {"": local_rank} if torch.cuda.is_available() else {"": "cpu"}
             else:
                 pretrained_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+            # Disable tied embeddings up front so from_pretrained doesn't warn about
+            # both weights being present in the checkpoint.
+            pretrained_kwargs["tie_word_embeddings"] = False
 
             print_on_rank_0(rank, "Loading model with PEFT/quantization-aware path", "🧠")
             model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(args.model_name, **pretrained_kwargs)
-            # Disable inference-oriented cache/tied embeddings to keep training + checkpoint states stable.
+            # Disable inference-oriented cache to keep training + checkpoint states stable.
             model.config.use_cache = False
             model.config.tie_word_embeddings = False
             model = _apply_peft_quantization(model, args, rank)
@@ -686,7 +696,8 @@ def apply_fsdp(local_rank, rank, device, args):
                         args.model_name,
                         token=HF_TOKEN,
                         dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
-                        low_cpu_mem_usage=True                        
+                        low_cpu_mem_usage=True,
+                        tie_word_embeddings=False,
                     )
                     seed_model.config.tie_word_embeddings = False
                     os.makedirs(pretrained_seed_subfolder, exist_ok=True)

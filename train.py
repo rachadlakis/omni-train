@@ -97,7 +97,7 @@ else:
 # Filter Warnings
 # ---------------------------------------------------------------------
 
-warnings.filterwarnings("default", message=".*_get_pg_default_device.*")
+warnings.filterwarnings("ignore", message=".*_get_pg_default_device.*")
 warnings.filterwarnings("ignore", message="Materializing param")
 warnings.filterwarnings("ignore", message="Materializing param", category=UserWarning)   
 
@@ -211,12 +211,12 @@ def main(args):
             "⚙️",
         )
 
-        if args.strategy == "fsdp" and checkpointer is not None and checkpointer.last_training_time is not None:
+        if args.strategy == "fsdp" and args.resume and checkpointer is not None and checkpointer.last_training_time is not None:
             print_on_rank_0(rank, "Loading optimizer state from checkpoint...", "♻️")
             try:
                 checkpointer.load_optim(model, optimizer)
                 print_on_rank_0(rank, "Optimizer state restored ✓")
-            except RuntimeError as e:
+            except Exception as e:
                 print_on_rank_0(rank, f"⚠️ Optimizer state incompatible (model changed?), starting fresh. Reason: {e}", "⚠️")
 
         elif args.strategy == "ddp":
