@@ -30,11 +30,11 @@ mkdir -p logs
 
 # Print job info
 echo "=============================================="
-echo "SLURM Job ID: $SLURM_JOB_ID"
-echo "Running on nodes: $SLURM_NODELIST"
-echo "Number of nodes: $SLURM_NNODES"
-echo "GPUs per node: $SLURM_GPUS_PER_NODE"
-echo "Config file: $CONFIG_FILE"
+echo "SLURM Job ID      : $SLURM_JOB_ID"
+echo "Running on nodes  : $SLURM_NODELIST"
+echo "Number of nodes   : $SLURM_NNODES"
+echo "GPUs per node     : $SLURM_GPUS_PER_NODE"
+echo "Config file       : $CONFIG_FILE"
 echo "=============================================="
 
 # Get master node address
@@ -45,8 +45,8 @@ MASTER_PORT=${MASTER_PORT:-29500}
 GPUS_PER_NODE=${SLURM_GPUS_PER_NODE:-4}
 WORLD_SIZE=$((SLURM_NNODES * GPUS_PER_NODE))
 
-echo "Master address: $MASTER_ADDR:$MASTER_PORT"
-echo "World size: $WORLD_SIZE"
+echo "Master address    : $MASTER_ADDR:$MASTER_PORT"
+echo "World size        : $WORLD_SIZE"
 echo "=============================================="
 
 # Set environment variables for NCCL

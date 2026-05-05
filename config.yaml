@@ -33,7 +33,6 @@ num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fs
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: true                 ## whether to save checkpoints
 
-
 dist_parameters:
   mixed_precision: true      ## Use Mixed Precision? 
   param_dtype: bfloat16       ## what dtype to use for parameters?  
