@@ -1,8 +1,6 @@
 #!/bin/bash
 
-set -euo pipefail
-
-export HF_HUB_DISABLE_XET=1
+set -euo pipefail ## safer bash scripting
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_PATH="${CONFIG_PATH:-$SCRIPT_DIR/../config.yaml}"

@@ -27,7 +27,7 @@ dist-train-project/
 ├── launch.sh             # Launcher (reads config.yaml, calls torchrun)
 ├── .env                  # Secrets: HF_TOKEN, WANDB_API_KEY
 ├── configs/              # Example YAML configs (LLM, CNN, LoRA, FSDP, etc.)
-├── scripts/              # setup_env.py, SLURM launchers
+├── scripts/              # SLURM launchers
 ├── ui/                   # Web UI (FastAPI)
 └── Documentation/        # GUIDE.md, TECHNICAL.md
 ```
@@ -41,8 +41,15 @@ dist-train-project/
 git clone https://github.com/rachadlakis/dist-train-project.git
 cd dist-train-project
 
-# 2. Install dependencies (auto-detects your CUDA version)
-python scripts/setup_env.py
+# 2. Create venv and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+
+# CUDA 12.8
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
 
 # 3. Set your Hugging Face token
 echo "HF_TOKEN=hf_your_token_here" > .env
@@ -139,7 +146,6 @@ dist-train-project/
 │   └── embedding_*.yaml
 ├── scripts/
 │   ├── launch.sh             # Alternative launcher (mirrors root launch.sh)
-│   ├── setup_env.py          # Auto-detect GPU/CUDA and install correct torch wheel
 │   ├── launch_slurm.py       # Python SLURM job launcher
 │   └── slurm_train.sh        # SLURM batch script template
 ├── ui/
@@ -175,8 +181,15 @@ dist-train-project/
 git clone https://github.com/rachadlakis/dist-train-project.git
 cd dist-train-project
 
-# 2. Install dependencies (auto-detects CUDA version)
-python scripts/setup_env.py
+# 2. Create venv and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+
+# CUDA 12.8
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
 
 # 3. Set your Hugging Face token
 echo "HF_TOKEN=hf_your_token_here" > .env
@@ -205,23 +218,7 @@ nvidia-smi
 
 ---
 
-### Option A — Auto Setup (recommended)
-
-The setup script detects your CUDA version and installs the correct PyTorch wheel automatically:
-
-```bash
-python scripts/setup_env.py
-```
-
-| Flag | Effect |
-|------|--------|
-| `--dry-run` | Print install command without running |
-| `--cpu` | Force CPU-only install |
-| `--requirements PATH` | Use a custom requirements file |
-
----
-
-### Option B — Manual Setup (Local / WSL)
+### Setup (Local / WSL / RunPod)
 
 ```bash
 cd dist-train-project
@@ -248,7 +245,7 @@ Select VS Code interpreter from: `dist-train-project/.venv/bin/python`
 
 ---
 
-### Option C — RunPod Setup
+### Option B — RunPod Setup
 
 ```bash
 # 1. SSH in
@@ -261,7 +258,12 @@ cd dist-train-project
 # 3. Create venv and install
 python3 -m venv .venv
 source .venv/bin/activate
-python scripts/setup_env.py   # or manual install above
+pip install --upgrade pip
+
+# CUDA 12.8
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
 
 # 4. Set token
 echo "HF_TOKEN=hf_your_token_here" > .env
