@@ -62,14 +62,14 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA, options: "none", "all", "lora_only"
 
 quantization:
-  enabled: true          ## whether to apply quantization
+  enabled: false          ## whether to apply quantization
   bits: 4                 ## number of bits for quantization, typically 4 or 8
   quant_type: nf4         ## nf4 or fp4 for 4-bit
   compute_dtype: bfloat16 ## dtype for computations with quantized models
   double_quant: true      ## whether to apply double quantization (for 4-bit)
   
 wandb:
-  wandb_log_with_train: true          ## whether to log training metrics to Weights & Biases
+  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases
   wandb_entity: "dist-train"          ## your W&B entity (username or team)
   wandb_project: "dist-train-project" ## your W&B project name
   

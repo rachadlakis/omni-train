@@ -1,0 +1,146 @@
+"""Tests for build_args config validation guards in utils.py."""
+import pytest
+from utils import build_args
+
+
+# ------------------------------------------------------------------
+# Happy path
+# ------------------------------------------------------------------
+
+def test_valid_config_returns_args(cfg):
+    args = build_args(cfg)
+    assert args.strategy == "fsdp"
+    assert args.epochs == 1
+    assert args.peft_enabled is False
+    assert args.quantization_enabled is False
+
+
+# ------------------------------------------------------------------
+# Model / strategy validation
+# ------------------------------------------------------------------
+
+def test_invalid_strategy_raises(cfg):
+    cfg["strategy"] = "tensor_parallel"
+    with pytest.raises(ValueError, match="strategy"):
+        build_args(cfg)
+
+
+def test_invalid_model_type_raises(cfg):
+    cfg["model_type"] = "diffusion"
+    with pytest.raises(ValueError, match="model_type"):
+        build_args(cfg)
+
+
+# ------------------------------------------------------------------
+# Training hyperparameter guards
+# ------------------------------------------------------------------
+
+@pytest.mark.parametrize("field,bad_value,match", [
+    ("epochs",       0,   "epochs"),
+    ("batch_size",   0,   "batch_size"),
+    ("max_length",   0,   "max_length"),
+    ("warmup_steps", -1,  "warmup_steps"),
+    ("weight_decay", -1,  "weight_decay"),
+    ("grad_clip",    -1,  "grad_clip"),
+])
+def test_invalid_training_params_raise(cfg, field, bad_value, match):
+    cfg["training"][field] = bad_value
+    with pytest.raises(ValueError, match=match):
+        build_args(cfg)
+
+
+# ------------------------------------------------------------------
+# PEFT validation
+# ------------------------------------------------------------------
+
+def test_invalid_peft_type_raises(cfg):
+    cfg["peft"]["enabled"] = True
+    cfg["peft"]["type"] = "adapter"
+    with pytest.raises(ValueError, match="peft.type"):
+        build_args(cfg)
+
+
+def test_peft_unsupported_model_type_raises(cfg):
+    cfg["model_type"] = "yolo"
+    cfg["peft"]["enabled"] = True
+    with pytest.raises(ValueError, match="PEFT is not supported"):
+        build_args(cfg)
+
+
+# ------------------------------------------------------------------
+# Quantization validation
+# ------------------------------------------------------------------
+
+def test_quantization_without_peft_raises(cfg):
+    cfg["quantization"]["enabled"] = True
+    cfg["peft"]["enabled"] = False
+    with pytest.raises(ValueError, match="requires peft"):
+        build_args(cfg)
+
+
+def test_invalid_quantization_bits_raises(cfg):
+    cfg["quantization"]["bits"] = 2
+    with pytest.raises(ValueError, match="quantization.bits"):
+        build_args(cfg)
+
+
+def test_qlora_requires_4bit(cfg):
+    cfg["peft"]["type"] = "qlora"
+    cfg["quantization"]["bits"] = 8
+    with pytest.raises(ValueError, match="QLoRA requires"):
+        build_args(cfg)
+
+
+# ------------------------------------------------------------------
+# FSDP + quantization guard (calls sys.exit)
+# ------------------------------------------------------------------
+
+def test_fsdp_plus_quantization_exits(cfg):
+    cfg["strategy"] = "fsdp"
+    cfg["peft"]["enabled"] = True
+    cfg["quantization"]["enabled"] = True
+    with pytest.raises(SystemExit) as exc_info:
+        build_args(cfg)
+    assert exc_info.value.code == 1
+
+
+def test_ddp_plus_quantization_does_not_exit(cfg):
+    """DDP + quantization is allowed — only FSDP is blocked."""
+    cfg["strategy"] = "ddp"
+    cfg["peft"]["enabled"] = True
+    cfg["quantization"]["enabled"] = True
+    args = build_args(cfg)
+    assert args.quantization_enabled is True
+
+
+# ------------------------------------------------------------------
+# Custom transformer validation
+# ------------------------------------------------------------------
+
+def test_custom_transformer_dim_not_divisible_by_heads_raises(cfg):
+    cfg["model_type"] = "custom_transformer"
+    cfg["custom_transformer_args"] = {
+        "n_layers": 2,
+        "vocab_size": 8,
+        "max_seq_len": 16,
+        "dim": 17,    # not divisible by n_heads=4
+        "n_heads": 4,
+        "dropout_p": 0.0,
+    }
+    with pytest.raises(ValueError, match="divisible"):
+        build_args(cfg)
+
+
+def test_custom_transformer_valid(cfg):
+    cfg["model_type"] = "custom_transformer"
+    cfg["custom_transformer_args"] = {
+        "n_layers": 2,
+        "vocab_size": 8,
+        "max_seq_len": 16,
+        "dim": 16,
+        "n_heads": 4,
+        "dropout_p": 0.0,
+    }
+    args = build_args(cfg)
+    assert args.custom_dim == 16
+    assert args.custom_n_heads == 4

@@ -699,6 +699,109 @@ python scripts/launch_slurm.py \
 
 ---
 
+## 🧪 Testing
+
+The test suite lives in `tests/` and is split into two tiers.
+
+### Install test dependencies
+
+```bash
+# pytest is already in requirements.txt
+pip install -r requirements.txt
+```
+
+### Unit tests — fast, no GPU required
+
+Covers config validation, helper functions, and the custom Transformer model.
+
+```bash
+python -m pytest          # runs all unit tests (~2 s)
+python -m pytest -v       # verbose output
+python -m pytest -k ddp   # filter by name
+```
+
+| File | What it tests |
+|------|---------------|
+| `tests/test_config_validation.py` | Invalid strategies, dtypes, training params, PEFT/quant guard conditions |
+| `tests/test_config_combinations.py` | All valid cross-product combinations of strategy × PEFT × quantization × dtype |
+| `tests/test_helpers.py` | `_dtype_from_name`, `_normalize_target_modules`, `_checkpoint_run_tag`, `get_model_layers` |
+| `tests/test_model.py` | Custom Transformer forward pass, output shape, no NaN, layer detection |
+
+### Smoke tests — real training jobs, requires GPU (~30–60 s each)
+
+Launches actual `train.py` subprocesses (via `torchrun` or `python`) with `facebook/opt-125m` on 1% of wikitext for 1 epoch.
+
+```bash
+python -m pytest -m smoke -v            # all cases
+python -m pytest -m smoke -v -k fsdp   # filter by name
+python -m pytest -m smoke -v -k "strategy=ddp and peft_enabled=true"
+```
+
+Smoke tests are excluded from the default `pytest` run and skipped automatically on CPU-only machines.
+
+#### Configuring which combinations to test (`SMOKE_GRID`)
+
+Open `tests/test_smoke.py` and edit `SMOKE_GRID`. Each key is a config parameter, each value is a list of options to try. The framework generates one test per combination automatically.
+
+```python
+SMOKE_GRID = {
+    "strategy":                              ["solo", "ddp", "fsdp"],
+    ("peft", "enabled"):                     [False, True],
+
+    # Add any parameter from config.yaml using the same nested-key syntax:
+    ("dist_parameters", "mixed_precision"):  [False, True],
+    ("training", "gradient_checkpointing"):  [False, True],
+    ("peft", "r"):                           [4, 8],          # LoRA rank
+    ("training", "batch_size"):              [2, 4],
+    "num_gpus":                              [1, 2],
+}
+```
+
+**Key syntax** — mirrors the structure of `config.yaml`:
+
+| Grid key | `config.yaml` field | What it controls |
+|---|---|---|
+| `"strategy"` | `strategy` | Training strategy (`solo` / `ddp` / `fsdp`) |
+| `("peft", "enabled")` | `peft.enabled` | Turn LoRA on/off |
+| `("peft", "r")` | `peft.r` | LoRA rank (only meaningful when `peft.enabled=True`) |
+| `("peft", "alpha")` | `peft.alpha` | LoRA scaling factor |
+| `("dist_parameters", "mixed_precision")` | `dist_parameters.mixed_precision` | Mixed precision |
+| `("dist_parameters", "distribute_api")` | `dist_parameters.distribute_api` | `dcp_api` vs `dtensor_api` |
+| `("training", "batch_size")` | `training.batch_size` | Batch size |
+| `("training", "gradient_checkpointing")` | `training.gradient_checkpointing` | Gradient checkpointing |
+| `"num_gpus"` | `num_gpus` | GPUs per run (auto-skipped if machine has fewer) |
+
+**Combinations grow fast** — 3 strategies × 2 peft × 2 mixed_precision = 12 tests × ~45 s = ~9 min. Use `SMOKE_GRID_FILTERS` to drop invalid or redundant combos:
+
+```python
+SMOKE_GRID_FILTERS = [
+    # bitsandbytes can't be sharded by FSDP — always invalid
+    lambda cfg: cfg["strategy"] == "fsdp" and cfg["quantization"]["enabled"],
+    # varying peft.r only matters when peft is enabled
+    lambda cfg: not cfg["peft"]["enabled"] and cfg["peft"]["r"] != 4,
+    # skip multi-GPU tests when the machine doesn't have enough GPUs
+    lambda cfg: int(cfg.get("num_gpus", 1)) > torch.cuda.device_count(),
+]
+```
+
+#### Save → Resume tests (`SMOKE_EXTRA_CASES`)
+
+Multi-phase scenarios (e.g. train + save, then resume) that can't be expressed as a simple grid go in `SMOKE_EXTRA_CASES`. Phase 2 gets `resume_path` injected automatically from the phase-1 checkpoint:
+
+```python
+SMOKE_EXTRA_CASES = [
+    {
+        "id": "fsdp_save_resume",
+        "phases": [
+            {"strategy": "fsdp", "save": True},               # phase 1: train + save
+            {"strategy": "fsdp", ("save_load", "resume"): True},  # phase 2: resume
+        ],
+    },
+]
+```
+
+---
+
 ## 🔍 Troubleshooting
 
 | Error | Fix |

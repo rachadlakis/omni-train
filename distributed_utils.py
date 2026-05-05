@@ -505,23 +505,98 @@ def apply_fsdp(local_rank, rank, device, args):
         use_peft_or_quant = bool(getattr(args, "peft_enabled", False) or getattr(args, "quantization_enabled", False))
 
         if use_peft_or_quant:
+            ## PEFT and/or quantization enabled — meta init is not compatible with the complex weight loading logic required for these features, so we build real models on each rank and then apply FSDP.
             quant_cfg = _build_quantization_config(args, rank)
-            pretrained_kwargs = {
-                "token": HF_TOKEN,
-                "low_cpu_mem_usage": True,
-            }
-            if quant_cfg is not None:
-                # Quantized load path places model per-rank and avoids later device remapping.
-                pretrained_kwargs["quantization_config"] = quant_cfg
-                pretrained_kwargs["device_map"] = {"": local_rank} if torch.cuda.is_available() else {"": "cpu"}
-            else:
-                pretrained_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
-            # Disable tied embeddings up front so from_pretrained doesn't warn about
-            # both weights being present in the checkpoint.
-            pretrained_kwargs["tie_word_embeddings"] = False
+            resuming           = args.resume and bool(args.resume_path)
+            load_model_from_hf = not resuming and args.load_model_from_hf
 
-            print_on_rank_0(rank, "Loading model with PEFT/quantization-aware path", "🧠")
-            model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(args.model_name, **pretrained_kwargs)
+            if resuming:
+                # PATH A: resuming — build model structure from config only; checkpoint supplies
+                # both base weights and adapter weights so there is no need to hit HuggingFace.
+
+                # Guard: the checkpoint folder name encodes the run tag (e.g. __lora, __lora_q4).
+                # If the user is trying to resume a PEFT run from a non-PEFT checkpoint (or vice-versa)
+                # the adapter weights will be missing and the load will silently produce wrong results.
+                _resume_folder_name = os.path.basename(os.path.normpath(os.path.abspath(args.resume_path)))
+                _expected_tag = _checkpoint_run_tag(args)  # e.g. "__lora" or "__lora_q4"
+                _checkpoint_is_plain = "__" not in _resume_folder_name
+                if _expected_tag and _expected_tag not in _resume_folder_name:
+                    raise ValueError(
+                        f"Cannot resume a PEFT/quantized run (tag='{_expected_tag}') from a non-PEFT checkpoint "
+                        f"at '{args.resume_path}'. The checkpoint was saved without adapter weights — "
+                        f"there is nothing to restore the LoRA layers from. "
+                        f"Start a fresh run or point --resume-path to a checkpoint with '{_expected_tag}' in its folder name."
+                    )
+                if not _expected_tag and not _checkpoint_is_plain:
+                    raise ValueError(
+                        f"Cannot resume a non-PEFT run from a PEFT checkpoint at '{args.resume_path}'. "
+                        f"The checkpoint contains adapter weights that have no corresponding LoRA layers in the current model. "
+                        f"Enable PEFT in your config or point --resume-path to a plain checkpoint."
+                    )
+
+                print_on_rank_0(rank, "Resuming — building PEFT model structure from config (no HF download)", "♻️")
+                config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
+                config.use_cache = False
+                config.tie_word_embeddings = False
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
+                    config,
+                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                )
+
+            elif load_model_from_hf:
+                # PATH B: fresh run — only rank 0 downloads and saves a seed checkpoint;
+                # all ranks then load from that seed so HF is only hit once.
+                print_on_rank_0(rank, "Fresh PEFT run — rank 0 loading pretrained weights from HuggingFace", "🧠")
+                peft_seed_folder = f"{args.checkpoint_dir}/pretrained_seed"
+                peft_seed_timestamp = int(time.time() * 1000)
+                peft_seed_subfolder = f"{peft_seed_folder}/fsdp/{'dcp_api' if args.dcp_api else 'dtensor_api'}/{peft_seed_timestamp}"
+                peft_seed_path = f"{peft_seed_subfolder}/model_state_dict.pt"
+
+                pretrained_kwargs = {
+                    "token": HF_TOKEN,
+                    "low_cpu_mem_usage": True,
+                    "tie_word_embeddings": False,
+                }
+                if quant_cfg is not None:
+                    pretrained_kwargs["quantization_config"] = quant_cfg
+                    pretrained_kwargs["device_map"] = {"": local_rank} if torch.cuda.is_available() else {"": "cpu"}
+                else:
+                    pretrained_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+
+                if rank == 0:
+                    seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
+                        args.model_name, **pretrained_kwargs
+                    )
+                    seed_model.config.use_cache = False
+                    seed_model.config.tie_word_embeddings = False
+                    os.makedirs(peft_seed_subfolder, exist_ok=True)
+                    torch.save(seed_model.state_dict(), peft_seed_path)
+                    del seed_model
+                    torch.cuda.empty_cache()
+                dist.barrier()
+
+                # All ranks: build structure from config and load the seed weights.
+                config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
+                config.use_cache = False
+                config.tie_word_embeddings = False
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
+                    config,
+                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                )
+                model.load_state_dict(torch.load(peft_seed_path, map_location="cpu"))
+                print_on_rank_0(rank, "Pretrained seed weights loaded ✓")
+
+            else:
+                # PATH C: random init — for experimentation and debugging only.
+                print_on_rank_0(rank, "No checkpoint dir — random weight init for PEFT path", "⚠️")
+                config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
+                config.use_cache = False
+                config.tie_word_embeddings = False
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
+                    config,
+                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                )
+
             # Disable inference-oriented cache to keep training + checkpoint states stable.
             model.config.use_cache = False
             model.config.tie_word_embeddings = False
@@ -577,10 +652,8 @@ def apply_fsdp(local_rank, rank, device, args):
                 set_modules_to_forward_prefetch(model, args.forward_prefetch)
                 set_modules_to_backward_prefetch(model, args.backward_prefetch)
 
-            resuming = args.resume and bool(args.resume_path)
             checkpointer = None
             if resuming:
-                print_on_rank_0(rank, f"Resuming from: {args.resume_path}", "♻️")
                 _rp = os.path.normpath(os.path.abspath(args.resume_path))
                 timestamp = os.path.basename(_rp)
                 api_dir = os.path.basename(os.path.dirname(_rp))
@@ -590,29 +663,29 @@ def apply_fsdp(local_rank, rank, device, args):
                 checkpointer = Checkpointer(folder=base, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
                 # Keep exact folder token (including optional mode suffix) for load consistency.
                 checkpointer.last_training_time = timestamp
-                checkpointer.load_model(model) #type: ignore
+                checkpointer.load_model(model)  # type: ignore
+                print_on_rank_0(rank, "Checkpoint loaded into PEFT model ✓")
             else:
                 checkpointer = Checkpointer(folder=args.checkpoint_dir, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
 
             return model, checkpointer
 
-        # ------------------------------------------------------------------
-        # FSDP Step 1: build model on meta device (no memory)
-        # ------------------------------------------------------------------
+
+
+        ## Non Peft: 
+        ## FSDP Step 1: build model on meta device (no memory) 
         print_on_rank_0(rank, "Instantiating model on meta device...", "🧠")
         config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
         config.use_cache = False  # important for saving memory during training
         config.tie_word_embeddings = False  # prevents lm_head/embed_tokens KeyError in optimizer state dict
 
-        with torch.device("meta"): ## does not create real models on devices
+        with torch.device("meta"): ## creates on all GPUs, but really does not create real models 
             model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                 config,
                 dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,                
-            )
+            ) 
 
-        # ------------------------------------------------------------------
-        # FSDP Step 2: shard layers + root model (still on meta)
-        # ------------------------------------------------------------------
+        ## FSDP Step 2: shard layers + root model (still on meta) 
         fsdp_kwargs = {}
         if args.mixed_precision:
             if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
@@ -723,9 +796,6 @@ def apply_fsdp(local_rank, rank, device, args):
                     if hasattr(m, "reset_parameters"):
                         m.reset_parameters() # type: ignore
             checkpointer = None
-
-        # if args.mixed_precision:
-        #     inspect_mixed_precision(model)
 
         return model, checkpointer
 

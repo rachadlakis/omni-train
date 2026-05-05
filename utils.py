@@ -293,11 +293,14 @@ def build_args(cfg):
         raise ValueError("Quantization-aware training in this project currently requires peft.enabled=true")
 
     if args.strategy == "fsdp" and args.quantization_enabled:
-        print("\n❌ Config error: FSDP + quantization is not supported.")
-        print("   FSDP cannot shard bitsandbytes 4-bit/8-bit layers.")
-        print("   Fix one of the following in your config:")
-        print("     • Set strategy: ddp       → to keep QLoRA")
-        print("     • Set quantization: false → to keep FSDP\n")
+        print("\n" + "=" * 60)
+        print("  Config note: FSDP + bitsandbytes quantization")
+        print("=" * 60)
+        print("  bitsandbytes 4-bit/8-bit layers cannot be sharded by FSDP.")
+        print("  Pick one of these options in your config:\n")
+        print("    strategy: ddp          keep QLoRA, switch to DDP")
+        print("    quantization: false    keep FSDP, drop quantization")
+        print("=" * 60 + "\n")
         sys.exit(1)
 
     # --------------------------------------------------
