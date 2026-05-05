@@ -1551,6 +1551,7 @@ function applyConfigToForm(cfg) {
   onLaunchModeChange();
   if (cfg.slurm) {
     setVal('f-slurm-nodes', cfg.slurm.nodes || 1);
+    setVal('f-slurm-gpus-per-node', cfg.slurm.gpus_per_node || 4);
     setVal('f-slurm-partition', cfg.slurm.partition || '');
     setVal('f-slurm-time', cfg.slurm.time || '');
   }
@@ -1693,6 +1694,7 @@ function buildConfigFromForm() {
   if (cfg.launch_mode === 'slurm') {
     cfg.slurm = {
       nodes: parseInt(getVal('f-slurm-nodes')) || 1,
+      gpus_per_node: parseInt(getVal('f-slurm-gpus-per-node')) || 4,
       partition: getVal('f-slurm-partition') || 'gpu',
       time: getVal('f-slurm-time') || '2:00:00',
     };
@@ -3213,6 +3215,17 @@ function onStrategyChange() {
   if (topoSection) topoSection.style.display = strategy === 'hybrid' ? '' : 'none';
   if (strategy === 'hybrid') onTopologyChange();
 
+  // Solo needs no launch mode — hide it (and SLURM sub-section)
+  const launchModeGroup = document.getElementById('f-launch-mode')?.closest('.form-group');
+  const isSolo = strategy === 'none';
+  if (launchModeGroup) launchModeGroup.style.display = isSolo ? 'none' : '';
+  if (isSolo) {
+    const slurmSection = document.getElementById('slurm-section');
+    if (slurmSection) slurmSection.style.display = 'none';
+  } else {
+    onLaunchModeChange();
+  }
+
   // Refresh availability display
   updateGpuAvailability();
 }
@@ -3237,19 +3250,36 @@ function onTopologyChange() {
   const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
   const total = dp * tp * pp;
 
-  const hintEl = document.getElementById('fg-topology-hint');
-  const hintText = document.getElementById('topology-hint-text');
   const gpuSelect = document.getElementById('f-gpu-count');
 
-  if (hintEl && hintText) {
-    hintEl.style.display = '';
-    hintText.textContent = `Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs total. Set GPU Count to ${total}.`;
-  }
-
-  // Auto-sync GPU count
+  // Auto-sync GPU count if an exact matching option exists
   if (gpuSelect) {
     const opt = Array.from(gpuSelect.options).find(o => parseInt(o.value) === total);
     if (opt) gpuSelect.value = String(total);
+  }
+
+  updateTopologyHint();
+}
+
+function updateTopologyHint() {
+  const dp = parseInt(getVal('f-dp-size')) || 1;
+  const tp = parseInt(getVal('f-tp-size')) || 1;
+  const mode = getVal('f-parallelism-mode') || '2d';
+  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
+  const total = dp * tp * pp;
+  const selected = parseInt(getVal('f-gpu-count')) || 1;
+
+  const hintEl = document.getElementById('fg-topology-hint');
+  const hintText = document.getElementById('topology-hint-text');
+  if (!hintEl || !hintText) return;
+
+  hintEl.style.display = '';
+  if (selected === total) {
+    hintText.textContent = `✓ Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs — matches GPU Count.`;
+    hintText.style.color = 'var(--green)';
+  } else {
+    hintText.textContent = `⚠️ Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs, but GPU Count is set to ${selected}. Update one to match.`;
+    hintText.style.color = 'var(--orange)';
   }
 }
 
@@ -3259,6 +3289,9 @@ function onTopologyChange() {
 function onGpuCountChange() {
   syncGpuOptionsWithStrategy();
   updateGpuAvailability();
+  // Refresh topology hint if hybrid strategy is active
+  const strategy = getVal('f-strategy');
+  if (strategy === 'hybrid') updateTopologyHint();
 }
 
 function classifyLogLine(line) {

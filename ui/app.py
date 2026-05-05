@@ -811,13 +811,15 @@ async def start_training(payload: ConfigPayload):
         slurm_nodes = int(slurm_cfg.get("nodes", 1))
         slurm_partition = str(slurm_cfg.get("partition", "gpu"))
         slurm_time = str(slurm_cfg.get("time", "2:00:00"))
+        # Use explicit gpus_per_node from UI; fall back to dividing total only if not provided
+        slurm_gpus_per_node = int(slurm_cfg.get("gpus_per_node") or max(1, gpu_count // max(1, slurm_nodes)))
         cmd = [
             sys.executable,
             "-u",
             str(PROJECT_ROOT / "scripts" / "launch_slurm.py"),
             "--config", str(tmp_config),
             "--nodes", str(slurm_nodes),
-            "--gpus", str(gpu_count),
+            "--gpus", str(slurm_gpus_per_node),
             "--partition", slurm_partition,
             "--time", slurm_time,
         ]

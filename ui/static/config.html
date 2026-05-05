@@ -405,14 +405,13 @@
           </div>
         </div>
 
-        <!-- 3D Topology (shown only when strategy = hybrid) -->
+        <!-- Multi-Dimensional Topology (shown only when strategy = hybrid) -->
         <div id="topology-section" style="display:none;">
-          <div class="form-section-subtitle">3D Parallelism Topology <span class="tooltip" data-tip="dp × tp × pp must equal GPU Count. Keep tp intra-node (NVLink). pp=1 disables pipeline stages.">?</span></div>
+          <div class="form-section-subtitle">Multi Dimensional Topology <span class="tooltip" data-tip="dp × tp × pp must equal GPU Count. Keep tp intra-node (NVLink). pp=1 disables pipeline stages.">?</span></div>
           <div class="form-grid">
             <div class="form-group">
-              <label>Parallelism Mode <span class="tooltip" data-tip="1d: DP only. 2d: DP × TP. 3d: DP × TP × PP.">?</span></label>
+              <label>Parallelism Mode <span class="tooltip" data-tip="2d: DP × TP. 3d: DP × TP × PP.">?</span></label>
               <select id="f-parallelism-mode" onchange="onParallelismModeChange()">
-                <option value="1d">1D (DP only)</option>
                 <option value="2d" selected>2D (DP × TP)</option>
                 <option value="3d">3D (DP × TP × PP)</option>
               </select>
@@ -444,6 +443,10 @@
             <div class="form-group">
               <label>Nodes <span class="tooltip" data-tip="Number of cluster nodes to allocate">?</span></label>
               <input type="number" id="f-slurm-nodes" value="1" min="1">
+            </div>
+            <div class="form-group">
+              <label>GPUs per Node <span class="tooltip" data-tip="GPUs on each node. Nodes can have different counts — set this to the target per-node value for #SBATCH --gpus-per-node.">?</span></label>
+              <input type="number" id="f-slurm-gpus-per-node" value="4" min="1">
             </div>
             <div class="form-group">
               <label>Partition <span class="tooltip" data-tip="SLURM partition/queue name (e.g. gpu, a100)">?</span></label>
