@@ -11,6 +11,9 @@ import subprocess
 import sys
 import re
 import argparse
+import os
+
+from sympy import python
 
 
 # Maps detected CUDA major.minor to the closest available PyTorch wheel tag.
@@ -42,25 +45,24 @@ def detect_cuda_version():
         pass
 
     # Method 2: Try nvidia-smi from common Windows paths
-    import os
-    nvidia_smi_paths = [
-        r"C:\Windows\System32\nvidia-smi.exe",
-        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
-        os.path.expandvars(r"%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
-    ]
-
-    for path in nvidia_smi_paths:
-        if os.path.exists(path):
-            try:
-                out = subprocess.check_output(
-                    [path], text=True, stderr=subprocess.DEVNULL
-                )
-                match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", out)
-                if match:
-                    print(f"  Found nvidia-smi at: {path}")
-                    return int(match.group(1)), int(match.group(2))
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                pass
+    if sys.platform == "win32":
+        nvidia_smi_paths = [
+            r"C:\Windows\System32\nvidia-smi.exe",
+            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+            os.path.expandvars(r"%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+        ]
+        for path in nvidia_smi_paths:
+            if os.path.exists(path):
+                try:
+                    out = subprocess.check_output(
+                        [path], text=True, stderr=subprocess.DEVNULL
+                    )
+                    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", out)
+                    if match:
+                        print(f"  Found nvidia-smi at: {path}")
+                        return int(match.group(1)), int(match.group(2))
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    pass
 
     # Method 3: Try nvcc (CUDA toolkit compiler)
     try:
@@ -111,10 +113,7 @@ def pick_wheel_tag(cuda: tuple[int, int]) -> str:
 
 
 def build_pip_command(wheel_tag: str, requirements_file: str) -> list[str]:
-    if wheel_tag == "cpu":
-        index_url = PYTORCH_INDEX.format(tag="cpu")
-    else:
-        index_url = PYTORCH_INDEX.format(tag=wheel_tag)
+    index_url = PYTORCH_INDEX.format(tag=wheel_tag)
 
     return [
         sys.executable, "-m", "pip", "install",
@@ -171,3 +170,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+## run with `python scripts/setup_env.py` to auto-detect your GPU/CUDA and install the right torch wheel. Use `--dry-run` to just print the pip command without executing it, or `--cpu` to force CPU-only installation.
