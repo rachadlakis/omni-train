@@ -797,16 +797,34 @@ async def start_training(payload: ConfigPayload):
         state.status = "running"
 
     strategy = str(mini_cfg.get("strategy", "solo")).lower()
-    strategy = strategy if strategy in {"solo", "ddp", "fsdp"} else "solo"
+    strategy = strategy if strategy in {"solo", "ddp", "fsdp", "hybrid"} else "solo"
     gpu_count = int(mini_cfg.get("num_gpus", 1) or 1)
     if strategy == "solo":
         gpu_count = 1
     else:
         gpu_count = max(1, gpu_count)
 
-    if strategy == "solo":
+    launch_mode = str(mini_cfg.get("launch_mode", "torchrun")).lower()
+
+    if launch_mode == "slurm":
+        slurm_cfg = mini_cfg.get("slurm", {}) if isinstance(mini_cfg.get("slurm"), dict) else {}
+        slurm_nodes = int(slurm_cfg.get("nodes", 1))
+        slurm_partition = str(slurm_cfg.get("partition", "gpu"))
+        slurm_time = str(slurm_cfg.get("time", "2:00:00"))
+        cmd = [
+            sys.executable,
+            "-u",
+            str(PROJECT_ROOT / "scripts" / "launch_slurm.py"),
+            "--config", str(tmp_config),
+            "--nodes", str(slurm_nodes),
+            "--gpus", str(gpu_count),
+            "--partition", slurm_partition,
+            "--time", slurm_time,
+        ]
+    elif strategy == "solo":
         cmd = [sys.executable, "-u", "train.py"]
     else:
+        # ddp, fsdp, hybrid all use torchrun
         cmd = [
             sys.executable,
             "-u",

@@ -836,7 +836,7 @@ function syncGpuOptionsWithStrategy() {
   const gpuSelect = document.getElementById('f-gpu-count');
   if (!gpuSelect) return;
 
-  const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp';
+  const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp' || strategy === 'hybrid';
 
   Array.from(gpuSelect.options).forEach(opt => {
     const gpuValue = parseInt(opt.value, 10);
@@ -1546,6 +1546,26 @@ function applyConfigToForm(cfg) {
   onStrategyChange();
   setVal('f-mixed-precision', String(dist.mixed_precision !== false));
 
+  // Launch mode & SLURM
+  setVal('f-launch-mode', cfg.launch_mode || 'torchrun');
+  onLaunchModeChange();
+  if (cfg.slurm) {
+    setVal('f-slurm-nodes', cfg.slurm.nodes || 1);
+    setVal('f-slurm-partition', cfg.slurm.partition || '');
+    setVal('f-slurm-time', cfg.slurm.time || '');
+  }
+
+  // 3D topology
+  const topo = cfg.topology || {};
+  if (topo.parallelism_mode) {
+    setVal('f-parallelism-mode', topo.parallelism_mode);
+    onParallelismModeChange();
+  }
+  if (topo.data_parallel_size) setVal('f-dp-size', topo.data_parallel_size);
+  if (topo.tensor_parallel_size) setVal('f-tp-size', topo.tensor_parallel_size);
+  if (topo.pipeline_parallel_size) setVal('f-pp-size', topo.pipeline_parallel_size);
+  if (dist.strategy === 'hybrid') onTopologyChange();
+
   // Training settings
   setVal('f-epochs', t.epochs || 3);
   setVal('f-batch-size', t.batch_size || 8);
@@ -1667,6 +1687,28 @@ function buildConfigFromForm() {
   };
 
   cfg.num_gpus = parseInt(getVal('f-gpu-count') || '1');
+
+  // Launch mode
+  cfg.launch_mode = getVal('f-launch-mode') || 'torchrun';
+  if (cfg.launch_mode === 'slurm') {
+    cfg.slurm = {
+      nodes: parseInt(getVal('f-slurm-nodes')) || 1,
+      partition: getVal('f-slurm-partition') || 'gpu',
+      time: getVal('f-slurm-time') || '2:00:00',
+    };
+  }
+
+  // 3D topology (hybrid strategy only)
+  if (cfg.distributed.strategy === 'hybrid') {
+    const ppMode = getVal('f-parallelism-mode') || '2d';
+    cfg.topology = {
+      parallelism_mode: ppMode,
+      data_parallel_size: parseInt(getVal('f-dp-size')) || 2,
+      tensor_parallel_size: parseInt(getVal('f-tp-size')) || 2,
+      pipeline_parallel_size: ppMode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1,
+      tensor_parallel_auto_plan: true,
+    };
+  }
 
   cfg.training = {
     epochs: parseInt(getVal('f-epochs')) || 3,
@@ -3162,10 +3204,53 @@ function onStrategyChange() {
     if (gpuSelect && gpuSelect.value === '1') gpuSelect.value = '2';
   } else if (strategy === 'fsdp') {
     if (gpuSelect && parseInt(gpuSelect.value) < 4) gpuSelect.value = '4';
+  } else if (strategy === 'hybrid') {
+    if (gpuSelect && parseInt(gpuSelect.value) < 4) gpuSelect.value = '4';
   }
+
+  // Show / hide 3D topology section
+  const topoSection = document.getElementById('topology-section');
+  if (topoSection) topoSection.style.display = strategy === 'hybrid' ? '' : 'none';
+  if (strategy === 'hybrid') onTopologyChange();
 
   // Refresh availability display
   updateGpuAvailability();
+}
+
+function onLaunchModeChange() {
+  const mode = getVal('f-launch-mode') || 'torchrun';
+  const slurmSection = document.getElementById('slurm-section');
+  if (slurmSection) slurmSection.style.display = mode === 'slurm' ? '' : 'none';
+}
+
+function onParallelismModeChange() {
+  const mode = getVal('f-parallelism-mode') || '2d';
+  const ppGroup = document.getElementById('fg-pp-size');
+  if (ppGroup) ppGroup.style.display = mode === '3d' ? '' : 'none';
+  onTopologyChange();
+}
+
+function onTopologyChange() {
+  const dp = parseInt(getVal('f-dp-size')) || 1;
+  const tp = parseInt(getVal('f-tp-size')) || 1;
+  const mode = getVal('f-parallelism-mode') || '2d';
+  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
+  const total = dp * tp * pp;
+
+  const hintEl = document.getElementById('fg-topology-hint');
+  const hintText = document.getElementById('topology-hint-text');
+  const gpuSelect = document.getElementById('f-gpu-count');
+
+  if (hintEl && hintText) {
+    hintEl.style.display = '';
+    hintText.textContent = `Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs total. Set GPU Count to ${total}.`;
+  }
+
+  // Auto-sync GPU count
+  if (gpuSelect) {
+    const opt = Array.from(gpuSelect.options).find(o => parseInt(o.value) === total);
+    if (opt) gpuSelect.value = String(total);
+  }
 }
 
 /**

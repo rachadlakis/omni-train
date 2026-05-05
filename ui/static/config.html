@@ -369,11 +369,12 @@
         </div>
         <div class="form-grid">
           <div class="form-group">
-            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel.">?</span></label>
+            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel. hybrid: 2D/3D parallelism (DP × TP × PP).">?</span></label>
             <select id="f-strategy" onchange="onStrategyChange()">
               <option value="none">Solo (Single GPU)</option>
               <option value="ddp">DDP (Data Parallel)</option>
               <option value="fsdp">FSDP (Fully Sharded Data Parallel)</option>
+              <option value="hybrid">Hybrid (2D / 3D Parallelism)</option>
             </select>
           </div>
           <div class="form-group">
@@ -394,6 +395,64 @@
               <option value="true">Enabled</option>
               <option value="false">Disabled</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>Launch Mode <span class="tooltip" data-tip="torchrun: launch locally on this node. SLURM: submit as a cluster batch job via sbatch.">?</span></label>
+            <select id="f-launch-mode" onchange="onLaunchModeChange()">
+              <option value="torchrun">torchrun (local / single-node)</option>
+              <option value="slurm">SLURM (multi-node cluster)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 3D Topology (shown only when strategy = hybrid) -->
+        <div id="topology-section" style="display:none;">
+          <div class="form-section-subtitle">3D Parallelism Topology <span class="tooltip" data-tip="dp × tp × pp must equal GPU Count. Keep tp intra-node (NVLink). pp=1 disables pipeline stages.">?</span></div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Parallelism Mode <span class="tooltip" data-tip="1d: DP only. 2d: DP × TP. 3d: DP × TP × PP.">?</span></label>
+              <select id="f-parallelism-mode" onchange="onParallelismModeChange()">
+                <option value="1d">1D (DP only)</option>
+                <option value="2d" selected>2D (DP × TP)</option>
+                <option value="3d">3D (DP × TP × PP)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Data Parallel Size <span class="tooltip" data-tip="Number of data-parallel replicas">?</span></label>
+              <input type="number" id="f-dp-size" value="2" min="1" onchange="onTopologyChange()">
+            </div>
+            <div class="form-group">
+              <label>Tensor Parallel Size <span class="tooltip" data-tip="Number of tensor-parallel shards per replica (keep intra-node)">?</span></label>
+              <input type="number" id="f-tp-size" value="2" min="1" onchange="onTopologyChange()">
+            </div>
+            <div class="form-group" id="fg-pp-size" style="display:none;">
+              <label>Pipeline Parallel Size <span class="tooltip" data-tip="Number of pipeline stages (1 = disabled)">?</span></label>
+              <input type="number" id="f-pp-size" value="1" min="1" onchange="onTopologyChange()">
+            </div>
+            <div class="form-group full" id="fg-topology-hint" style="display:none;">
+              <div class="fsdp-check-result" style="display:block; margin:0;">
+                <p class="fsdp-reason" id="topology-hint-text"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SLURM Options (shown only when launch_mode = slurm) -->
+        <div id="slurm-section" style="display:none;">
+          <div class="form-section-subtitle">SLURM Job Options <span class="tooltip" data-tip="Configure the sbatch submission parameters for multi-node cluster jobs.">?</span></div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Nodes <span class="tooltip" data-tip="Number of cluster nodes to allocate">?</span></label>
+              <input type="number" id="f-slurm-nodes" value="1" min="1">
+            </div>
+            <div class="form-group">
+              <label>Partition <span class="tooltip" data-tip="SLURM partition/queue name (e.g. gpu, a100)">?</span></label>
+              <input type="text" id="f-slurm-partition" placeholder="e.g. gpu">
+            </div>
+            <div class="form-group">
+              <label>Time Limit <span class="tooltip" data-tip="Maximum wall-clock time in HH:MM:SS format">?</span></label>
+              <input type="text" id="f-slurm-time" placeholder="e.g. 2:00:00">
+            </div>
           </div>
         </div>
       </div>

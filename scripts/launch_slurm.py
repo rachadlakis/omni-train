@@ -4,10 +4,10 @@
 This script generates and submits SLURM jobs for distributed training.
 
 Usage:
-    python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 4 --gpus 8
+    python scripts/launch_slurm.py --config configs/llm_fsdp_mini_project_style.yaml --nodes 4 --gpus 8
 
     # Dry run (print sbatch script without submitting)
-    python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 4 --dry-run
+    python scripts/launch_slurm.py --config configs/llm_fsdp_mini_project_style.yaml --nodes 4 --dry-run
 """
 
 import argparse

@@ -94,7 +94,7 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     strategy = str(distributed.get("strategy", "solo")).lower()
     if strategy == "none":
         strategy = "solo"
-    if strategy not in {"solo", "ddp", "fsdp"}:
+    if strategy not in {"solo", "ddp", "fsdp", "hybrid"}:
         strategy = "solo"
 
     finetune_mode = str(model.get("finetune_mode", "lora")).lower()
@@ -197,6 +197,20 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
         }
         # Override max_length with the model's max_seq_len so data loading uses the right length
         mapped["training"]["max_length"] = mapped["custom_transformer_args"]["max_seq_len"]
+
+    # Forward 3D topology block for hybrid strategy
+    if strategy == "hybrid":
+        topology = raw.get("topology")
+        if not topology and isinstance(distributed.get("topology"), dict):
+            topology = distributed["topology"]
+        if isinstance(topology, dict) and topology:
+            mapped["topology"] = topology
+
+    # Forward launch_mode and slurm config so app.py can dispatch correctly
+    if raw.get("launch_mode"):
+        mapped["launch_mode"] = str(raw["launch_mode"])
+    if isinstance(raw.get("slurm"), dict):
+        mapped["slurm"] = raw["slurm"]
 
     return _deep_merge(base, mapped)
 

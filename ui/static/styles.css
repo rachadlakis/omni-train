@@ -867,6 +867,17 @@ body {
 .form-section h3 .icon.distributed { background: var(--orange-dim); color: var(--orange); }
 .form-section h3 .icon.training { background: var(--green-dim); color: var(--green); }
 
+.form-section-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 20px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
