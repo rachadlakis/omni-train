@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-## 
-
 ## Setup virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
@@ -19,7 +17,6 @@ git config --global user.email "rachadlakis@gmail.com"
 ## Set environment variables
 export HF_TOKEN="${HF_TOKEN:-***REDACTED-HF-TOKEN***}"
 export HF_HUB_DISABLE_XET=1
-
 
 ## activate the virtual environment and run the training script
 source .venv/bin/activate

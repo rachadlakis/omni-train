@@ -29,7 +29,7 @@ training:
   weight_decay: 0.01
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: true                 ## whether to save checkpoints
 
