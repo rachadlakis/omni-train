@@ -1916,6 +1916,14 @@ body {
   word-break: break-word;
 }
 
+.message-modal-body p.validation-summary {
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 .message-modal-footer {
   padding: 16px 20px;
   border-top: 1px solid var(--border);

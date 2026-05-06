@@ -397,7 +397,10 @@ function showMessage(title, text, type = 'info') {
 
   if (iconEl) iconEl.textContent = icons[type] || icons.info;
   if (titleEl) titleEl.textContent = title;
-  if (textEl) textEl.textContent = text;
+  if (textEl) {
+    textEl.textContent = text;
+    textEl.classList.remove('validation-summary');
+  }
   if (modal) modal.classList.add('active');
 }
 
@@ -2430,6 +2433,11 @@ function resetYamlTemplate() {
 }
 
 function parseYaml(yamlStr) {
+  // Use js-yaml when available for accurate, spec-compliant parsing.
+  if (typeof window.jsyaml !== 'undefined') {
+    return window.jsyaml.load(yamlStr) || {};
+  }
+  // Fallback: hand-rolled parser (no js-yaml CDN loaded).
   const lines = yamlStr.split('\n');
   const result = {};
   const stack = [{ obj: result, indent: -1 }];
@@ -2493,26 +2501,119 @@ function parseYaml(yamlStr) {
   return result;
 }
 
-async function validateYaml() {
-  const editor = document.getElementById('yaml-editor');
-  if (!editor) return;
+// ---------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------
 
-  const yamlStr = getYamlEditorValue();
+/**
+ * Format a raw server-side validation error into a clean, readable message.
+ * Strips Python exception class prefixes and trims overly long strings.
+ */
+function formatValidationError(raw) {
+  let msg = String(raw).replace(/^(ValueError|TypeError|KeyError|AttributeError|RuntimeError|Exception):\s*/i, '');
+  // Collapse any nested "caused by" chain to just the outermost message.
+  const firstLine = msg.split('\n')[0].trim();
+  msg = firstLine || msg;
+  if (msg.length > 300) msg = msg.slice(0, 297) + '…';
+  return msg;
+}
+
+/**
+ * Show a rich, field-by-field summary of a successfully validated config.
+ * Safely builds the content with textContent (no innerHTML).
+ */
+function showValidationSuccess(cfg) {
+  // Support both UI-format (model/distributed/data) and mini-project format.
+  const model    = (typeof cfg.model === 'object' && cfg.model)    || {};
+  const dist     = (typeof cfg.distributed === 'object' && cfg.distributed) || {};
+  const training = (typeof cfg.training === 'object' && cfg.training) || {};
+  const data     = (typeof cfg.data === 'object' && cfg.data)
+                || (typeof cfg.dataset === 'object' && cfg.dataset) || {};
+
+  const modelName  = model.name        || cfg.model_name          || '—';
+  const strategy   = (dist.strategy    || cfg.strategy            || 'solo').toUpperCase();
+  const gpus       = dist.gpu_count    || cfg.num_gpus            || 1;
+  const epochs     = training.epochs                              || '—';
+  const batchSize  = training.batch_size                          || '—';
+  const lr         = training.learning_rate || training.lr        || '—';
+  const dataName   = data.name         || cfg.dataset?.name       || '—';
+  const ftMode     = model.finetune_mode
+                  || (cfg.peft?.enabled ? (cfg.peft.type || 'lora') : 'full');
+
+  const pad = (s, n) => String(s).padEnd(n);
+  const lines = [
+    `${pad('Model',     12)}${modelName}`,
+    `${pad('Strategy',  12)}${strategy}  ·  ${gpus} GPU${gpus > 1 ? 's' : ''}`,
+    `${pad('Dataset',   12)}${dataName}`,
+    `${pad('Training',  12)}${epochs} epoch(s)  ·  batch ${batchSize}  ·  lr ${lr}`,
+    `${pad('Fine-tune', 12)}${ftMode}`,
+  ];
+
+  const iconEl  = document.getElementById('message-modal-icon');
+  const titleEl = document.getElementById('message-modal-title');
+  const textEl  = document.getElementById('message-modal-text');
+  const modal   = document.getElementById('message-modal');
+
+  if (iconEl)  iconEl.textContent  = 'check';
+  if (titleEl) titleEl.textContent = 'Validation Passed';
+  if (textEl) {
+    textEl.textContent = lines.join('\n');
+    textEl.classList.add('validation-summary');
+  }
+  if (modal) modal.classList.add('active');
+}
+
+async function validateYaml() {
+  const yamlStr = getYamlEditorValue().trim();
+  if (!yamlStr) {
+    showMessage('Empty Configuration', 'The editor is empty. Please enter a YAML configuration.', 'warning');
+    return;
+  }
+
+  // Button loading state
+  const btn = document.querySelector('.yaml-action-bar .btn-secondary');
+  const origLabel = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Validating…'; }
+
+  // ── Step 1: client-side YAML syntax check ───────────────────────────────
+  let cfg;
   try {
-    const cfg = parseYaml(yamlStr);
+    cfg = parseYaml(yamlStr);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    // js-yaml provides e.mark with 0-based line/column
+    const loc = (e.mark != null)
+      ? ` at line ${e.mark.line + 1}, column ${e.mark.column + 1}`
+      : '';
+    const reason = e.reason || e.message || 'Syntax error';
+    showMessage('YAML Syntax Error', `${reason}${loc}`, 'error');
+    return;
+  }
+
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    showMessage('Invalid YAML', 'The configuration must be a YAML mapping (key: value pairs), not a scalar or list.', 'error');
+    return;
+  }
+
+  // ── Step 2: server-side schema + logic validation ────────────────────────
+  try {
     const res = await fetch('/api/config/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfg }),
     });
     const data = await res.json();
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+
     if (data.valid) {
-      showMessage('Validation Successful', 'Configuration is valid!', 'success');
+      showValidationSuccess(cfg);
     } else {
-      showMessage('Validation Error', data.error || 'Unknown error', 'error');
+      showMessage('Validation Error', formatValidationError(data.error || 'Unknown error'), 'error');
     }
   } catch (e) {
-    showMessage('YAML Parsing Error', e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    showMessage('Connection Error', 'Could not reach the server. Make sure the app is running.', 'error');
   }
 }
 
