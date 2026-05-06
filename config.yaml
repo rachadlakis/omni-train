@@ -25,8 +25,8 @@ training:
   max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
   gradient_checkpointing: false ## whether to use gradient checkpointing
-  warmup_steps: 100
-  weight_decay: 0.01
+  warmup_steps: 100             ## Number of warmup steps for learning rate scheduler
+  weight_decay: 0.01            ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
 num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
@@ -72,37 +72,18 @@ wandb:
   wandb_entity: "dist-train"          ## your W&B entity (username or team)
   wandb_project: "dist-train-project" ## your W&B project name
   
-
-
-## If 3d parallelism is 
-
-## Device Mesh / 3D Parallelism configuration.
-## This file is a COMPANION to config.yaml — it is NOT merged into config.yaml.
-
-##
-## Setting any size to null lets the runtime pick a safe default:
-##
-##   num_gpus  →  auto default
-##   ────────────────────────────────────────────────────────
-##    1  GPU   →  dp=1,  tp=1, pp=1   (solo, no mesh)
-##    2  GPUs  →  dp=2,  tp=1, pp=1   (pure FSDP/DDP)
-##    4  GPUs  →  dp=4,  tp=1, pp=1   (pure FSDP/DDP)
-##    8  GPUs  →  dp=4,  tp=2, pp=1   (FSDP + intra-node TP)
-##   16  GPUs  →  dp=4,  tp=2, pp=2   (full 3D)
-##   32  GPUs  →  dp=8,  tp=2, pp=2   (full 3D)
-##   64  GPUs  →  dp=16, tp=2, pp=2   (full 3D)
-##
-## Rules:
-##   • dp_size × tp_size × pp_size MUST equal num_gpus (validated at startup).
-##   • TP requires NVLink — keep tp_size within a single node (≤ 8 GPUs/node).
-##   • PP splits the model depth across stages and changes the training loop.
-##   • For pure FSDP: set tp_size=1 and pp_size=1.
-
-# parallelism:
-#   dp_size: null       ## data-parallel replicas              (null = auto)
-#   tp_size: null       ## tensor-parallel shards per replica  (null = auto)
-#   pp_size: null       ## pipeline stages                     (null = auto)
-
-#   ## Pipeline settings — only relevant when pp_size > 1
-#   n_microbatches: 4   ## number of micro-batches per global step
-#   pp_schedule: 1f1b   ## schedule: gpipe | 1f1b
+  
+## --------------------------TO ADD ---------------------------------------------------####
+## To add multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
+multi_dimensional_parallelism:  
+  enabled: false                   ## whether to use multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
+  dp_enabled: false   ## whether to use data parallelism (FSDP/DDP) — must be enabled for TP and PP
+  tp_enabled: false   ## whether to use tensor parallelism
+  pp_enabled: false   ## whether to use pipeline parallelism
+  dp_size: 0
+  tp_size: 0          ## number of tensor parallel shards (e.g. 2, 4, 8)
+  pp_size: 0        ## number of pipeline stages (e.g. 2, 4)
+  device_mesh_shape: [2, 2]        ## shape of the device mesh for 3D parallelism (e.g. [dp, tp, pp] = [4, 2, 2])
+  n_microbatches: 4   ## number of micro-batches per global step (only relevant when pp_size > 1)
+  pp_schedule: 1f1b   ## pipeline schedule: gpipe or 1f1b
+## -----------------------------------------------------------------------------------####

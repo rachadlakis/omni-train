@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Omni-Train — 1-Minute Pitch</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0d1117;
+    --surface: #161b22;
+    --border:  #30363d;
+    --accent:  #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #f78166;
+    --accent4: #d2a8ff;
+    --accent5: #ffa657;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+  }
+
+  html { font-size: 20px; }
+  html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  /* ── Deck ── */
+  .deck { width: 100vw; height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 60px 72px 40px;
+    animation: fadeIn 0.3s ease;
+  }
+  .slide.active { display: flex; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Topbar ── */
+  .topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 48px;
+    background: rgba(22,27,34,0.95);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    z-index: 300;
+    backdrop-filter: blur(8px);
+  }
+  .topbar-brand { font-weight: 700; font-size: 0.9rem; color: var(--accent); letter-spacing: -0.01em; }
+  .topbar-timer { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .nav { display: flex; gap: 8px; align-items: center; }
+  .nav button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 14px;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 500;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .nav button:hover { background: #21262d; border-color: var(--accent); }
+  .nav button:disabled { opacity: 0.3; cursor: default; }
+
+  /* ── Progress bar ── */
+  .progress-bar {
+    position: fixed;
+    top: 48px; left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent4));
+    transition: width 0.3s ease;
+    z-index: 200;
+  }
+
+  /* ── Slide header ── */
+  .slide-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+    padding-bottom: 18px;
+    position: relative;
+  }
+  .slide-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent) 0%, var(--accent4) 40%, transparent 100%);
+  }
+  .slide-icon-wrap {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #1a3a5c, #2d1a3a);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.35rem; flex-shrink: 0;
+  }
+  .slide-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .slide-subtitle {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 3px;
+    line-height: 1.4;
+  }
+  .slide-num {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* ── Title slide ── */
+  .title-slide {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    background: radial-gradient(ellipse at 50% 40%, #0d2137 0%, var(--bg) 70%);
+  }
+  .title-slide .logo { font-size: 3.2rem; margin-bottom: 20px; }
+  .title-slide h1 {
+    font-size: 3rem;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent4) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 14px;
+  }
+  .title-slide .tagline {
+    font-size: 1.05rem;
+    color: var(--muted);
+    max-width: 500px;
+    line-height: 1.65;
+    margin-bottom: 32px;
+  }
+  .pill-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    justify-content: center; margin-bottom: 32px;
+  }
+  .pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .title-slide .meta { font-size: 0.75rem; color: var(--muted); }
+
+  /* ── 3-column card row ── */
+  .col3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+  }
+  .col2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .card-blue::before   { background: linear-gradient(90deg, var(--accent), #1a3a5c); }
+  .card-green::before  { background: linear-gradient(90deg, var(--accent2), #1a3a2a); }
+  .card-red::before    { background: linear-gradient(90deg, var(--accent3), #3a1a1a); }
+  .card-purple::before { background: linear-gradient(90deg, var(--accent4), #2d1a3a); }
+  .card-orange::before { background: linear-gradient(90deg, var(--accent5), #3a2a1a); }
+
+  .card-icon { font-size: 1.8rem; margin-bottom: 10px; }
+  .card-title {
+    font-size: 0.92rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 10px;
+    line-height: 1.25;
+  }
+  .card-body {
+    font-size: 0.8rem;
+    color: #c9d1d9;
+    line-height: 1.6;
+    flex: 1;
+  }
+  .card-body code {
+    font-size: 0.75em;
+    background: #1f2937;
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: var(--accent);
+  }
+  .card-body strong { color: var(--text); }
+
+  /* ── Stat pills inside cards ── */
+  .stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    margin-top: 12px;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+  }
+  .stat-value { font-size: 1.4rem; font-weight: 800; }
+  .stat-label { font-size: 0.7rem; color: var(--muted); }
+  .sv-blue   { color: var(--accent); }
+  .sv-green  { color: var(--accent2); }
+  .sv-red    { color: var(--accent3); }
+  .sv-orange { color: var(--accent5); }
+
+  /* ── Bullet list ── */
+  .bullets {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    margin-top: 10px;
+  }
+  .bullets li {
+    display: flex;
+    gap: 10px;
+    font-size: 0.8rem;
+    color: #c9d1d9;
+    line-height: 1.55;
+  }
+  .bullets li .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 7px;
+  }
+  .bullets li code { font-size: 0.75em; background: #1f2937; border-radius: 3px; padding: 1px 4px; color: var(--accent); }
+
+  /* ── Code block ── */
+  .codeblock {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.73rem;
+    line-height: 1.85;
+    white-space: pre;
+    margin-top: 12px;
+    flex-shrink: 0;
+  }
+  .cm  { color: var(--muted); }
+  .kw  { color: var(--accent2); }
+  .str { color: var(--accent5); }
+  .out { color: var(--accent); }
+
+  /* ── Thank You ── */
+  .thankyou-slide {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    background: radial-gradient(ellipse at 50% 40%, #0d2137 0%, var(--bg) 70%);
+  }
+  .thankyou-slide .ty-logo { font-size: 2.8rem; margin-bottom: 16px; }
+  .thankyou-slide h2 {
+    font-size: 2.6rem;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent4) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+  }
+  .thankyou-slide .ty-sub {
+    font-size: 0.92rem;
+    color: var(--muted);
+    max-width: 460px;
+    line-height: 1.65;
+    margin-bottom: 28px;
+  }
+  .ty-links {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    justify-content: center; margin-bottom: 28px;
+  }
+  .ty-link {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    border-radius: 8px;
+    padding: 7px 18px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color 0.15s;
+  }
+  .ty-link:hover { border-color: var(--accent); }
+  .ty-made { font-size: 0.72rem; color: var(--muted); margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- ═══  SLIDE 0 — TITLE  ═══ -->
+  <div class="slide title-slide active" id="s0">
+    <div class="logo">⚡</div>
+    <h1>Omni-Train</h1>
+    <p class="tagline">
+      One YAML file. Any model. Any parallelism strategy.<br>
+      From single-GPU to N-GPUs — DDP, FSDP, HSDP — no boilerplate.
+    </p>
+    <div class="pill-row">
+      <span class="pill">PyTorch FSDP2</span>
+      <span class="pill">DDP</span>
+      <span class="pill">LoRA / QLoRA</span>
+      <span class="pill">NCCL</span>
+      <span class="pill">Web UI</span>
+    </div>
+    <p class="meta">← → to navigate</p>
+  </div>
+
+  <!-- ═══  SLIDE 1 — THE PROBLEM  ═══ -->
+  <div class="slide" id="s1">
+    <div class="slide-header">
+      <div class="slide-icon-wrap">💀</div>
+      <div>
+        <div class="slide-title">The Problem</div>
+        <div class="slide-subtitle">Distributed training is brutally hard — and the hardware math forces you into it</div>
+      </div>
+      <span class="slide-num">1 / 3</span>
+    </div>
+
+    <div class="col3">
+
+      <div class="card card-red">
+        <div class="card-icon">🧠</div>
+        <div class="card-title">Models Don't Fit</div>
+        <div class="card-body">
+          LLaMA-2 7B full fine-tune needs <strong>≈96 GB</strong> of VRAM — weights + gradients + AdamW states. An A100 80 GB <em>cannot</em> hold it alone.
+          <div class="stat"><span class="stat-value sv-red">96 GB</span><span class="stat-label">for LLaMA-2 7B</span></div>
+          <div class="stat" style="margin-top:6px;"><span class="stat-value sv-red">560 GB</span><span class="stat-label">for LLaMA-2 70B</span></div>
+        </div>
+      </div>
+
+      <div class="card card-orange">
+        <div class="card-icon">💣</div>
+        <div class="card-title">Silent Failure Modes</div>
+        <div class="card-body">
+          <ul class="bullets">
+            <li><span class="dot" style="background:var(--accent3);"></span><span>Missing env var → entire job <strong>hangs silently</strong></span></li>
+            <li><span class="dot" style="background:var(--accent3);"></span><span>Collective op inside <code>if rank==0</code> → <strong>global deadlock</strong></span></li>
+            <li><span class="dot" style="background:var(--accent3);"></span><span>FSDP wrap order reversed → <strong>gradient corruption</strong>, no error</span></li>
+            <li><span class="dot" style="background:var(--accent3);"></span><span>Wrong <code>reduce_dtype</code> → <strong>NaN loss</strong>, no warning</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card card-purple">
+        <div class="card-icon">📚</div>
+        <div class="card-title">Expertise Overhead</div>
+        <div class="card-body">
+          <ul class="bullets" style="margin-top:0;">
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>NCCL Collectives</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>FSDP Sharding Order</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DCP Checkpointing</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DTensor APIs</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Mixed-Precision Policies</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>RANK vs LOCAL_RANK</strong></span></li>
+          </ul>
+          <p style="font-size:0.75rem;color:var(--muted);margin-top:10px;">— all before writing a single line of training code.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══  SLIDE 2 — THE SOLUTION  ═══ -->
+  <div class="slide" id="s2">
+    <div class="slide-header">
+      <div class="slide-icon-wrap">🚀</div>
+      <div>
+        <div class="slide-title">The Solution — Omni-Train</div>
+        <div class="slide-subtitle">Everything above is handled for you — configure, launch, train</div>
+      </div>
+      <span class="slide-num">2 / 3</span>
+    </div>
+
+    <div class="col2">
+
+      <!-- Left: config snippet -->
+      <div class="card card-blue" style="overflow:hidden;">
+        <div class="card-title">One Config File → Any Setup</div>
+        <div class="card-body" style="flex:0 0 auto;">Switch strategy, model, or GPU count with a single field — no code changes.</div>
+        <div class="codeblock" style="flex:1;overflow-y:auto;font-size:0.68rem;"><span class="cm">## config.yaml — the only file you touch</span>
+
+<span class="kw">model_name</span>: facebook/opt-125m  <span class="cm"># meta-llama/Llama-2-7b | Meta-Llama-3-70B | gpt2</span>
+<span class="kw">model_type</span>: llm                 <span class="cm"># llm | seq2seq | vision | yolo | vlm | encoder</span>
+<span class="cm">## vision (ViT)   : google/vit-base-patch16-224, google/vit-large-patch16-224</span>
+<span class="cm">## vision (ResNet): microsoft/resnet-18, microsoft/resnet-50</span>
+<span class="cm">## custom         : custom_transformer</span>
+
+<span class="kw">dataset</span>:
+  name:   wikitext            <span class="cm"># wikitext | ptb_text_only | openwebtext | c4</span>
+  subset: wikitext-2-raw-v1
+  split:  train[:2%]          <span class="cm"># how much of the split to use</span>
+
+<span class="kw">training</span>:
+  epochs:                 4
+  batch_size:             16
+  max_length:             64
+  learning_rate:          2e-5
+  gradient_checkpointing: <span class="kw">false</span>
+  warmup_steps:           100
+  weight_decay:           0.01
+
+<span class="kw">strategy</span>:       fsdp         <span class="cm"># solo | ddp | fsdp</span>
+<span class="kw">num_gpus</span>:       1
+<span class="kw">checkpoint_dir</span>: checkpoints
+<span class="kw">save</span>:           <span class="kw">true</span>
+
+<span class="kw">dist_parameters</span>:
+  mixed_precision:      <span class="kw">true</span>
+  param_dtype:          bfloat16
+  reduce_dtype:         float32
+  output_dtype:         bfloat16
+  cast_forward_inputs:  <span class="kw">false</span>
+  distribute_api:       dcp_api   <span class="cm"># dcp_api | dtensor_api</span>
+
+<span class="kw">save_load</span>:
+  resume:             <span class="kw">true</span>
+  resume_path:        <span class="str">""</span>
+  load_model_from_hf: <span class="kw">true</span>
+
+<span class="kw">prefetch</span>:
+  explicit: <span class="kw">true</span>
+  forward:  2
+  backward: 2
+
+<span class="kw">peft</span>:                           <span class="cm">## Parameter Efficient Fine-Tuning</span>
+  enabled:        <span class="kw">true</span>
+  type:           lora            <span class="cm"># lora | qlora</span>
+  r:              8               <span class="cm"># rank: 4 | 8 | 16 | 64</span>
+  alpha:          16
+  dropout:        0.05
+  target_modules: all-linear      <span class="cm"># or ["q_proj","k_proj","v_proj","o_proj"]</span>
+  bias:           none            <span class="cm"># none | all | lora_only</span>
+
+<span class="kw">quantization</span>:
+  enabled:      <span class="kw">false</span>            <span class="cm"># true → QLoRA</span>
+  bits:         4                 <span class="cm"># 4 or 8</span>
+  quant_type:   nf4               <span class="cm"># nf4 | fp4</span>
+  compute_dtype: bfloat16
+  double_quant: <span class="kw">true</span>
+
+<span class="kw">wandb</span>:
+  wandb_log_with_train: <span class="kw">false</span>
+  wandb_entity:         <span class="str">"dist-train"</span>
+  wandb_project:        <span class="str">"dist-train-project"</span>
+
+<span class="cm">## Device Mesh / 3D Parallelism (optional)</span>
+<span class="cm">##   1  GPU  → dp=1, tp=1, pp=1  (solo)</span>
+<span class="cm">##   2  GPUs → dp=2, tp=1, pp=1  (pure FSDP/DDP)</span>
+<span class="cm">##   8  GPUs → dp=4, tp=2, pp=1  (FSDP + intra-node TP)</span>
+<span class="cm">##  16  GPUs → dp=4, tp=2, pp=2  (full 3D)</span>
+<span class="cm">##  dp_size × tp_size × pp_size MUST equal num_gpus</span>
+<span class="cm"># parallelism:</span>
+<span class="cm">#   dp_size: null   ## data-parallel replicas       (null = auto)</span>
+<span class="cm">#   tp_size: null   ## tensor-parallel shards        (null = auto)</span>
+<span class="cm">#   pp_size: null   ## pipeline stages               (null = auto)</span>
+<span class="cm">#   n_microbatches: 4</span>
+<span class="cm">#   pp_schedule: 1f1b   ## gpipe | 1f1b</span>
+
+<span class="cm">## then just:</span>
+<span class="out">bash launch.sh</span></div>
+      </div>
+
+      <!-- Right: feature bullets -->
+      <div style="display:flex;flex-direction:column;gap:14px;min-height:0;">
+
+        <div class="card card-green" style="flex:1;overflow:hidden;">
+          <div class="card-title">What It Handles Automatically</div>
+          <ul class="bullets" style="margin-top:0;overflow-y:auto;flex:1;padding-right:4px;">
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>FSDP2 sharding</strong> — meta-device init, leaf-first wrap order, all-gather / reduce-scatter, mixed-precision policy</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DDP</strong> — per-rank model load, all-reduce gradient sync, rank-0 checkpoint write</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>LoRA / QLoRA</strong> — PEFT adapter injection, 4-bit BitsAndBytes nf4/fp4, k-bit training prep, optional double quantization</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Checkpointing</strong> — DCP API (<code>broadcast_from_rank0</code>) and DTensor API; safe resume with run-tag validation</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Explicit prefetching</strong> — configurable forward/backward prefetch depth overlaps all-gather with compute</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Gradient checkpointing</strong> — one flag discards and recomputes activations, saving 10–20 GB on long sequences</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Rank-0 HF download + barrier</strong> — only rank 0 hits the network; all others wait then load the local seed</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>W&amp;B monitoring</strong> — opt-in loss curves, GPU memory snapshots, and per-rank diagnostics via <code>all_gather_object</code></span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>20+ architectures</strong> — LLMs, Vision CNNs, YOLO, VLMs, embedding models — one <code>model_type</code> field</span></li>
+          </ul>
+        </div>
+
+        <div class="card card-purple" style="flex:0 0 auto;">
+          <div class="card-title">Web UI / CLI + yaml file</div>
+          <div class="card-body">
+            <code>bash ui/launch_ui.sh</code> → visual YAML editor at <code>http://127.0.0.1:8787</code>. Toggle LoRA, pick strategy, click Launch — live logs stream in the browser.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══  SLIDE 3 — DEMO  ═══ -->
+  <div class="slide thankyou-slide" id="s3">
+    <div class="ty-logo">🎬</div>
+    <h2>Live Demo</h2>
+    <p class="ty-sub">
+      RunPod — Multi-GPU<br>
+      DDP · FSDP · LoRA · QLoRA
+    </p>
+    <div class="pill-row">
+      <span class="pill">PyTorch FSDP2</span>
+      <span class="pill">DDP</span>
+      <span class="pill">LoRA / QLoRA</span>
+      <span class="pill">NCCL</span>
+      <span class="pill">DCP &amp; DTensor</span>
+      <span class="pill">Web UI</span>
+    </div>
+  </div>
+
+</div><!-- /.deck -->
+
+<!-- Top bar -->
+<div class="topbar">
+  <span class="topbar-brand">⚡ Omni-Train</span>
+  <div class="nav">
+    <button id="btnPrev" onclick="navigate(-1)" disabled>← Prev</button>
+    <button id="btnNext" onclick="navigate(1)">Next →</button>
+  </div>
+</div>
+
+<!-- Progress bar -->
+<div class="progress-bar" id="progress"></div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total  = slides.length;
+  let   cur    = 0;
+
+  function showSlide(n) {
+    slides[cur].classList.remove('active');
+    cur = (n + total) % total;
+    slides[cur].classList.add('active');
+    document.getElementById('progress').style.width = ((cur / (total - 1)) * 100) + '%';
+    document.getElementById('btnPrev').disabled = cur === 0;
+    document.getElementById('btnNext').disabled = cur === total - 1;
+  }
+
+  function navigate(dir) { showSlide(cur + dir); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') navigate(+1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')  navigate(-1);
+  });
+
+
+</script>
+</body>
+</html>

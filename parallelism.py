@@ -20,7 +20,6 @@ import torch.distributed as dist
 from dataclasses import dataclass, field
 from torch.distributed.device_mesh import init_device_mesh, DeviceMesh
 
-
 # ---------------------------------------------------------------------------
 # Auto-detection table
 # Chosen to keep TP intra-node (NVLink) and minimise the PP bubble.
