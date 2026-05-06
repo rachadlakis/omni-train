@@ -20,9 +20,9 @@ dataset:
 ## llm    : wikitext, ptb_text_only, openwebtext, c4
 
 training:
-  epochs: 8                     ## Number of epochs to train
+  epochs: 4                     ## Number of epochs to train
   batch_size: 16                ## Batch size for training 
-  max_length: 64               ## Not used for vision models
+  max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
   gradient_checkpointing: false ## whether to use gradient checkpointing
   warmup_steps: 100
@@ -31,10 +31,10 @@ training:
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
 num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
-save: true                 ## whether to save checkpoints
+save: true                  ## whether to save checkpoints
 
 dist_parameters:
-  mixed_precision: true      ## Use Mixed Precision? 
+  mixed_precision: true       ## Use Mixed Precision? 
   param_dtype: bfloat16       ## what dtype to use for parameters?  
   reduce_dtype: float32       ## what dtype to use for reduction?  
   output_dtype: bfloat16      ## what dtype to use for output? 
@@ -42,7 +42,7 @@ dist_parameters:
   distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
 
 save_load:
-  resume: true             ## whether to resume from a checkpoint
+  resume: true              ## whether to resume from a checkpoint
   resume_path: ""           ## path to checkpoint to resume from
   load_model_from_hf: true  ## whether to load  from Hugging Face
 

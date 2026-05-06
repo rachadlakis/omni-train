@@ -114,13 +114,14 @@ def setup_dist_process_group():
     try:
         rank = int(os.environ.get("RANK", "0"))
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-
         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
 
-        dist.init_process_group(backend=BACKEND)
-
         if torch.cuda.is_available():
-            torch.cuda.set_device(local_rank)  # ✅ only once, correct form
+            device = torch.device(f"cuda:{local_rank}")
+            torch.cuda.device(device)
+            dist.init_process_group(backend=BACKEND, device_id=device)
+        else:
+            dist.init_process_group(backend=BACKEND)
 
         print_on_rank_0(
             rank,
