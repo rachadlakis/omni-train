@@ -25,7 +25,13 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
             sampler = None
             shuffle = True
             if use_distributed_sampler:
-                sampler = DistributedSampler(tensor_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+                sampler = DistributedSampler(
+                    tensor_dataset, 
+                    num_replicas=world_size, 
+                    rank=rank, 
+                    shuffle=True,
+                    drop_last=True,  # drop last to ensure even batches across ranks
+                )
                 shuffle = False
 
             num_workers = 0  # TensorDataset doesn't need workers
@@ -36,6 +42,7 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
                 shuffle=shuffle,
                 num_workers=num_workers,
                 pin_memory=torch.cuda.is_available(),
+                drop_last=True,  # ensure all batches are the same size across ranks
             )
             print_on_rank_0(rank, f"Synthetic DataLoader ready | batches per rank: {len(dataloader)} | batch size: {batch_size}")
             return dataloader
@@ -91,17 +98,20 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
                 num_replicas=world_size,
                 rank=rank,
                 shuffle=True,
+                drop_last=True,
             )
             shuffle = False
 
-        num_workers = min(4, os.cpu_count() // world_size) if os.cpu_count() else 2
+        # num_workers = min(4, os.cpu_count() // world_size) if os.cpu_count() else 2
+        num_workers = max(1, min(4, (os.cpu_count() or 1) // world_size))
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
             sampler=sampler,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=torch.cuda.is_available()
+            pin_memory=torch.cuda.is_available(),
+            drop_last=True
             )
         print_on_rank_0(rank, f"DataLoader ready | batches per rank: {len(dataloader)} | batch size: {batch_size}")
         if use_distributed_sampler:

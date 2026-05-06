@@ -180,6 +180,8 @@ def main(args):
 
         elif args.strategy == "fsdp":
             model, checkpointer = apply_fsdp(local_rank, rank, device, args)
+            if dist.is_initialized():
+                dist.barrier()
 
         elif args.strategy == "solo":
             model = apply_solo(device, rank, args)
@@ -194,7 +196,7 @@ def main(args):
 
         ## Create the optimizer (AdamW) for trainable model parameters.
         optimizer = torch.optim.AdamW(
-            trainable_params,
+            model.parameters(), 
             lr=args.learning_rate,
             weight_decay=args.weight_decay,
         )
@@ -273,6 +275,8 @@ def main(args):
         print_banner_on_rank_0(rank, "TRAINING")
         model.train()
         losses = []
+        if dist.is_initialized():
+            dist.barrier()
 
         for epoch in range(args.epochs):
             print_on_rank_0(rank, f"Starting Epoch {epoch+1}/{args.epochs}", "🔁")
@@ -316,7 +320,7 @@ def main(args):
                     loss.backward()
 
                     if args.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                     
                     optimizer.step()
                     if scheduler is not None:
