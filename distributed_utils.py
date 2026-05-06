@@ -307,17 +307,21 @@ def _apply_peft_quantization(model, args, rank):
     quantized = getattr(args, "quantization_enabled", False)
     peft_enabled = getattr(args, "peft_enabled", False)
 
-    if quantized:
+    if quantized and peft_enabled:
+        # prepare_model_for_kbit_training freezes all base weights so only LoRA adapters
+        # are trained. Only call it when PEFT is actually being applied; for 8-bit full
+        # fine-tune we leave the weights trainable.
         from peft import prepare_model_for_kbit_training
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", True))
         )
         print_on_rank_0(rank, "Prepared quantized model for k-bit training", "🔧")
-    
-    elif bool(getattr(args, "gradient_checkpointing", True)) and hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
-        print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
+
+    if bool(getattr(args, "gradient_checkpointing", True)) and hasattr(model, "gradient_checkpointing_enable"):
+        if not (quantized and peft_enabled):  # already handled above via prepare_model_for_kbit_training
+            model.gradient_checkpointing_enable()
+            print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
 
     if peft_enabled:
         from peft import LoraConfig, TaskType, get_peft_model

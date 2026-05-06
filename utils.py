@@ -290,18 +290,16 @@ def build_args(cfg):
             raise ValueError("QLoRA requires quantization.bits=4")
 
     if args.quantization_enabled and not args.peft_enabled:
-        raise ValueError("Quantization-aware training in this project currently requires peft.enabled=true")
+        if args.quantization_bits == 4:
+            raise ValueError("4-bit quantization requires peft.enabled=true (use QLoRA for 4-bit)")
+        # 8-bit (LLM.int8) is compatible with full fine-tuning
 
     if args.strategy == "fsdp" and args.quantization_enabled:
-        print("\n" + "=" * 60)
-        print("  Config note: FSDP + bitsandbytes quantization")
-        print("=" * 60)
-        print("  bitsandbytes 4-bit/8-bit layers cannot be sharded by FSDP.")
-        print("  Pick one of these options in your config:\n")
-        print("    strategy: ddp          keep QLoRA, switch to DDP")
-        print("    quantization: false    keep FSDP, drop quantization")
-        print("=" * 60 + "\n")
-        sys.exit(1)
+        raise ValueError(
+            "FSDP + bitsandbytes quantization is not supported: "
+            "bitsandbytes 4-bit/8-bit layers cannot be sharded by FSDP. "
+            "Use strategy=ddp to keep quantization, or set quantization.enabled=false to keep FSDP."
+        )
 
     # --------------------------------------------------
     # PREFETCH
@@ -332,8 +330,8 @@ def build_args(cfg):
     # --------------------------------------------------
     wb = cfg["wandb"]
     args.wandb_log_with_train = to_bool(wb.get("wandb_log_with_train", True))
-    args.wandb_entity = wb.get("wandb_entity", "fsdp-mini-project")
-    args.wandb_project = wb.get("wandb_project", "fsdp-mini-project") 
+    args.wandb_entity = wb.get("wandb_entity", "dist-train-project")
+    args.wandb_project = wb.get("wandb_project", "dist-train-project") 
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
     return args

@@ -809,7 +809,7 @@ function onFinetuneModeChange() {
     setVal('f-quant-bits', '4');
     toggle('tr-quant-bits', true);
     toggle('tr-quantize', false);
-  } else if (m === 'lora' && supportsQuantization) {
+  } else if ((m === 'lora' || m === 'full') && supportsQuantization) {
     toggle('tr-quantize', true);
     onQuantizeChange();
   } else {
@@ -822,7 +822,7 @@ function onFinetuneModeChange() {
 
 function onQuantizeChange() {
   const finetuneMode = getVal('f-finetune-mode');
-  if (finetuneMode !== 'lora') {
+  if (finetuneMode !== 'lora' && finetuneMode !== 'full') {
     const quantizeElForce = document.getElementById('f-quantize');
     if (quantizeElForce) quantizeElForce.checked = false;
     toggle('tr-quant-bits', false);
@@ -832,6 +832,17 @@ function onQuantizeChange() {
   const quantizeEl = document.getElementById('f-quantize');
   const q = quantizeEl ? quantizeEl.checked : false;
   toggle('tr-quant-bits', q);
+
+  // Full fine-tune only supports 8-bit (4-bit requires PEFT/QLoRA)
+  const bitsSelect = document.getElementById('f-quant-bits');
+  if (bitsSelect) {
+    if (finetuneMode === 'full' && q) {
+      setVal('f-quant-bits', '8');
+      Array.from(bitsSelect.options).forEach(opt => { opt.disabled = opt.value !== '8'; });
+    } else {
+      Array.from(bitsSelect.options).forEach(opt => { opt.disabled = false; });
+    }
+  }
 }
 
 function syncGpuOptionsWithStrategy() {
@@ -2280,8 +2291,8 @@ quantization:
 # ===================== LOGGING (W&B) =====================
 wandb:
   wandb_log_with_train: false        # Enable Weights & Biases logging
-  wandb_entity: "fsdp-mini-project"  # W&B entity (user or team)
-  wandb_project: "fsdp-mini-project" # W&B project name
+  wandb_entity: "dist-train-project"  # W&B entity (user or team)
+  wandb_project: "dist-train-project" # W&B project name
 `;
 }
 
@@ -2339,8 +2350,8 @@ function configToYaml(cfg) {
   const doubleQuant = cfg.quantization?.double_quant ?? true;
 
   const wandbLog = cfg.wandb?.wandb_log_with_train ?? false;
-  const wandbEntity = cfg.wandb?.wandb_entity || 'fsdp-mini-project';
-  const wandbProject = cfg.wandb?.wandb_project || 'fsdp-mini-project';
+  const wandbEntity = cfg.wandb?.wandb_entity || 'dist-train-project';
+  const wandbProject = cfg.wandb?.wandb_project || 'dist-train-project';
 
   return `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl
 
