@@ -21,15 +21,21 @@ dist-train-project/
 ├── config.yaml           # All training settings
 ├── distributed_utils.py  # DDP / FSDP setup, mixed precision, prefetching
 ├── checkpoint.py         # Checkpoint save/load (DCP & DTensor APIs)
+├── parallelism.py        # Parallelism helpers (TP, PP, hybrid strategies)
 ├── data.py               # Dataset loading, tokenization, DistributedSampler
 ├── utils.py              # Terminal loss plot, config formatting
 ├── model.py              # Optional custom model definitions
 ├── launch.sh             # Launcher (reads config.yaml, calls torchrun)
+├── pytest.ini            # Pytest configuration
 ├── .env                  # Secrets: HF_TOKEN, WANDB_API_KEY
 ├── configs/              # Example YAML configs (LLM, CNN, LoRA, FSDP, etc.)
-├── scripts/              # SLURM launchers
+├── scripts/              # SLURM launchers and setup utilities
+├── tests/                # Unit and smoke test suite
 ├── ui/                   # Web UI (FastAPI)
-└── Documentation/        # GUIDE.md, TECHNICAL.md
+├── images/               # Project images and assets
+├── research/             # Research notes and references
+├── site/                 # Static site files
+└── Documentation/        # GUIDE.md, TECHNICAL.md, SCRIPT.md
 ```
 
 ---
@@ -55,7 +61,7 @@ pip install -r requirements.txt
 echo "HF_TOKEN=hf_your_token_here" > .env
 
 # 4. Launch (reads strategy and GPU count from config.yaml)
-bash launch.sh
+bash scripts/launch.sh
 ```
 
 ---
@@ -133,10 +139,12 @@ dist-train-project/
 ├── config.yaml               # Central configuration file
 ├── distributed_utils.py      # Distributed setup, DDP/FSDP wrappers, memory profiling
 ├── checkpoint.py             # Checkpoint save/load (DCP & DTensor APIs)
+├── parallelism.py            # Parallelism helpers (TP, PP, hybrid strategies)
 ├── data.py                   # Dataset downloading, tokenization, DistributedSampler
 ├── utils.py                  # Utilities: terminal loss plot, config formatting
 ├── model.py                  # Optional custom model definitions
 ├── launch.sh                 # Launcher script (reads config.yaml, calls torchrun)
+├── pytest.ini                # Pytest configuration
 ├── .env                      # Secrets (HF_TOKEN, WANDB_API_KEY)
 ├── configs/                  # Example YAML configurations per use case
 │   ├── cnn_*.yaml
@@ -145,14 +153,28 @@ dist-train-project/
 │   ├── detection_*.yaml
 │   └── embedding_*.yaml
 ├── scripts/
-│   ├── launch.sh             # Alternative launcher (mirrors root launch.sh)
+│   ├── launch.sh             # Launcher script
 │   ├── launch_slurm.py       # Python SLURM job launcher
-│   └── slurm_train.sh        # SLURM batch script template
+│   ├── setup_env.py          # Environment setup helper
+│   ├── slurm_train.sh        # SLURM batch script template
+│   └── start_runpod.sh       # RunPod startup script
+├── tests/
+│   ├── conftest.py           # Pytest fixtures and shared setup
+│   ├── test_config_validation.py
+│   ├── test_config_combinations.py
+│   ├── test_helpers.py
+│   ├── test_model.py
+│   └── test_smoke.py         # End-to-end smoke tests (requires GPU)
 ├── ui/
 │   ├── app.py                # FastAPI web UI server
 │   ├── queue.py              # Job queue manager
+│   ├── config_adapter.py     # Config translation layer
+│   ├── launch_ui.sh          # UI launch script
 │   └── static/               # Frontend HTML/CSS/JS
-└── Documentation/            # Detailed reference docs
+├── images/                   # Project images and assets
+├── research/                 # Research notes and references
+├── site/                     # Static site files
+└── Documentation/            # GUIDE.md, TECHNICAL.md, SCRIPT.md
 ```
 
 ---
