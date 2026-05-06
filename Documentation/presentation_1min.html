@@ -348,8 +348,7 @@
     <div class="logo">⚡</div>
     <h1>Omni-Train</h1>
     <p class="tagline">
-      One YAML file. Any model. Any parallelism strategy.<br>
-      From single-GPU to N-GPUs — DDP, FSDP, HSDP — no boilerplate.
+      A framework that eliminates the complexity of training large models across multiple GPUs — Run a distributed training from a single YAML file or from UI
     </p>
     <div class="pill-row">
       <span class="pill">PyTorch FSDP2</span>
@@ -367,47 +366,43 @@
       <div class="slide-icon-wrap">💀</div>
       <div>
         <div class="slide-title">The Problem</div>
-        <div class="slide-subtitle">Distributed training is brutally hard — and the hardware math forces you into it</div>
+        <div class="slide-subtitle">Distributed training is not easy — and the hardware math forces you into it</div>
       </div>
       <span class="slide-num">1 / 3</span>
     </div>
 
-    <div class="col3">
+    <div class="col2">
 
       <div class="card card-red">
         <div class="card-icon">🧠</div>
         <div class="card-title">Models Don't Fit</div>
         <div class="card-body">
-          LLaMA-2 7B full fine-tune needs <strong>≈96 GB</strong> of VRAM — weights + gradients + AdamW states. An A100 80 GB <em>cannot</em> hold it alone.
-          <div class="stat"><span class="stat-value sv-red">96 GB</span><span class="stat-label">for LLaMA-2 7B</span></div>
-          <div class="stat" style="margin-top:6px;"><span class="stat-value sv-red">560 GB</span><span class="stat-label">for LLaMA-2 70B</span></div>
-        </div>
-      </div>
-
-      <div class="card card-orange">
-        <div class="card-icon">💣</div>
-        <div class="card-title">Silent Failure Modes</div>
-        <div class="card-body">
-          <ul class="bullets">
-            <li><span class="dot" style="background:var(--accent3);"></span><span>Missing env var → entire job <strong>hangs silently</strong></span></li>
-            <li><span class="dot" style="background:var(--accent3);"></span><span>Collective op inside <code>if rank==0</code> → <strong>global deadlock</strong></span></li>
-            <li><span class="dot" style="background:var(--accent3);"></span><span>FSDP wrap order reversed → <strong>gradient corruption</strong>, no error</span></li>
-            <li><span class="dot" style="background:var(--accent3);"></span><span>Wrong <code>reduce_dtype</code> → <strong>NaN loss</strong>, no warning</span></li>
+          LLaMA-2 7B full fine-tune needs <strong>≈84 GB</strong> of VRAM. Here's the math:
+          <ul class="bullets" style="margin-top:8px;">
+            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>Weights</strong> — 7B × 2 bytes (bf16) = <strong>14 GB</strong></span></li>
+            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>Gradients</strong> — same shape as weights = <strong>14 GB</strong></span></li>
+            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>AdamW states</strong> — 2 moments × fp32 × 7B = <strong>56 GB</strong></span></li>
           </ul>
+          <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">An A100 80 GB <em>cannot</em> hold it alone — you need to shard across GPUs.</p>
+          <div class="stat"><span class="stat-value sv-red">84 GB</span><span class="stat-label">LLaMA-2 7B (bf16)</span></div>
+          <div class="stat" style="margin-top:6px;"><span class="stat-value sv-red">840 GB</span><span class="stat-label">LLaMA-2 70B (bf16)</span></div>
         </div>
       </div>
 
       <div class="card card-purple">
         <div class="card-icon">📚</div>
-        <div class="card-title">Expertise Overhead</div>
+        <div class="card-title">Expertise Needed</div>
         <div class="card-body">
           <ul class="bullets" style="margin-top:0;">
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>NCCL Collectives</strong></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>FSDP Sharding Order</strong></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DCP Checkpointing</strong></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DTensor APIs</strong></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Mixed-Precision Policies</strong></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>RANK vs LOCAL_RANK</strong></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>torchrun principles</strong> — RANK, LOCAL_RANK, WORLD_SIZE, <code>init_process_group</code>, rendezvous, fault-tolerant elastic launch</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>NCCL Collectives</strong> — AllReduce, ReduceScatter, AllGather, Broadcast…</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DDP</strong> — gradient all-reduce sync, bucket communication, <code>no_sync</code> context, rank-0 checkpoint writes</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Libraries</strong> — PyTorch, Transformers, BitsAndBytes, PEFT, torchvision…</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>FSDP <code>fully_shard</code></strong> — wrap policy, meta-device init, leaf-first order</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DCP / DTensor</strong> — sharded save &amp; load, <code>broadcast_from_rank0</code></span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Mixed precision &amp; dtypes</strong> — param / reduce / output dtype interaction</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Saving / loading sharded models</strong> — rank-consistent state-dict reassembly</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Prefetching</strong> — forward &amp; backward prefetch depth, overlap with compute</span></li>
           </ul>
           <p style="font-size:0.75rem;color:var(--muted);margin-top:10px;">— all before writing a single line of training code.</p>
         </div>
@@ -437,9 +432,6 @@
 
 <span class="kw">model_name</span>: facebook/opt-125m  <span class="cm"># meta-llama/Llama-2-7b | Meta-Llama-3-70B | gpt2</span>
 <span class="kw">model_type</span>: llm                 <span class="cm"># llm | seq2seq | vision | yolo | vlm | encoder</span>
-<span class="cm">## vision (ViT)   : google/vit-base-patch16-224, google/vit-large-patch16-224</span>
-<span class="cm">## vision (ResNet): microsoft/resnet-18, microsoft/resnet-50</span>
-<span class="cm">## custom         : custom_transformer</span>
 
 <span class="kw">dataset</span>:
   name:   wikitext            <span class="cm"># wikitext | ptb_text_only | openwebtext | c4</span>
@@ -459,24 +451,6 @@
 <span class="kw">num_gpus</span>:       1
 <span class="kw">checkpoint_dir</span>: checkpoints
 <span class="kw">save</span>:           <span class="kw">true</span>
-
-<span class="kw">dist_parameters</span>:
-  mixed_precision:      <span class="kw">true</span>
-  param_dtype:          bfloat16
-  reduce_dtype:         float32
-  output_dtype:         bfloat16
-  cast_forward_inputs:  <span class="kw">false</span>
-  distribute_api:       dcp_api   <span class="cm"># dcp_api | dtensor_api</span>
-
-<span class="kw">save_load</span>:
-  resume:             <span class="kw">true</span>
-  resume_path:        <span class="str">""</span>
-  load_model_from_hf: <span class="kw">true</span>
-
-<span class="kw">prefetch</span>:
-  explicit: <span class="kw">true</span>
-  forward:  2
-  backward: 2
 
 <span class="kw">peft</span>:                           <span class="cm">## Parameter Efficient Fine-Tuning</span>
   enabled:        <span class="kw">true</span>
@@ -498,46 +472,41 @@
   wandb_log_with_train: <span class="kw">false</span>
   wandb_entity:         <span class="str">"dist-train"</span>
   wandb_project:        <span class="str">"dist-train-project"</span>
-
-<span class="cm">## Device Mesh / 3D Parallelism (optional)</span>
-<span class="cm">##   1  GPU  → dp=1, tp=1, pp=1  (solo)</span>
-<span class="cm">##   2  GPUs → dp=2, tp=1, pp=1  (pure FSDP/DDP)</span>
-<span class="cm">##   8  GPUs → dp=4, tp=2, pp=1  (FSDP + intra-node TP)</span>
-<span class="cm">##  16  GPUs → dp=4, tp=2, pp=2  (full 3D)</span>
-<span class="cm">##  dp_size × tp_size × pp_size MUST equal num_gpus</span>
-<span class="cm"># parallelism:</span>
-<span class="cm">#   dp_size: null   ## data-parallel replicas       (null = auto)</span>
-<span class="cm">#   tp_size: null   ## tensor-parallel shards        (null = auto)</span>
-<span class="cm">#   pp_size: null   ## pipeline stages               (null = auto)</span>
-<span class="cm">#   n_microbatches: 4</span>
-<span class="cm">#   pp_schedule: 1f1b   ## gpipe | 1f1b</span>
-
-<span class="cm">## then just:</span>
-<span class="out">bash launch.sh</span></div>
+</div>
       </div>
 
       <!-- Right: feature bullets -->
       <div style="display:flex;flex-direction:column;gap:14px;min-height:0;">
 
         <div class="card card-green" style="flex:1;overflow:hidden;">
-          <div class="card-title">What It Handles Automatically</div>
+          <div class="card-title">What Omni-Train Does For You</div>
           <ul class="bullets" style="margin-top:0;overflow-y:auto;flex:1;padding-right:4px;">
             <li><span class="dot" style="background:var(--accent2);"></span><span><strong>FSDP2 sharding</strong> — meta-device init, leaf-first wrap order, all-gather / reduce-scatter, mixed-precision policy</span></li>
             <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DDP</strong> — per-rank model load, all-reduce gradient sync, rank-0 checkpoint write</span></li>
             <li><span class="dot" style="background:var(--accent2);"></span><span><strong>LoRA / QLoRA</strong> — PEFT adapter injection, 4-bit BitsAndBytes nf4/fp4, k-bit training prep, optional double quantization</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Checkpointing</strong> — DCP API (<code>broadcast_from_rank0</code>) and DTensor API; safe resume with run-tag validation</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Explicit prefetching</strong> — configurable forward/backward prefetch depth overlaps all-gather with compute</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Gradient checkpointing</strong> — one flag discards and recomputes activations, saving 10–20 GB on long sequences</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Rank-0 HF download + barrier</strong> — only rank 0 hits the network; all others wait then load the local seed</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>PEFT + FSDP</strong> — LoRA adapters correctly wrapped inside FSDP sharding boundaries; gradients flow through sharded adapters without corruption</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>No setup code needed</strong> — GPU assignment, process coordination, and model loading across ranks are all taken care of automatically</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Mixed precision</strong> — bf16 params, fp32 optimizer states, configurable reduce/output dtypes — no manual casting</span></li>
             <li><span class="dot" style="background:var(--accent2);"></span><span><strong>W&amp;B monitoring</strong> — opt-in loss curves, GPU memory snapshots, and per-rank diagnostics via <code>all_gather_object</code></span></li>
             <li><span class="dot" style="background:var(--accent2);"></span><span><strong>20+ architectures</strong> — LLMs, Vision CNNs, YOLO, VLMs, embedding models — one <code>model_type</code> field</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Single → multi-GPU</strong> — switch from solo to DDP to FSDP by changing one line in the YAML, zero code changes</span></li>
           </ul>
         </div>
 
         <div class="card card-purple" style="flex:0 0 auto;">
-          <div class="card-title">Web UI / CLI + yaml file</div>
+          <div class="card-title">Web UI / CLI + YAML File</div>
           <div class="card-body">
-            <code>bash ui/launch_ui.sh</code> → visual YAML editor at <code>http://127.0.0.1:8787</code>. Toggle LoRA, pick strategy, click Launch — live logs stream in the browser.
+            <strong>Option 1 — CLI:</strong> edit <code>config.yaml</code>, then launch:
+            <div class="codeblock" style="margin-top:8px;font-size:0.68rem;line-height:1.7;">
+<span class="cm"># single GPU</span>
+<span class="out">python train.py --config config.yaml</span>
+
+<span class="cm"># multi-GPU (torchrun)</span>
+<span class="out">bash launch.sh</span>
+
+<span class="cm"># SLURM cluster</span>
+<span class="out">sbatch scripts/slurm_train.sh</span></div>
+            <p style="margin-top:10px;font-size:0.78rem;color:#c9d1d9;"><strong>Option 2 — Web UI:</strong> <code>bash ui/launch_ui.sh</code> → visual YAML editor. Toggle LoRA, pick strategy, click <strong>Launch</strong> — live logs stream in the browser.</p>
           </div>
         </div>
 
