@@ -2059,13 +2059,18 @@ function generateEnvTemplate(keys) {
 
 function showEnvPage() {
   loadFormState();
+  const cfg = buildConfigFromForm();
   localStorage.setItem('yaml_from_form', 'true');
+  localStorage.setItem('omni_yaml_config', JSON.stringify(cfg));
   saveFormState();
   navigateTo('yaml.html');
 }
 
 function proceedToEnvPage() {
+  loadFormState();
+  const cfg = buildConfigFromForm();
   localStorage.setItem('yaml_from_form', 'true');
+  localStorage.setItem('omni_yaml_config', JSON.stringify(cfg));
   saveFormState();
   navigateTo('yaml.html');
 }
@@ -2409,9 +2414,17 @@ function initYamlPage() {
   setupYamlCodeEditor();
 
   if (fromForm) {
-    loadFormState();
-    const cfg = buildConfigFromForm();
-    setYamlEditorValue(configToYaml(cfg));
+    let yamlContent = null;
+    const savedConfig = localStorage.getItem('omni_yaml_config');
+    if (savedConfig) {
+      try {
+        const cfg = JSON.parse(savedConfig);
+        yamlContent = configToYaml(cfg);
+      } catch (e) {
+        console.error('Failed to parse saved config:', e);
+      }
+    }
+    setYamlEditorValue(yamlContent || generateYamlTemplate());
     yamlFromForm = true;
   } else {
     setYamlEditorValue(generateYamlTemplate());
@@ -2422,14 +2435,7 @@ function initYamlPage() {
 function resetYamlTemplate() {
   const editor = document.getElementById('yaml-editor');
   if (!editor) return;
-
-  if (yamlFromForm) {
-    loadFormState();
-    const cfg = buildConfigFromForm();
-    setYamlEditorValue(configToYaml(cfg));
-  } else {
-    setYamlEditorValue(generateYamlTemplate());
-  }
+  setYamlEditorValue(generateYamlTemplate());
 }
 
 function parseYaml(yamlStr) {
@@ -2620,6 +2626,10 @@ async function validateYaml() {
 // Track if we're currently polling on yaml page
 let yamlPollInterval = null;
 
+// Loss tracking for chart
+let epochLossPoints = [];   // [{epoch, loss}] from "Epoch N complete | avg loss: X"
+let stepLossPoints  = [];   // [{step, loss}]  from step-level progress lines
+
 async function startTrainingFromYaml() {
   const editor = document.getElementById('yaml-editor');
   if (!editor) return;
@@ -2632,6 +2642,10 @@ async function startTrainingFromYaml() {
     alert('YAML Parsing Error: ' + e.message);
     return;
   }
+
+  // Reset loss accumulators for this run
+  epochLossPoints = [];
+  stepLossPoints  = [];
 
   startedFromYaml = true;
   const strategy = cfg.distributed?.strategy || 'none';
@@ -2690,6 +2704,32 @@ function startYamlPagePolling() {
         if (data.logs && data.logs.length > 0) {
           const lastLog = data.logs[data.logs.length - 1];
           if (subtitle) subtitle.textContent = lastLog.substring(0, 100);
+
+          // Parse epoch-level losses: "Epoch N complete | avg loss: X.XXXX"
+          for (const line of data.logs) {
+            const em = line.match(/Epoch (\d+) complete \| avg loss: ([\d.]+)/);
+            if (em) {
+              const ep = parseInt(em[1]);
+              const lv = parseFloat(em[2]);
+              if (!epochLossPoints.find(p => p.epoch === ep)) {
+                epochLossPoints.push({ epoch: ep, loss: lv });
+              }
+            }
+          }
+
+          // Parse step-level losses from progress bar lines when no epoch points yet
+          if (epochLossPoints.length === 0) {
+            for (const line of data.logs) {
+              const sm = line.match(/step (\d+)\/\d+ \| batch_loss: [\d.]+ \| avg: ([\d.]+)/);
+              if (sm) {
+                const st = parseInt(sm[1]);
+                const lv = parseFloat(sm[2]);
+                if (!stepLossPoints.find(p => p.step === st)) {
+                  stepLossPoints.push({ step: st, loss: lv });
+                }
+              }
+            }
+          }
 
           // Try to parse epoch progress
           const epochMatch = lastLog.match(/Epoch (\d+)\/(\d+)/);
@@ -2833,10 +2873,107 @@ function extractWandbUrl(logs) {
   return null;
 }
 
+function buildLossChartSvg(points, xKey, xLabel) {
+  if (!points || points.length < 2) return '';
+
+  const W = 460, H = 200;
+  const pad = { top: 18, right: 20, bottom: 44, left: 52 };
+  const iW = W - pad.left - pad.right;
+  const iH = H - pad.top  - pad.bottom;
+
+  const xs = points.map(p => p[xKey]);
+  const ys = points.map(p => p.loss);
+  const xMin = xs[0], xMax = xs[xs.length - 1];
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const yRange = yMax - yMin || 1;
+
+  const px = x => pad.left + ((x - xMin) / (xMax - xMin || 1)) * iW;
+  const py = y => pad.top  + (1 - (y - yMin) / yRange) * iH;
+
+  // Build polyline
+  const pts = points.map(p => `${px(p[xKey]).toFixed(1)},${py(p.loss).toFixed(1)}`).join(' ');
+
+  // Area fill path
+  const areaPath = [
+    `M ${px(xs[0]).toFixed(1)},${(pad.top + iH).toFixed(1)}`,
+    ...points.map(p => `L ${px(p[xKey]).toFixed(1)},${py(p.loss).toFixed(1)}`),
+    `L ${px(xs[xs.length-1]).toFixed(1)},${(pad.top + iH).toFixed(1)}`,
+    'Z'
+  ].join(' ');
+
+  // Y-axis ticks (5 levels)
+  const yTicks = Array.from({length: 5}, (_, i) => yMin + (yRange * i / 4));
+  const yTickLines = yTicks.map(v => {
+    const y = py(v).toFixed(1);
+    return `
+      <line x1="${pad.left}" y1="${y}" x2="${pad.left + iW}" y2="${y}" stroke="#2a2a4a" stroke-width="1"/>
+      <text x="${pad.left - 6}" y="${y}" fill="#888" font-size="9" text-anchor="end" dominant-baseline="middle">${v.toFixed(3)}</text>`;
+  }).join('');
+
+  // X-axis ticks (up to 8)
+  const step = Math.max(1, Math.ceil(points.length / 8));
+  const xTickLines = points.filter((_, i) => i % step === 0 || i === points.length - 1).map(p => {
+    const x = px(p[xKey]).toFixed(1);
+    return `
+      <line x1="${x}" y1="${pad.top + iH}" x2="${x}" y2="${pad.top + iH + 4}" stroke="#555" stroke-width="1"/>
+      <text x="${x}" y="${pad.top + iH + 14}" fill="#888" font-size="9" text-anchor="middle">${p[xKey]}</text>`;
+  }).join('');
+
+  // Dots on data points
+  const dots = points.map(p =>
+    `<circle cx="${px(p[xKey]).toFixed(1)}" cy="${py(p.loss).toFixed(1)}" r="3" fill="#4ade80" stroke="#1a1a2e" stroke-width="1.5"/>`
+  ).join('');
+
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;margin:0 auto;">
+    <defs>
+      <linearGradient id="lossGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"  stop-color="#4ade80" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="#4ade80" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <rect width="${W}" height="${H}" fill="#0d0d1a" rx="8"/>
+    ${yTickLines}
+    ${xTickLines}
+    <path d="${areaPath}" fill="url(#lossGrad)"/>
+    <polyline points="${pts}" fill="none" stroke="#4ade80" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}
+    <text x="${pad.left + iW / 2}" y="${H - 4}" fill="#666" font-size="10" text-anchor="middle">${xLabel}</text>
+    <text x="12" y="${pad.top + iH / 2}" fill="#666" font-size="10" text-anchor="middle" transform="rotate(-90,12,${pad.top + iH / 2})">Loss</text>
+    <text x="${pad.left + iW / 2}" y="12" fill="#aaa" font-size="11" text-anchor="middle" font-weight="600">Training Loss</text>
+  </svg>`;
+}
+
 function showTrainingSuccess(logs = []) {
   const container = document.querySelector('.yaml-page') || document.body;
 
   const wandbUrl = extractWandbUrl(logs);
+
+  // Final pass to catch any epoch losses that arrived in the last batch of logs
+  for (const line of logs) {
+    const em = line.match(/Epoch (\d+) complete \| avg loss: ([\d.]+)/);
+    if (em) {
+      const ep = parseInt(em[1]);
+      const lv = parseFloat(em[2]);
+      if (!epochLossPoints.find(p => p.epoch === ep)) {
+        epochLossPoints.push({ epoch: ep, loss: lv });
+      }
+    }
+  }
+  epochLossPoints.sort((a, b) => a.epoch - b.epoch);
+  stepLossPoints.sort((a, b) => a.step - b.step);
+
+  // Choose which points to chart: prefer epoch-level; fall back to step-level
+  const chartPoints = epochLossPoints.length >= 2 ? epochLossPoints
+                    : stepLossPoints.length  >= 2 ? stepLossPoints
+                    : null;
+  const chartSvg = chartPoints
+    ? buildLossChartSvg(
+        chartPoints,
+        epochLossPoints.length >= 2 ? 'epoch' : 'step',
+        epochLossPoints.length >= 2 ? 'Epoch'  : 'Step'
+      )
+    : '';
 
   const successDiv = document.createElement('div');
   successDiv.id = 'training-error-display';
@@ -2852,12 +2989,13 @@ function showTrainingSuccess(logs = []) {
     z-index: 10000;
     box-shadow: 0 10px 40px rgba(0,0,0,0.5);
     text-align: center;
-    min-width: 320px;
+    min-width: 340px;
+    max-width: 90vw;
   `;
 
   const wandbSection = wandbUrl ? `
-    <div style="margin: 16px 0; padding: 12px 16px; background: rgba(255,149,0,0.08); border: 1px solid rgba(255,149,0,0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; justify-content: center;">
-      <span style="font-size: 20px;">📊</span>
+    <div style="margin: 12px 0; padding: 10px 16px; background: rgba(255,149,0,0.08); border: 1px solid rgba(255,149,0,0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; justify-content: center;">
+      <span style="font-size: 18px;">📊</span>
       <a href="${wandbUrl}" target="_blank" rel="noopener noreferrer"
         style="color: #f59e0b; font-weight: 600; font-size: 13px; text-decoration: none; word-break: break-all;"
         onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
@@ -2865,10 +3003,16 @@ function showTrainingSuccess(logs = []) {
       </a>
     </div>` : '';
 
+  const chartSection = chartSvg ? `
+    <div style="margin: 14px 0 4px 0; border-radius: 8px; overflow: hidden;">
+      ${chartSvg}
+    </div>` : '';
+
   successDiv.innerHTML = `
     <h3 style="color: #27ae60; margin: 0 0 8px 0; font-size: 18px;">✅ Training Completed Successfully!</h3>
     ${wandbSection}
-    <button onclick="closeTrainingError()" style="margin-top: 12px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
+    ${chartSection}
+    <button onclick="closeTrainingError()" style="margin-top: 14px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
   `;
 
   container.appendChild(successDiv);

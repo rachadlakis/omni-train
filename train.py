@@ -10,6 +10,7 @@
 import os
 from dotenv import load_dotenv 
 import sys
+import traceback
 # import argparse
 # import yaml
 # import time
@@ -384,8 +385,9 @@ def main(args):
             run.finish() #type: ignore
 
     except Exception as e:
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        print_on_rank_0(rank, f"❌ Training failed: {e}", "❌")
+        _rank = dist.get_rank() if dist.is_initialized() else 0
+        print(f"\n[rank {_rank}] ❌ Training failed: {e}", flush=True)
+        traceback.print_exc()
         cleanup()
         raise
 

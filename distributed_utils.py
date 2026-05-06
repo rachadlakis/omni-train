@@ -4,6 +4,7 @@ import os
 import sys
 import socket
 import time
+import traceback
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -118,7 +119,7 @@ def setup_dist_process_group():
 
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{local_rank}")
-            torch.cuda.device(device)
+            torch.cuda.set_device(device)
             dist.init_process_group(backend=BACKEND, device_id=device)
         else:
             dist.init_process_group(backend=BACKEND)
@@ -398,7 +399,8 @@ def apply_solo(device, rank, args):
         print_on_rank_0(rank, "Solo model ready ✓")
         return model
     except Exception as e:
-        print_on_rank_0(rank, f"❌ Failed to apply solo model setup: {e}", "❌")
+        print(f"\n[rank {rank}] ❌ Failed to apply solo model setup: {e}", flush=True)
+        traceback.print_exc()
         raise
 
 def apply_ddp(local_rank, rank, device, args):
@@ -498,7 +500,8 @@ def apply_ddp(local_rank, rank, device, args):
         return model
 
     except Exception as e:
-        print_on_rank_0(rank, f"❌ Failed to apply DDP: {e}", "❌")
+        print(f"\n[rank {rank}] ❌ Failed to apply DDP: {e}", flush=True)
+        traceback.print_exc()
         raise
 
 def apply_fsdp(local_rank, rank, device, args):
@@ -577,7 +580,12 @@ def apply_fsdp(local_rank, rank, device, args):
                 # all ranks then load from that seed so HF is only hit once.
                 print_on_rank_0(rank, "Fresh PEFT run — rank 0 loading pretrained weights from HuggingFace", "🧠")
                 peft_seed_folder = f"{args.checkpoint_dir}/pretrained_seed"
-                peft_seed_timestamp = int(time.time() * 1000)
+                # Rank 0 generates the timestamp; broadcast it so every rank resolves
+                # the identical path (each rank calling int(time.time()*1000)
+                # independently can get a different millisecond value).
+                _ts = [int(time.time() * 1000) if rank == 0 else 0]
+                dist.broadcast_object_list(_ts, src=0)
+                peft_seed_timestamp = _ts[0]
                 peft_seed_subfolder = f"{peft_seed_folder}/fsdp/{'dcp_api' if args.dcp_api else 'dtensor_api'}/{peft_seed_timestamp}"
                 peft_seed_path = f"{peft_seed_subfolder}/model_state_dict.pt"
 
@@ -787,7 +795,12 @@ def apply_fsdp(local_rank, rank, device, args):
             print_on_rank_0(rank, "Fresh run — loading pretrained weights from HuggingFace on rank 0", "🆕")
             pretrained_seed_folder = f"{args.checkpoint_dir}/pretrained_seed"
 
-            timestamp = int(time.time() * 1000)
+            # Rank 0 generates the timestamp and broadcasts it so every rank
+            # resolves the identical seed path (independent calls to
+            # int(time.time()*1000) across ranks can differ by milliseconds).
+            _ts = [int(time.time() * 1000) if rank == 0 else 0]
+            dist.broadcast_object_list(_ts, src=0)
+            timestamp = _ts[0]
             pretrained_seed_subfolder = f"{pretrained_seed_folder}/fsdp/{'dcp_api' if args.dcp_api else 'dtensor_api'}/{timestamp}"
             pretrained_seed_path = f"{pretrained_seed_subfolder}/model_state_dict.pt"
 
@@ -831,7 +844,8 @@ def apply_fsdp(local_rank, rank, device, args):
         return model, checkpointer
 
     except Exception as e:
-        print_on_rank_0(rank, f"❌ Failed in apply_fsdp: {e}", "❌")
+        print(f"\n[rank {rank}] ❌ Failed in apply_fsdp: {e}", flush=True)
+        traceback.print_exc()
         cleanup()
         raise
 
