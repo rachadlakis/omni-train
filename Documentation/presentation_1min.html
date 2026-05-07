@@ -188,6 +188,11 @@
     flex: 1;
     min-height: 0;
   }
+  .col1 {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
 
   /* ── Card ── */
   .card {
@@ -360,51 +365,103 @@
     <p class="meta">← → to navigate</p>
   </div>
 
-  <!-- ═══  SLIDE 1 — THE PROBLEM  ═══ -->
+  <!-- ═══  SLIDE 1 — WHY DISTRIBUTED?  ═══ -->
+  <div class="slide" id="s1">
+    <div class="slide-header">
+      <div class="slide-icon-wrap">🌍</div>
+      <div>
+        <div class="slide-title">Why Do We Need Distributed Training?</div>
+        <div class="slide-subtitle">Scaling from a notebook to real-world models requires more than one GPU</div>
+      </div>
+      <span class="slide-num">1 / 4</span>
+    </div>
+
+    <div class="col3">
+
+      <div class="card card-blue">
+        <div class="card-icon">📈</div>
+        <div class="card-title">Bigger = Better</div>
+        <div class="card-body">
+          The best-performing models are the largest ones. GPT-4, Gemini, LLaMA-3 70B — scale is the single most reliable way to improve accuracy, reasoning, and generalization.
+          <div class="stat"><span class="stat-value sv-blue">70B+</span><span class="stat-label">params in top models</span></div>
+        </div>
+      </div>
+
+      <div class="card card-orange">
+        <div class="card-icon">⚠️</div>
+        <div class="card-title">PEFT &amp; Quantization Have Limits</div>
+        <div class="card-body">
+          LoRA, QLoRA, and 4-bit quantization reduce VRAM but come at a cost — lower model capacity, degraded accuracy on complex tasks, and constraints on which layers you can update. <strong>Full fine-tune always wins on quality.</strong>
+        </div>
+      </div>
+
+      <div class="card card-green">
+        <div class="card-icon">⏱️</div>
+        <div class="card-title">One GPU Does Not Fit the Required VRAM — Even If It Did, a Single GPU Is Too Slow</div>
+        <div class="card-body">
+          Full fine-tuning requires <strong>~12× the model's bf16 size</strong> in VRAM:
+          <ul class="bullets" style="margin-top:8px;">
+            <li><span class="dot" style="background:var(--accent2);"></span><span>Weights (bf16) — <strong>2 bytes/param</strong></span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span>Gradients (bf16) — <strong>2 bytes/param</strong></span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span>AdamW m₁ + m₂ (fp32) — <strong>8 bytes/param</strong></span></li>
+          </ul>
+          <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">LLaMA-2 7B = 14 GB weights → <strong>84 GB total</strong>. An A100 80 GB can't hold it. And even if it could, training at scale takes <strong>days</strong> — distributing across 8 GPUs cuts that to hours.</p>
+          <div class="stat"><span class="stat-value sv-green">12×</span><span class="stat-label">model size in VRAM</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══  SLIDE 2 — THE PROBLEM  ═══ -->
   <div class="slide" id="s1">
     <div class="slide-header">
       <div class="slide-icon-wrap">💀</div>
       <div>
-        <div class="slide-title">The Problem</div>
-        <div class="slide-subtitle">Distributed training is not easy — and the hardware math forces you into it</div>
+        <div class="slide-title">The Problem — What You Need to Know Before You Start</div>
+        <div class="slide-subtitle">Distributed training demands expertise across many layers — all before writing a single line of training code</div>
       </div>
-      <span class="slide-num">1 / 3</span>
+      <span class="slide-num">2 / 4</span>
     </div>
 
-    <div class="col2">
+    <div class="col3" style="grid-template-columns:1fr 1fr 1fr;">
 
-      <div class="card card-red">
-        <div class="card-icon">🧠</div>
-        <div class="card-title">Models Don't Fit</div>
+      <div class="card card-purple">
+        <div class="card-icon">🔗</div>
+        <div class="card-title">Communication Primitives</div>
         <div class="card-body">
-          LLaMA-2 7B full fine-tune needs <strong>≈84 GB</strong> of VRAM. Here's the math:
-          <ul class="bullets" style="margin-top:8px;">
-            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>Weights</strong> — 7B × 2 bytes (bf16) = <strong>14 GB</strong></span></li>
-            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>Gradients</strong> — same shape as weights = <strong>14 GB</strong></span></li>
-            <li><span class="dot" style="background:var(--accent3);"></span><span><strong>AdamW states</strong> — 2 moments × fp32 × 7B = <strong>56 GB</strong></span></li>
+          <ul class="bullets" style="margin-top:0;">
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>torchrun</strong> — RANK, LOCAL_RANK, WORLD_SIZE, <code>init_process_group</code>, rendezvous &amp; elastic launch</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>NCCL Collectives</strong> — AllReduce, ReduceScatter, AllGather, Broadcast, Barrier</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DDP</strong> — gradient all-reduce sync, bucket overlap, <code>no_sync</code> context, rank-0 writes</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>ZeRO</strong> — stage 1/2/3 optimizer &amp; gradient sharding, how FSDP maps to ZeRO-3</span></li>
           </ul>
-          <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">An A100 80 GB <em>cannot</em> hold it alone — you need to shard across GPUs.</p>
-          <div class="stat"><span class="stat-value sv-red">84 GB</span><span class="stat-label">LLaMA-2 7B (bf16)</span></div>
-          <div class="stat" style="margin-top:6px;"><span class="stat-value sv-red">840 GB</span><span class="stat-label">LLaMA-2 70B (bf16)</span></div>
         </div>
       </div>
 
-      <div class="card card-purple">
-        <div class="card-icon">📚</div>
-        <div class="card-title">Expertise Needed</div>
+      <div class="card card-blue">
+        <div class="card-icon">⚙️</div>
+        <div class="card-title">Sharding &amp; Memory</div>
         <div class="card-body">
           <ul class="bullets" style="margin-top:0;">
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>torchrun principles</strong> — RANK, LOCAL_RANK, WORLD_SIZE, <code>init_process_group</code>, rendezvous, fault-tolerant elastic launch</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>NCCL Collectives</strong> — AllReduce, ReduceScatter, AllGather, Broadcast…</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DDP</strong> — gradient all-reduce sync, bucket communication, <code>no_sync</code> context, rank-0 checkpoint writes</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Libraries</strong> — PyTorch, Transformers, BitsAndBytes, PEFT, torchvision…</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>FSDP <code>fully_shard</code></strong> — wrap policy, meta-device init, leaf-first order</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DCP / DTensor</strong> — sharded save &amp; load, <code>broadcast_from_rank0</code></span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Mixed precision &amp; dtypes</strong> — param / reduce / output dtype interaction</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Saving / loading sharded models</strong> — rank-consistent state-dict reassembly</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Prefetching</strong> — forward &amp; backward prefetch depth, overlap with compute</span></li>
+            <li><span class="dot" style="background:var(--accent);"></span><span><strong>FSDP <code>fully_shard</code></strong> — wrap policy, meta-device init, leaf-first order, all-gather / reduce-scatter</span></li>
+            <li><span class="dot" style="background:var(--accent);"></span><span><strong>Mixed precision &amp; dtypes</strong> — param / reduce / output dtype interaction, bf16 vs fp32 optimizer states</span></li>
+            <li><span class="dot" style="background:var(--accent);"></span><span><strong>Prefetching</strong> — forward &amp; backward prefetch depth, overlapping all-gather with compute</span></li>
+            <li><span class="dot" style="background:var(--accent);"></span><span><strong>Gradient checkpointing</strong> — recompute activations to trade compute for memory</span></li>
           </ul>
-          <p style="font-size:0.75rem;color:var(--muted);margin-top:10px;">— all before writing a single line of training code.</p>
+        </div>
+      </div>
+
+      <div class="card card-orange">
+        <div class="card-icon">💾</div>
+        <div class="card-title">Checkpointing &amp; Libraries</div>
+        <div class="card-body">
+          <ul class="bullets" style="margin-top:0;">
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>DCP / DTensor</strong> — sharded save &amp; load, <code>broadcast_from_rank0</code>, state-dict reassembly</span></li>
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>Saving / loading sharded models</strong> — rank-consistent reassembly across strategies</span></li>
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>Libraries</strong> — PyTorch, Transformers, BitsAndBytes, PEFT, torchvision — each with its own distributed quirks</span></li>
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>Silent failures</strong> — deadlocks, NaN loss, gradient corruption — often with <em>no error message</em></span></li>
+          </ul>
         </div>
       </div>
 
@@ -419,7 +476,7 @@
         <div class="slide-title">The Solution — Omni-Train</div>
         <div class="slide-subtitle">Everything above is handled for you — configure, launch, train</div>
       </div>
-      <span class="slide-num">2 / 3</span>
+      <span class="slide-num">3 / 4</span>
     </div>
 
     <div class="col2">
