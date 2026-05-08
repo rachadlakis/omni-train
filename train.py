@@ -394,7 +394,13 @@ def main(args):
 
 if __name__ == "__main__":
     cfg = load_config()
-    args = build_args(cfg)
+    try:
+        args = build_args(cfg)
+    except ValueError as e:
+        rank = int(os.environ.get("RANK", "0"))
+        if rank == 0:
+            print(f"\n❌  Configuration error: {e}\n")
+        sys.exit(1)
 
     try: 
         if int(os.environ.get("RANK", "0")) == 0:
