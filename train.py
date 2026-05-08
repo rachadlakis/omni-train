@@ -118,6 +118,7 @@ def main(args):
             rank = dist.get_rank()
             world_size = dist.get_world_size()
             device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+            print_on_rank_0(rank, f"Distributed environment initialized | backend={BACKEND} | world_size={world_size} | local_rank={local_rank} | device={device}", "🌐")
         elif args.strategy == "solo":
             local_rank = 0
             rank = 0
@@ -130,6 +131,7 @@ def main(args):
         ## WANDB setup - only on rank 0 to avoid multiple runs/logs for distributed strategies
         if args.wandb_log_with_train and rank == 0:            
             wandb.login(key=WANDB_API_KEY)
+            print_on_rank_0(rank, f"WANDB logging enabled | project={args.wandb_project}", "📊")
             run = wandb.init(
                 project=args.wandb_project,
                 config=vars(args),
@@ -139,10 +141,12 @@ def main(args):
         ## Print environment info for debugging and verification
         if args.strategy in ["ddp", "fsdp"]:
             print_on_rank_0(rank, f"backend={BACKEND}", "✅")
-        if dist.is_initialized(): dist.barrier()
+        if dist.is_initialized(): 
+            dist.barrier()
         print_on_all_ranks(rank, f"Process joined | world_size={world_size} | pid={os.getpid()}", "🚀",
                            local_rank=local_rank, device=device)
-        if dist.is_initialized(): dist.barrier()
+        if dist.is_initialized(): 
+            dist.barrier()
         
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(local_rank)
@@ -158,6 +162,7 @@ def main(args):
         tokenizer = None
         if args.model_type == "custom_transformer":
             print_on_rank_0(rank, "Custom Transformer: skipping tokenizer (synthetic data will be used)", "⏩")
+
         elif args.model_type in {"llm", "seq2seq", "encoder", "vlm"}:
             print_banner_on_rank_0(rank, "LOADING TOKENIZER")
             print_on_rank_0(rank, f"Fetching tokenizer: {args.model_name}", "🔤")
@@ -165,12 +170,16 @@ def main(args):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
             print_on_rank_0(rank, "Tokenizer ready ✓")
+            if dist.is_initialized(): 
+                dist.barrier()
         elif args.model_type in {"vision", "yolo"}:
             from transformers import AutoImageProcessor
             print_banner_on_rank_0(rank, "LOADING IMAGE PROCESSOR")
             print_on_rank_0(rank, f"Fetching image processor: {args.model_name}", "🖼️")
             tokenizer = AutoImageProcessor.from_pretrained(args.model_name, token=HF_TOKEN)
             print_on_rank_0(rank, "Image processor ready ✓")
+            if dist.is_initialized(): 
+                dist.barrier()
         
         # --------------------------------------------------------------
         # 3. MODEL
@@ -209,11 +218,8 @@ def main(args):
             trainable_count = sum(p.numel() for p in trainable_params)
             pct = (100.0 * trainable_count / total_params) if total_params else 0.0
             print_on_rank_0(rank, f"Trainable params: {trainable_count:,}/{total_params:,} ({pct:.3f}%)", "📊")
-        print_on_rank_0(
-            rank,
-            f"Optimizer: AdamW | lr={args.learning_rate} | weight_decay={args.weight_decay} | grad_clip={args.grad_clip}",
-            "⚙️",
-        )
+
+        print_on_rank_0(rank,f"Optimizer: {optimizer.__class__.__name__} | lr={args.learning_rate} | weight_decay={args.weight_decay} | grad_clip={args.grad_clip}","⚙️",)
 
         if args.strategy == "fsdp" and args.resume and checkpointer is not None and checkpointer.last_training_time is not None:
             print_on_rank_0(rank, "Loading optimizer state from checkpoint...", "♻️")
