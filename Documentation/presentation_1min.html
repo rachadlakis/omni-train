@@ -579,71 +579,59 @@
     </div>
   </div>
 
-  <!-- ═══  SLIDE 4 — IN PROGRESS: MULTI-DIMENSIONAL PARALLELISM  ═══ -->
-  <div class="slide" id="s4">
+  <!-- ═══  SLIDE — IN PROGRESS  ═══ -->
+  <div class="slide" id="s-next">
     <div class="slide-header">
-      <div class="slide-icon-wrap">🔬</div>
+      <div class="slide-icon-wrap">🚧</div>
       <div>
-        <div class="slide-title" style="display:flex;align-items:center;gap:12px;">
-          Multi-Dimensional Parallelism
-          <span style="display:inline-flex;align-items:center;gap:6px;background:#0d1117;border:1px solid var(--accent2);border-radius:20px;padding:3px 11px;font-size:0.65rem;font-weight:700;color:var(--accent2);letter-spacing:0.04em;">
-            <span style="width:7px;height:7px;border-radius:50%;background:var(--accent2);display:inline-block;animation:pulse 1.4s ease-in-out infinite;"></span>
-            IN PROGRESS
-          </span>
-        </div>
-        <div class="slide-subtitle">Combining Data, Tensor &amp; Pipeline Parallelism via <code style="font-size:0.78em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">DeviceMesh</code> — the path to training 1T+ parameter models</div>
+        <div class="slide-title">In Progress</div>
+        <div class="slide-subtitle">What's being built next</div>
       </div>
-      <span class="slide-num">4 / 5</span>
     </div>
 
-    <div class="col3">
+    <div class="col2">
 
-      <div class="card card-purple">
-        <div class="card-icon">✂️</div>
-        <div class="card-title">Tensor Parallelism (TP)</div>
-        <div class="card-body">
-          Split individual weight matrices across GPUs — each rank owns a column or row shard of every linear layer.
-          <ul class="bullets" style="margin-top:10px;">
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Column-parallel</strong> — split output dim, each GPU computes a partial output</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Row-parallel</strong> — split input dim, all-reduce to combine partial results</span></li>
-            <li><span class="dot" style="background:var(--accent4);"></span><span>Requires <strong>fast NVLink</strong> — one all-reduce per layer per forward pass</span></li>
-          </ul>
-          <div class="stat"><span class="stat-value" style="color:var(--accent4);">1/N</span><span class="stat-label">VRAM per GPU per layer</span></div>
-        </div>
-      </div>
-
-      <div class="card card-orange">
-        <div class="card-icon">🔗</div>
-        <div class="card-title">Pipeline Parallelism (PP)</div>
-        <div class="card-body">
-          Slice the model vertically by transformer layers — each GPU owns a stage and passes activations to the next.
-          <ul class="bullets" style="margin-top:10px;">
-            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>Micro-batching</strong> — fills the pipeline to minimise bubble time</span></li>
-            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>1F1B schedule</strong> — interleaves forward and backward passes</span></li>
-            <li><span class="dot" style="background:var(--accent5);"></span><span>Works over <strong>slower inter-node links</strong> — only activations cross stage boundaries</span></li>
-          </ul>
-          <div class="stat"><span class="stat-value sv-orange">1/S</span><span class="stat-label">layers per pipeline stage</span></div>
-        </div>
-      </div>
-
+      <!-- SLURM -->
       <div class="card card-green">
-        <div class="card-icon">🧊</div>
-        <div class="card-title">Combining DP + TP + PP with DeviceMesh</div>
+        <div class="card-icon">🖥️</div>
+        <div class="card-title">SLURM — Multi-Node Training</div>
         <div class="card-body">
-          <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">DeviceMesh</code> expresses the full GPU grid as named dimensions — <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">dp</code>, <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">tp</code>, <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">pp</code> — so each strategy operates on its own process group without overlap.
-          <ul class="bullets" style="margin-top:10px;">
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DP × TP</strong> — replicas per node, tensor-parallel within each node (NVLink)</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DP × TP × PP (3D)</strong> — scales to hundreds of GPUs; used by Megatron-LM &amp; GPT-4</span></li>
-            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Unlocks 1T+ parameter models</strong> — no single axis alone can get there</span></li>
+          Today <code>torchrun</code> spawns processes on <strong>one node</strong>. SLURM spans them across <strong>many nodes</strong>, each with its own GPUs, over InfiniBand.
+          <ul class="bullets" style="margin-top:12px;">
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Auto-generated job scripts</strong> from <code>config.yaml</code> — <code>MASTER_ADDR</code>, <code>MASTER_PORT</code>, <code>WORLD_SIZE</code> set automatically</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Elastic rendezvous</strong> via <code>torchrun --nnodes=N --rdzv-backend=c10d</code></span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Auto-requeue on preemption</strong> — checkpoint-on-signal, job re-queues and resumes</span></li>
           </ul>
-          <div class="stat" style="border-color:var(--accent2);"><span class="stat-value sv-green">1T+</span><span class="stat-label">params — target scale</span></div>
+          <div style="display:flex;gap:10px;margin-top:14px;">
+            <div class="stat"><span class="stat-value sv-blue">1</span><span class="stat-label">node today</span></div>
+            <div class="stat"><span class="stat-value sv-green">N</span><span class="stat-label">nodes with SLURM</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Multi-Dimensional Parallelism -->
+      <div class="card card-purple">
+        <div class="card-icon">🔲</div>
+        <div class="card-title">Multi-Dimensional Parallelism &nbsp;<span style="font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;background:#1a3a5c;color:var(--accent);border:1px solid #2a5a8c;border-radius:20px;padding:2px 9px;vertical-align:middle;">In Progress</span></div>
+        <div class="card-body">
+          Combining Data, Tensor &amp; Pipeline Parallelism via <strong>DeviceMesh</strong> — the path to training <strong>1T+ parameter models</strong>.
+          <ul class="bullets" style="margin-top:12px;">
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Tensor Parallelism (TP)</strong> — split weight matrices across GPUs within a node; each rank owns a row or column shard</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Pipeline Parallelism (PP)</strong> — slice model by layers across stages; only activations cross boundaries (works over slow inter-node links)</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>DeviceMesh (DP × TP × PP)</strong> — named grid dimensions give each strategy its own process group; used by Megatron-LM &amp; GPT-4</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>4D / 6D parallelism</strong> — add Context Parallel + Expert Parallel for MoE at full scale</span></li>
+          </ul>
+          <div class="stat" style="margin-top:14px;">
+            <span class="stat-value" style="color:var(--accent4);">1T+</span>
+            <span class="stat-label">params — target scale</span>
+          </div>
         </div>
       </div>
 
     </div>
   </div>
 
-  <!-- ═══  SLIDE 5 — DEMO  ═══ -->
+  <!-- ═══  SLIDE — LIVE DEMO  ═══ -->
   <div class="slide thankyou-slide" id="s3">
     <div class="ty-logo">🎬</div>
     <h2>Live Demo</h2>
