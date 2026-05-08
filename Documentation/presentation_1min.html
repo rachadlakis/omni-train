@@ -180,6 +180,7 @@
     gap: 16px;
     flex: 1;
     min-height: 0;
+    align-content: center;
   }
   .col2 {
     display: grid;
@@ -187,11 +188,13 @@
     gap: 18px;
     flex: 1;
     min-height: 0;
+    align-content: center;
   }
   .col1 {
     display: flex;
     flex: 1;
     min-height: 0;
+    align-items: center;
   }
 
   /* ── Card ── */
@@ -300,6 +303,11 @@
   .str { color: var(--accent5); }
   .out { color: var(--accent); }
 
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+
   /* ── Thank You ── */
   .thankyou-slide {
     justify-content: center;
@@ -373,7 +381,7 @@
         <div class="slide-title">Why Do We Need Distributed Training?</div>
         <div class="slide-subtitle">Scaling from a notebook to real-world models requires more than one GPU</div>
       </div>
-      <span class="slide-num">1 / 4</span>
+      <span class="slide-num">1 / 5</span>
     </div>
 
     <div class="col3">
@@ -421,7 +429,7 @@
         <div class="slide-title">The Problem — What You Need to Know Before You Start</div>
         <div class="slide-subtitle">Distributed training demands expertise across many layers — all before writing a single line of training code</div>
       </div>
-      <span class="slide-num">2 / 4</span>
+      <span class="slide-num">2 / 5</span>
     </div>
 
     <div class="col3" style="grid-template-columns:1fr 1fr 1fr;">
@@ -476,7 +484,7 @@
         <div class="slide-title">The Solution — Omni-Train</div>
         <div class="slide-subtitle">Everything above is handled for you — configure, launch, train</div>
       </div>
-      <span class="slide-num">3 / 4</span>
+      <span class="slide-num">3 / 5</span>
     </div>
 
     <div class="col2">
@@ -571,7 +579,71 @@
     </div>
   </div>
 
-  <!-- ═══  SLIDE 3 — DEMO  ═══ -->
+  <!-- ═══  SLIDE 4 — IN PROGRESS: MULTI-DIMENSIONAL PARALLELISM  ═══ -->
+  <div class="slide" id="s4">
+    <div class="slide-header">
+      <div class="slide-icon-wrap">🔬</div>
+      <div>
+        <div class="slide-title" style="display:flex;align-items:center;gap:12px;">
+          Multi-Dimensional Parallelism
+          <span style="display:inline-flex;align-items:center;gap:6px;background:#0d1117;border:1px solid var(--accent2);border-radius:20px;padding:3px 11px;font-size:0.65rem;font-weight:700;color:var(--accent2);letter-spacing:0.04em;">
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--accent2);display:inline-block;animation:pulse 1.4s ease-in-out infinite;"></span>
+            IN PROGRESS
+          </span>
+        </div>
+        <div class="slide-subtitle">Combining Data, Tensor &amp; Pipeline Parallelism via <code style="font-size:0.78em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">DeviceMesh</code> — the path to training 1T+ parameter models</div>
+      </div>
+      <span class="slide-num">4 / 5</span>
+    </div>
+
+    <div class="col3">
+
+      <div class="card card-purple">
+        <div class="card-icon">✂️</div>
+        <div class="card-title">Tensor Parallelism (TP)</div>
+        <div class="card-body">
+          Split individual weight matrices across GPUs — each rank owns a column or row shard of every linear layer.
+          <ul class="bullets" style="margin-top:10px;">
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Column-parallel</strong> — split output dim, each GPU computes a partial output</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span><strong>Row-parallel</strong> — split input dim, all-reduce to combine partial results</span></li>
+            <li><span class="dot" style="background:var(--accent4);"></span><span>Requires <strong>fast NVLink</strong> — one all-reduce per layer per forward pass</span></li>
+          </ul>
+          <div class="stat"><span class="stat-value" style="color:var(--accent4);">1/N</span><span class="stat-label">VRAM per GPU per layer</span></div>
+        </div>
+      </div>
+
+      <div class="card card-orange">
+        <div class="card-icon">🔗</div>
+        <div class="card-title">Pipeline Parallelism (PP)</div>
+        <div class="card-body">
+          Slice the model vertically by transformer layers — each GPU owns a stage and passes activations to the next.
+          <ul class="bullets" style="margin-top:10px;">
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>Micro-batching</strong> — fills the pipeline to minimise bubble time</span></li>
+            <li><span class="dot" style="background:var(--accent5);"></span><span><strong>1F1B schedule</strong> — interleaves forward and backward passes</span></li>
+            <li><span class="dot" style="background:var(--accent5);"></span><span>Works over <strong>slower inter-node links</strong> — only activations cross stage boundaries</span></li>
+          </ul>
+          <div class="stat"><span class="stat-value sv-orange">1/S</span><span class="stat-label">layers per pipeline stage</span></div>
+        </div>
+      </div>
+
+      <div class="card card-green">
+        <div class="card-icon">🧊</div>
+        <div class="card-title">Combining DP + TP + PP with DeviceMesh</div>
+        <div class="card-body">
+          <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">DeviceMesh</code> expresses the full GPU grid as named dimensions — <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">dp</code>, <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">tp</code>, <code style="font-size:0.8em;background:#1f2937;border-radius:3px;padding:1px 5px;color:var(--accent);">pp</code> — so each strategy operates on its own process group without overlap.
+          <ul class="bullets" style="margin-top:10px;">
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DP × TP</strong> — replicas per node, tensor-parallel within each node (NVLink)</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>DP × TP × PP (3D)</strong> — scales to hundreds of GPUs; used by Megatron-LM &amp; GPT-4</span></li>
+            <li><span class="dot" style="background:var(--accent2);"></span><span><strong>Unlocks 1T+ parameter models</strong> — no single axis alone can get there</span></li>
+          </ul>
+          <div class="stat" style="border-color:var(--accent2);"><span class="stat-value sv-green">1T+</span><span class="stat-label">params — target scale</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══  SLIDE 5 — DEMO  ═══ -->
   <div class="slide thankyou-slide" id="s3">
     <div class="ty-logo">🎬</div>
     <h2>Live Demo</h2>
