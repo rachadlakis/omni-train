@@ -475,7 +475,7 @@ def apply_ddp(local_rank, rank, device, args):
             )
             if rank == 0 and os.path.exists(args.checkpoint_dir + "/seed.pt"):
                 os.remove(args.checkpoint_dir + "/seed.pt")
-            dist.barrier()
+            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
 
         else:
             # PATH C: random init — for experimentation and debugging only
@@ -614,7 +614,7 @@ def apply_fsdp(local_rank, rank, device, args):
                     torch.save(seed_model.state_dict(), peft_seed_path)
                     del seed_model
                     torch.cuda.empty_cache()
-                dist.barrier()
+                dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
 
                 # All ranks: build structure from config and load the seed weights.
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
@@ -827,7 +827,7 @@ def apply_fsdp(local_rank, rank, device, args):
                     print_on_rank_0(rank, "Seed weights saved ✓ | releasing barrier", "✅")
                     del seed_model
                     torch.cuda.empty_cache()
-            dist.barrier()
+            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
 
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
             seed_checkpointer.load_model(model)
@@ -1023,7 +1023,8 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
             print_on_rank_0(rank, f"Solo checkpoint saved to {checkpoint_path} ✓", "🎉")
 
         if dist.is_initialized():
-            dist.barrier()  # sync all ranks before returning
+            _local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+            dist.barrier(device_ids=[_local_rank] if dist.get_backend() == "nccl" else None)  # sync all ranks before returning
 
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to save checkpoint: {e}", "❌")

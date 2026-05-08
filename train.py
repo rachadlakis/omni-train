@@ -141,20 +141,14 @@ def main(args):
         ## Print environment info for debugging and verification
         if args.strategy in ["ddp", "fsdp"]:
             print_on_rank_0(rank, f"backend={BACKEND}", "✅")
-        if dist.is_initialized(): 
-            dist.barrier()
         print_on_all_ranks(rank, f"Process joined | world_size={world_size} | pid={os.getpid()}", "🚀",
                            local_rank=local_rank, device=device)
-        if dist.is_initialized(): 
-            dist.barrier()
         
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(local_rank)
             gpu_mem  = torch.cuda.get_device_properties(local_rank).total_memory / 1e9
             print_on_all_ranks(rank, f"GPU: {gpu_name} ({gpu_mem:.1f} GB) | {gpu_memory_snapshot(device)}", "🖥️",
                                local_rank=local_rank, device=device)
-        if dist.is_initialized(): 
-            dist.barrier()
  
         # --------------------------------------------------------------
         # 2. TOKENIZER
@@ -170,16 +164,12 @@ def main(args):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
             print_on_rank_0(rank, "Tokenizer ready ✓")
-            if dist.is_initialized(): 
-                dist.barrier()
         elif args.model_type in {"vision", "yolo"}:
             from transformers import AutoImageProcessor
             print_banner_on_rank_0(rank, "LOADING IMAGE PROCESSOR")
             print_on_rank_0(rank, f"Fetching image processor: {args.model_name}", "🖼️")
             tokenizer = AutoImageProcessor.from_pretrained(args.model_name, token=HF_TOKEN)
             print_on_rank_0(rank, "Image processor ready ✓")
-            if dist.is_initialized(): 
-                dist.barrier()
         
         # --------------------------------------------------------------
         # 3. MODEL
@@ -191,8 +181,6 @@ def main(args):
 
         elif args.strategy == "fsdp":
             model, checkpointer = apply_fsdp(local_rank, rank, device, args)
-            if dist.is_initialized():
-                dist.barrier()
 
         elif args.strategy == "solo":
             model = apply_solo(device, rank, args)
@@ -284,7 +272,7 @@ def main(args):
         model.train()
         losses = []
         if dist.is_initialized():
-            dist.barrier()
+            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
 
         for epoch in range(args.epochs):
             print_on_rank_0(rank, f"Starting Epoch {epoch+1}/{args.epochs}", "🔁")
