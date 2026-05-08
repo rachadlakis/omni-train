@@ -221,9 +221,15 @@ def main(args):
         ## Load the dataset and create the dataloader with DistributedSampler for sharding across GPUs
         print_banner_on_rank_0(rank, "PREPARING DATA")
         dataloader = get_dataloader(
-            args.dataset, args.dataset_full_name, args.dataset_split, 
-            tokenizer, rank, world_size, batch_size=args.batch_size,
-            max_length=args.max_length, model_type=args.model_type,
+            args.dataset, 
+            args.dataset_full_name, 
+            args.dataset_split, 
+            tokenizer, 
+            rank, 
+            world_size, 
+            batch_size=args.batch_size,
+            max_length=args.max_length, 
+            model_type=args.model_type,
             vocab_size=getattr(args, "custom_vocab_size", None),
         )
 
@@ -239,11 +245,7 @@ def main(args):
             print_on_rank_0(rank, f"LR warmup enabled: warmup_steps={args.warmup_steps}, total_steps={total_steps}", "📈")
 
         # print_on_rank_0(rank, f"Counting Model Parameters", )
-        print_on_rank_0(
-                rank,
-                f"Counting model parameters for training time estimation... (this may take a moment)"
-                "⏳",
-            )
+        print_on_rank_0(rank,f"Counting model parameters for training time estimation... (this may take a moment)""⏳",)
         model_total_params = sum(p.numel() for p in model.parameters())
 
         if rank == 0 and hasattr(dataloader, "__len__"):
@@ -260,11 +262,7 @@ def main(args):
                 peft_r=args.peft_r,
                 gradient_checkpointing=args.gradient_checkpointing 
             )
-            print_on_rank_0(
-                rank,
-                f"Estimated time | total≈{time_est['human_readable']} | total minutes≈{time_est['total_minutes']} min | total hours≈{time_est['total_hours']} h ",
-                "⏱️",
-            )
+            print_on_rank_0(rank,f"Estimated time | total≈{time_est['human_readable']} | total minutes≈{time_est['total_minutes']} min | total hours≈{time_est['total_hours']} h ","⏱️",)
         
         print_banner_on_rank_0(rank, "TRAINING")
         model.train()
