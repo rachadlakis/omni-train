@@ -10,7 +10,7 @@
 #   subset: wikitext-2-raw-v1 
 #   split: train[:10%] 
   
-model_name: facebook/opt-125m  ## LLM (meta-llama/Meta-Llama-3-70B, gpt2, gpt2-medium), vision (google/vit-base-patch16-224, microsoft/resnet-18), custom (custom_transformer)
+model_name: meta-llama/Llama-2-13b   ## LLM (facebook/opt-125m, meta-llama/Meta-Llama-3-70B, gpt2, gpt2-medium), vision (google/vit-base-patch16-224, microsoft/resnet-18), custom (custom_transformer)
 model_type: llm   ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 
 dataset:
@@ -19,7 +19,7 @@ dataset:
   split: train[:2%]         ## which split and how much of it to use for training.  like "train[:2%]+validation[:3%]"
 
 training:
-  epochs: 4                     ## Number of epochs to train
+  epochs: 6                     ## Number of epochs to train
   batch_size: 16                ## Batch size for training 
   max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
@@ -28,7 +28,7 @@ training:
   weight_decay: 0.01            ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+num_gpus: 4                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: true                  ## whether to save checkpoints
 
@@ -67,20 +67,20 @@ quantization:
   double_quant: true      ## whether to apply double quantization (for 4-bit)
   
 wandb:
-  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases
+  wandb_log_with_train: true          ## whether to log training metrics to Weights & Biases
   wandb_entity: "dist-train"          ## your W&B entity (username or team)
   wandb_project: "dist-train-project" ## your W&B project name
   
   
-## -------------------------- In progress ---------------------------------------------------####
-## To add multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
+##   In progress 
+## To add multi-dimensional parallelism (data parallelism, tensor parallelism and/or pipeline parallelism)
 multi_dimensional_parallelism:  
   enabled: false                   ## whether to use multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
   dp_enabled: false   ## whether to use data parallelism (FSDP/DDP) — must be enabled for TP and PP
   tp_enabled: false   ## whether to use tensor parallelism
   pp_enabled: false   ## whether to use pipeline parallelism
-  dp_size: 0
-  tp_size: 0          ## number of tensor parallel shards (e.g. 2, 4, 8)
+  dp_size: 0        ## number of
+  tp_size: 0        ## number of tensor parallel shards (e.g. 2, 4, 8)
   pp_size: 0        ## number of pipeline stages (e.g. 2, 4)
   device_mesh_shape: [2, 2]        ## shape of the device mesh for 3D parallelism (e.g. [dp, tp, pp] = [4, 2, 2])
   n_microbatches: 4   ## number of micro-batches per global step (only relevant when pp_size > 1)

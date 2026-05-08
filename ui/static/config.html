@@ -424,8 +424,8 @@
               <label>Tensor Parallel Size <span class="tooltip" data-tip="Number of tensor-parallel shards per replica (keep intra-node)">?</span></label>
               <input type="number" id="f-tp-size" value="2" min="1" onchange="onTopologyChange()">
             </div>
-            <div class="form-group" id="fg-pp-size" style="display:none;">
-              <label>Pipeline Parallel Size <span class="tooltip" data-tip="Number of pipeline stages (1 = disabled)">?</span></label>
+            <div class="form-group" id="fg-pp-size">
+              <label>Pipeline Parallel Size <span class="tooltip" data-tip="Number of pipeline stages. 1 = disabled. Use PP to split model layers across nodes over slow inter-node links.">?</span></label>
               <input type="number" id="f-pp-size" value="1" min="1" onchange="onTopologyChange()">
             </div>
             <div class="form-group full" id="fg-topology-hint" style="display:none;">

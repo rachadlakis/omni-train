@@ -3493,17 +3493,13 @@ function onLaunchModeChange() {
 }
 
 function onParallelismModeChange() {
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const ppGroup = document.getElementById('fg-pp-size');
-  if (ppGroup) ppGroup.style.display = mode === '3d' ? '' : 'none';
   onTopologyChange();
 }
 
 function onTopologyChange() {
   const dp = parseInt(getVal('f-dp-size')) || 1;
   const tp = parseInt(getVal('f-tp-size')) || 1;
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
+  const pp = parseInt(getVal('f-pp-size')) || 1;
   const total = dp * tp * pp;
 
   const gpuSelect = document.getElementById('f-gpu-count');
@@ -3520,8 +3516,7 @@ function onTopologyChange() {
 function updateTopologyHint() {
   const dp = parseInt(getVal('f-dp-size')) || 1;
   const tp = parseInt(getVal('f-tp-size')) || 1;
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
+  const pp = parseInt(getVal('f-pp-size')) || 1;
   const total = dp * tp * pp;
   const selected = parseInt(getVal('f-gpu-count')) || 1;
 

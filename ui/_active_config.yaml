@@ -1,4 +1,4 @@
-checkpoint_dir: checkpoints
+checkpoint_dir: checkpoints/mini_style_fsdp
 dataset:
   name: wikitext
   split: train[:1%]
@@ -44,24 +44,24 @@ quantization:
   bits: 8
   compute_dtype: bfloat16
   double_quant: true
-  enabled: true
+  enabled: false
   quant_type: nf4
 save: true
 save_load:
   load_model_from_hf: true
   resume: false
   resume_path: ''
-strategy: solo
+strategy: fsdp
 training:
-  batch_size: 8
-  epochs: 16
+  batch_size: 16
+  epochs: 10
   grad_clip: 1
   gradient_checkpointing: true
-  learning_rate: 2.0e-05
+  learning_rate: 1.0e-05
   max_length: 128
   warmup_steps: 100
   weight_decay: 0.01
 wandb:
   wandb_entity: dist-train-project
-  wandb_log_with_train: false
+  wandb_log_with_train: true
   wandb_project: dist-train-project

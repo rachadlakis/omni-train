@@ -139,8 +139,6 @@ def main(args):
         )
             
         ## Print environment info for debugging and verification
-        if args.strategy in ["ddp", "fsdp"]:
-            print_on_rank_0(rank, f"backend={BACKEND}", "✅")
         print_on_all_ranks(rank, f"Process joined | world_size={world_size} | pid={os.getpid()}", "🚀",
                            local_rank=local_rank, device=device)
         

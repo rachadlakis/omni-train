@@ -511,6 +511,17 @@ def estimate_training_time(
     effective_flops_per_sec = effective_tflops_total * 1e12
 
     time_seconds = (total_flops / effective_flops_per_sec) * (1.0 + extra_overhead * 0.05)
+
+    # Startup overhead: model load + tokenizer + dataset prep + process group init
+    # ~1 second per billion parameters for model loading (from disk / HuggingFace)
+    model_load_sec = (num_params / 1e9) * 1.0
+    # Dataset prep: fixed base + small per-step cost
+    data_prep_sec = 15.0 + steps_per_epoch * 0.002
+    # Distributed init overhead (process group, rendezvous)
+    dist_init_sec = {"solo": 5.0, "ddp": 20.0, "fsdp": 35.0}.get(strategy, 15.0)
+    startup_sec = model_load_sec + data_prep_sec + dist_init_sec
+
+    time_seconds += startup_sec + 10.0
     time_seconds = max(10.0, time_seconds)
     total_minutes = time_seconds / 60
     total_hours = time_seconds / 3600
