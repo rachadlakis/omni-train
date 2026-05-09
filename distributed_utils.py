@@ -111,35 +111,54 @@ def gpu_memory_snapshot(device):
 #         print_on_rank_0(int(os.environ.get("RANK", "0")), f"❌ Failed to initialize process group: {e}", "❌")
 #         raise
 
+# def setup_dist_process_group():
+#     try:
+#         rank = int(os.environ.get("RANK", "0"))
+#         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+#         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
+
+#         if torch.cuda.is_available():
+#             device = torch.device(f"cuda:{local_rank}")
+#             torch.cuda.set_device(device)
+#             dist.init_process_group(backend=BACKEND, device_id=device)
+#         else:
+#             dist.init_process_group(backend=BACKEND)
+#         print_on_rank_0(rank,f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}","✅")
+#         return local_rank
+
+#     except Exception as e:
+#         print_on_rank_0(int(os.environ.get("RANK", "0")),f"❌ Failed to initialize process group: {e}","❌")
+#         raise
+
+
 def setup_dist_process_group():
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    
     try:
-        rank = int(os.environ.get("RANK", "0"))
-        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
 
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{local_rank}")
             torch.cuda.set_device(device)
-            dist.init_process_group(backend=BACKEND, device_id=device)
+
+            torch_version = tuple(int(x) for x in torch.__version__.split(".")[:2])
+            if torch_version >= (2, 3):
+                dist.init_process_group(backend=BACKEND, device_id=device)
+            else:
+                dist.init_process_group(backend=BACKEND)
         else:
             dist.init_process_group(backend=BACKEND)
 
-        print_on_rank_0(
-            rank,
-            f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}",
-            "✅"
-        )
-
+        print_on_rank_0(rank, f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}", "✅")
         return local_rank
 
     except Exception as e:
-        print_on_rank_0(
-            int(os.environ.get("RANK", "0")),
-            f"❌ Failed to initialize process group: {e}",
-            "❌"
-        )
+        print_on_rank_0(rank, f"❌ Failed to initialize process group: {e}", "❌")
         raise
-    
+
+
+
 def cleanup():
     try:
         if dist.is_available() and dist.is_initialized():
