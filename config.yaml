@@ -10,7 +10,16 @@
 #   subset: wikitext-2-raw-v1 
 #   split: train[:10%] 
   
-model_name: meta-llama/Llama-2-13b   ## LLM (facebook/opt-125m, meta-llama/Meta-Llama-3-70B, gpt2, gpt2-medium), vision (google/vit-base-patch16-224, microsoft/resnet-18), custom (custom_transformer)
+model_name: meta-llama/Llama-3.2-3B 
+# meta-llama/Llama-2-13b-hf   ## 
+## llm: 
+## facebook/opt-125m
+## meta-llama/Meta-Llama-3-70B 
+## gpt2
+## gpt2-medium
+
+## vision (google/vit-base-patch16-224, microsoft/resnet-18)
+## custom (custom_transformer)
 model_type: llm   ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 
 dataset:
