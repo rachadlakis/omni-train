@@ -6,6 +6,9 @@ import os
 import yaml
 import sys
 
+
+import torch
+import torch.distributed as dist
 # ----------------------------------------------------------------------
 # Plots
 # ----------------------------------------------------------------------
@@ -543,3 +546,12 @@ def estimate_training_time(
         "total_days": round(total_days, 3),
         "human_readable": human_readable,
     }
+
+
+def dist_barrier(local_rank: int) -> None:
+    TORCH_VERSION = tuple(int(x) for x in torch.__version__.split(".")[:2])
+
+    if dist.get_backend() == "nccl" and TORCH_VERSION >= (2, 0):
+        dist.barrier(device_ids=[local_rank])
+    else:
+        dist.barrier()

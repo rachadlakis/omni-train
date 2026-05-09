@@ -45,7 +45,7 @@ from distributed_utils import (
 )
 import wandb
 
-from utils import build_args, load_config
+from utils import build_args, load_config, dist_barrier
 
 import transformers
 transformers.logging.disable_progress_bar()
@@ -268,7 +268,7 @@ def main(args):
         model.train()
         losses = []
         if dist.is_initialized():
-            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+            dist_barrier(rank) 
 
         for epoch in range(args.epochs):
             print_on_rank_0(rank, f"Starting Epoch {epoch+1}/{args.epochs}", "🔁")

@@ -21,6 +21,8 @@ from transformers import (
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard, MixedPrecisionPolicy
 from checkpoint import Checkpointer
 from dotenv import load_dotenv
+from utils import dist_barrier
+
 
 load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -494,7 +496,7 @@ def apply_ddp(local_rank, rank, device, args):
             )
             if rank == 0 and os.path.exists(args.checkpoint_dir + "/seed.pt"):
                 os.remove(args.checkpoint_dir + "/seed.pt")
-            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+            dist_barrier(rank)  # ensure all ranks have finished loading before rank 0 saves the seed checkpoint
 
         else:
             # PATH C: random init — for experimentation and debugging only
@@ -633,7 +635,8 @@ def apply_fsdp(local_rank, rank, device, args):
                     torch.save(seed_model.state_dict(), peft_seed_path)
                     del seed_model
                     torch.cuda.empty_cache()
-                dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+                # dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+                dist_barrier(rank)
 
                 # All ranks: build structure from config and load the seed weights.
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
@@ -846,7 +849,8 @@ def apply_fsdp(local_rank, rank, device, args):
                     print_on_rank_0(rank, "Seed weights saved ✓ | releasing barrier", "✅")
                     del seed_model
                     torch.cuda.empty_cache()
-            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+                    
+            dist_barrier(rank)
 
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
             seed_checkpointer.load_model(model)
@@ -911,8 +915,8 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
 
         if dist.is_initialized():
             _local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-            dist.barrier(device_ids=[_local_rank] if dist.get_backend() == "nccl" else None)  # sync all ranks before returning
-
+            dist_barrier(rank)  
+            
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to save checkpoint: {e}", "❌")
         raise
