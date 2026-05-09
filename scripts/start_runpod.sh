@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ## Setup virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+# python3 -m venv .venv
+# source .venv/bin/activate
 
 ## Install dependencies
 pip install --upgrade pip
@@ -19,7 +19,7 @@ export HF_TOKEN="${HF_TOKEN:-***REDACTED-HF-TOKEN***}"
 export HF_HUB_DISABLE_XET=1
 
 ## activate the virtual environment and run the training script
-source .venv/bin/activate
-bash scripts/launch.sh
+# source .venv/bin/activate
+# bash scripts/launch.sh
 
 ## run it with: bash scripts/start_runpod.sh
