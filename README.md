@@ -1,6 +1,6 @@
 # Distributed Training Project
 
-A modular framework for training language models across multiple GPUs using PyTorch FSDP and DDP.
+A modular framework for training LLMs, Vision models, and embedding models across multiple GPUs using PyTorch FSDP and DDP.
 
 > **License:** Free for personal, research, and educational use. Commercial use requires a separate agreement — see [LICENSE](LICENSE).
 
@@ -10,8 +10,25 @@ A modular framework for training language models across multiple GPUs using PyTo
 
 | Doc | Audience | Contents |
 |-----|----------|----------|
-| [GUIDE.md](Documentation/GUIDE.md) | Beginners | What this project does, key concepts explained simply, step-by-step setup and usage |
-| [TECHNICAL.md](Documentation/TECHNICAL.md) | Developers | Architecture, distributed internals, checkpointing, config schema, SLURM |
+| [GUIDE.md](Documentation/GUIDE.md) | Beginners | Key concepts, step-by-step setup and usage |
+| [TECHNICAL.md](Documentation/TECHNICAL.md) | Developers | Architecture, distributed internals, checkpointing, config schema |
+
+---
+
+## 🚀 Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **FSDP** | Shards parameters, gradients, and optimizer state across GPUs |
+| **DDP** | Full-model replication with gradient all-reduce |
+| **Meta-device init** | Prevents host OOM when loading large pretrained models |
+| **Mixed Precision** | Configurable `bfloat16`/`float16` params with `float32` reductions |
+| **Gradient Checkpointing** | Trades recompute for memory on intermediate activations |
+| **Layer Prefetching** | Overlaps communication and compute in forward and backward passes |
+| **Distributed Checkpointing** | DCP and DTensor APIs for robust save/resume across all ranks |
+| **LoRA / QLoRA** | Memory-efficient fine-tuning via PEFT adapters and 4-bit quantization |
+| **Web UI** | Browser interface to configure, launch, and monitor training |
+| **SLURM support** | Multi-node launch scripts and a Python job generator |
 
 ---
 
@@ -27,16 +44,12 @@ dist-train-project/
 ├── data.py               # Dataset loading, tokenization, DistributedSampler
 ├── utils.py              # Terminal loss plot, config formatting
 ├── model.py              # Optional custom model definitions
-├── launch.sh             # Launcher (reads config.yaml, calls torchrun)
 ├── pytest.ini            # Pytest configuration
 ├── .env                  # Secrets: HF_TOKEN, WANDB_API_KEY
-├── configs/              # Example YAML configs (LLM, CNN, LoRA, FSDP, etc.)
-├── scripts/              # SLURM launchers and setup utilities
+├── configs/              # Example YAML configs (LLM, Vision, LoRA, FSDP, etc.)
+├── scripts/              # Launchers: launch.sh, SLURM scripts
 ├── tests/                # Unit and smoke test suite
-├── ui/                   # Web UI (FastAPI)
-├── images/               # Project images and assets
-├── research/             # Research notes and references
-├── site/                 # Static site files
+├── ui/                   # Web UI (FastAPI + static frontend)
 └── Documentation/        # GUIDE.md, TECHNICAL.md, SCRIPT.md
 ```
 
@@ -44,213 +57,38 @@ dist-train-project/
 
 ## ⚡ Quick Start
 
+### Step 1 — Check your CUDA version
+
 ```bash
-# 1. Clone and enter
+nvidia-smi        # use the "CUDA Version" shown here (top-right)
+nvcc --version    # toolkit version (may differ — nvidia-smi is what matters)
+```
+
+| `nvidia-smi` CUDA | PyTorch wheel | Index URL |
+|---|---|---|
+| 12.8 | `torch==2.10.0` | `https://download.pytorch.org/whl/cu128` |
+| 12.4 | `torch==2.6.0` | `https://download.pytorch.org/whl/cu124` |
+| 12.1 | `torch==2.3.0` | `https://download.pytorch.org/whl/cu121` |
+| CPU only | `torch==2.6.0` | `https://download.pytorch.org/whl/cpu` |
+
+---
+
+### Step 2 — Clone and create a virtual environment
+
+```bash
 git clone https://github.com/rachadlakis/dist-train-project.git
 cd dist-train-project
 
-# 2. Create venv and install dependencies
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-
-# CUDA 12.8
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
-    --index-url https://download.pytorch.org/whl/cu128
-pip install -r requirements.txt
-
-# 3. Set your Hugging Face token
-echo "HF_TOKEN=hf_your_token_here" > .env
-
-# 4. Launch (reads strategy and GPU count from config.yaml)
-bash scripts/launch.sh
 ```
 
 ---
 
-## ⚙️ Configuration
-
-Edit `config.yaml` before running. Key settings:
-
-```yaml
-model_name: "facebook/opt-125m"   # any HuggingFace CausalLM
-strategy: "fsdp"                  # solo | ddp | fsdp
-num_gpus: 2
-
-training:
-  epochs: 3
-  batch_size: 8
-  learning_rate: 1e-5
-```
-
-Pass a different config file:
+### Step 3 — Install PyTorch (pick your CUDA version)
 
 ```bash
-CONFIG_PATH=configs/llm_lora_ddp.yaml bash scripts/launch.sh
-```
-
----
-
-## 🛠️ Launch Options
-
-```bash
-# Auto mode — reads strategy and num_gpus from config.yaml
-bash scripts/launch.sh
-
-# Inline overrides
-STRATEGY=ddp NUM_GPUS=2 bash scripts/launch.sh
-
-# torchrun directly
-CONFIG_PATH=config.yaml torchrun --nproc_per_node=2 train.py
-```
-
----
-
-## 🖥️ Web UI
-
-```bash
-source .venv/bin/activate
-bash ui/launch_ui.sh
-# → http://127.0.0.1:8787
-```
-
----
-
-## 🔍 Troubleshooting
-
-| Error | Fix |
-|-------|-----|
-| `CUDA out of memory` | Reduce `batch_size` or `max_length` in `config.yaml` |
-| `401 / 403` from Hugging Face | Check `HF_TOKEN` in `.env` |
-| Port conflict on distributed init | Change `MASTER_PORT` in `launch.sh` |
-| `ImportError: peft / bitsandbytes` | `pip install peft bitsandbytes accelerate` |
-| W&B auth error | Set `WANDB_API_KEY` or disable with `wandb.enabled: false` | (e.g. `facebook/opt-125m`) on text datasets across multiple GPUs using two parallel strategies:
-
-- **DDP** (`DistributedDataParallel`) — each GPU holds a full model copy; gradients are synchronized after each backward pass.
-- **FSDP** (`FullyShardedDataParallel`) — model parameters, gradients, and optimizer states are sharded across GPUs, drastically reducing per-GPU memory.
-
-It implements advanced memory and performance optimizations: mixed precision, gradient checkpointing, explicit layer prefetching, and distributed checkpointing via PyTorch's DCP and DTensor APIs.
-
----
-
-## 📂 Project Structure
-
-```
-dist-train-project/
-├── train.py                  # Main entry point — orchestrates the training loop
-├── config.yaml               # Central configuration file
-├── distributed_utils.py      # Distributed setup, DDP/FSDP wrappers, memory profiling
-├── checkpoint.py             # Checkpoint save/load (DCP & DTensor APIs)
-├── parallelism.py            # Parallelism helpers (TP, PP, hybrid strategies)
-├── data.py                   # Dataset downloading, tokenization, DistributedSampler
-├── utils.py                  # Utilities: terminal loss plot, config formatting
-├── model.py                  # Optional custom model definitions
-├── launch.sh                 # Launcher script (reads config.yaml, calls torchrun)
-├── pytest.ini                # Pytest configuration
-├── .env                      # Secrets (HF_TOKEN, WANDB_API_KEY)
-├── configs/                  # Example YAML configurations per use case
-│   ├── cnn_*.yaml
-│   ├── llm_*.yaml
-│   ├── vlm_*.yaml
-│   ├── detection_*.yaml
-│   └── embedding_*.yaml
-├── scripts/
-│   ├── launch.sh             # Launcher script
-│   ├── launch_slurm.py       # Python SLURM job launcher
-│   ├── setup_env.py          # Environment setup helper
-│   ├── slurm_train.sh        # SLURM batch script template
-│   └── start_runpod.sh       # RunPod startup script
-├── tests/
-│   ├── conftest.py           # Pytest fixtures and shared setup
-│   ├── test_config_validation.py
-│   ├── test_config_combinations.py
-│   ├── test_helpers.py
-│   ├── test_model.py
-│   └── test_smoke.py         # End-to-end smoke tests (requires GPU)
-├── ui/
-│   ├── app.py                # FastAPI web UI server
-│   ├── queue.py              # Job queue manager
-│   ├── config_adapter.py     # Config translation layer
-│   ├── launch_ui.sh          # UI launch script
-│   └── static/               # Frontend HTML/CSS/JS
-├── images/                   # Project images and assets
-├── research/                 # Research notes and references
-├── site/                     # Static site files
-└── Documentation/            # GUIDE.md, TECHNICAL.md, SCRIPT.md
-```
-
----
-
-## 🚀 Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **FSDP** | Shards parameters, gradients, and optimizer state across GPUs |
-| **DDP** | Simple full-model replication with gradient all-reduce |
-| **Meta-device init** | Prevents host OOM when loading large pretrained models |
-| **Mixed Precision** | Configurable `bfloat16`/`float16` params with `float32` reductions |
-| **Gradient Checkpointing** | Trades recompute for memory on intermediate activations |
-| **Layer Prefetching** | Overlaps communication and compute in forward and backward passes |
-| **Distributed Checkpointing** | DCP and DTensor APIs for robust save/resume across all ranks |
-| **LoRA / QLoRA** | Memory-efficient fine-tuning via PEFT adapters and 4-bit quantization |
-| **Web UI** | Dark-themed browser interface to configure, launch, and monitor training |
-| **SLURM support** | Multi-node launch scripts and a Python job generator |
-
----
-
-## ⚡ Quick Start
-
-```bash
-# 1. Clone and enter the project
-git clone https://github.com/rachadlakis/dist-train-project.git
-cd dist-train-project
-
-# 2. Create venv and install dependencies
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-
-# CUDA 12.8
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
-    --index-url https://download.pytorch.org/whl/cu128
-pip install -r requirements.txt
-
-# 3. Set your Hugging Face token
-echo "HF_TOKEN=hf_your_token_here" > .env
-
-# 4. Launch training (reads strategy and GPU count from config.yaml)
-bash launch.sh
-```
-
----
-
-## 💻 Setup Instructions
-
-### Prerequisites
-
-- Linux (WSL2, Ubuntu, or RunPod)
-- Python 3.10+
-- NVIDIA GPU drivers and CUDA runtime
-- Hugging Face access token (`HF_TOKEN`) for gated models
-
-Check CUDA availability:
-
-```bash
-nvcc --version
-nvidia-smi
-```
-
----
-
-### Setup (Local / WSL / RunPod)
-
-```bash
-cd dist-train-project
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-
 # CUDA 12.8
 pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
     --index-url https://download.pytorch.org/whl/cu128
@@ -259,454 +97,162 @@ pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
 pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
+# CUDA 12.1
+pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# CPU only
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+```
+
+Verify:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+---
+
+### Step 4 — Install project dependencies
+
+```bash
 pip install -r requirements.txt
-
-# Optional: for LoRA / QLoRA workflows
-pip install peft bitsandbytes accelerate
-```
-
-Select VS Code interpreter from: `dist-train-project/.venv/bin/python`
-
----
-
-### Option B — RunPod Setup
-
-```bash
-# 1. SSH in
-ssh root@<runpod-host> -p <port> -i ~/.ssh/id_ed25519
-
-# 2. Clone and enter repo
-git clone https://github.com/rachadlakis/dist-train-project.git
-cd dist-train-project
-
-# 3. Create venv and install
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-
-# CUDA 12.8
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
-    --index-url https://download.pytorch.org/whl/cu128
-pip install -r requirements.txt
-
-# 4. Set token
-echo "HF_TOKEN=hf_your_token_here" > .env
 ```
 
 ---
 
-### Save Changes to GitHub
+### Step 5 — Set your Hugging Face token
 
-```bash
-git config --global user.email "your@email.com"
-git config --global user.name "Your Name"
+Required for gated models (LLaMA, Mistral, etc.). The project reads `.env` automatically — no `huggingface-cli login` needed.
+
+Create a `.env` file in the project root:
+
+```
+HF_TOKEN=hf_your_token_here
+WANDB_API_KEY=your_key        # optional to log losses in wandb.ai
 ```
 
 ---
 
-## 🔑 Environment Variables
+### Step 6 — Launch
 
-Create a `.env` file in the project root (or export in shell):
-
-```env
-HF_TOKEN=hf_your_token_here          # Required for gated HF models
-WANDB_API_KEY=your_wandb_key          # Optional — enables W&B logging
-```
-
-Or export directly:
+**Command line** — reads model, strategy, and GPU count from `config.yaml`:
 
 ```bash
-export HF_TOKEN=hf_your_token_here
-export WANDB_API_KEY=your_wandb_key
+bash scripts/launch.sh
+
+# Use a specific config
+CONFIG_PATH=configs/llm_lora_ddp.yaml bash scripts/launch.sh
+
+# Inline overrides
+STRATEGY=ddp NUM_GPUS=2 bash scripts/launch.sh
+
+# torchrun directly
+torchrun --nproc_per_node=2 train.py
+```
+
+**Web UI** — browser-based config editor and launcher:
+
+```bash
+bash ui/launch_ui.sh
+# → http://127.0.0.1:8787
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-All training settings live in `config.yaml`. Edit this file before running.
+All settings live in `config.yaml`. Key fields:
 
-### Common Fields
-
-```yaml
-# --- Model ---
-model_name: "facebook/opt-125m"       # Any HuggingFace CausalLM model
-strategy: "fsdp"                      # solo | ddp | fsdp
+```yaml Example
+model_name: "facebook/opt-125m"   # any HuggingFace model
+model_type: llm                   # llm | seq2seq | vision | yolo | vlm | encoder
+strategy: "fsdp"                  # solo | ddp | fsdp
 num_gpus: 2
 
-# --- Dataset ---
 dataset:
   name: "wikitext"
   subset: "wikitext-2-raw-v1"
   split: "train[:1%]"
 
-# --- Training ---
 training:
   epochs: 3
   batch_size: 8
   max_length: 128
   learning_rate: 1e-5
-  grad_clip: 1.0
   warmup_steps: 100
-  lr_schedule: cosine                 # cosine | linear | constant
-  checkpoint_dir: "checkpoints"
+  grad_clip: 1.0
 
-# --- Mixed Precision ---
-fsdp:
-  mixed_precision: true
-  param_dtype: "bfloat16"
-  reduce_dtype: "float32"
-  output_dtype: "bfloat16"
-  cast_forward_inputs: true
-  explicit_prefetching: true
-  forward_prefetch: 2
-  backward_prefetch: 2
-  dcp_api: true                       # true = DCP API, false = DTensor API
-
-# --- LoRA / PEFT ---
 peft:
   enabled: false
-  type: lora                          # lora | qlora
+  type: lora          # lora | qlora
   r: 16
   alpha: 32
-  dropout: 0.05
-  target_modules: all-linear
 
-# --- Quantization (for QLoRA) ---
-quantization:
-  enabled: false
-  bits: 4                             # 4 | 8
-  quant_type: nf4
-  compute_dtype: bfloat16
-  double_quant: true
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
 
-# --- Resume ---
 save_load:
   resume: false
-  resume_path: ""                     # e.g. "checkpoints/dcp_api/1234567890"
-
-# --- Logging ---
-wandb:
-  enabled: false
-  project: "dist-train-project"
-  run_name: null                      # auto-generated if null
+  resume_path: ""
 ```
 
-> **Rules enforced by the code:**
-> - `peft.type: qlora` implies `quantization.enabled: true` and `bits: 4`
-> - Quantization requires PEFT enabled
-> - QLoRA with FSDP: mixed-precision policy is skipped to avoid dtype conflicts on quantized weights
-
-### Use a Specific Config File
-
-```bash
-CONFIG_PATH=configs/llm_lora_ddp.yaml bash launch.sh
-```
-
----
-
-## 🛠️ Running Training
-
-### Activate Environment
-
-```bash
-cd dist-train-project
-source .venv/bin/activate
-```
-
-### Option A — Launcher Script (recommended)
-
-`launch.sh` reads `strategy` and `num_gpus` from `config.yaml` automatically:
-
-```bash
-bash launch.sh
-```
-
-- `strategy: solo` → runs `python train.py` (single process, no torchrun)
-- `strategy: ddp` or `fsdp` → runs `torchrun --nproc_per_node=<num_gpus> train.py`
-
-Override strategy or GPU count inline:
-
-```bash
-STRATEGY=ddp NUM_GPUS=2 bash launch.sh
-CONFIG_PATH=configs/llm_lora_ddp.yaml bash launch.sh
-```
-
-### Option B — torchrun Directly
-
-```bash
-# Single GPU
-CONFIG_PATH=config.yaml python train.py
-
-# Multi-GPU (e.g. 2 GPUs)
-CONFIG_PATH=config.yaml torchrun \
-    --nproc_per_node=2 \
-    --master_addr=localhost \
-    --master_port=29500 \
-    train.py
-```
+> **Rules:** `peft.type: qlora` requires `quantization.enabled: true`. QLoRA + FSDP skips the mixed-precision policy to avoid dtype conflicts.
+>
+> **Limitation:** FSDP and quantization (`bitsandbytes` 4-bit/8-bit) are not supported together. `bitsandbytes` quantizes weights into custom low-bit formats that live on a single device — FSDP cannot shard them because it needs to move parameter shards between ranks, which requires standard dtypes (`float32`, `bfloat16`, `float16`). Use QLoRA with `strategy: solo` (single GPU) or `strategy: ddp` instead.
 
 ---
 
 ## 🧠 Training Modes
 
-### Full Fine-tuning
+| Mode | Config | Memory | Use when |
+|------|--------|--------|----------|
+| Full fine-tuning | `peft.enabled: false` | Highest | Small models or large/many GPUs |
+| LoRA | `peft.type: lora` | ~10× less | Most fine-tuning tasks |
+| QLoRA | `peft.type: qlora` | ~20× less | 7B+ on consumer GPUs |
 
-Trains all model parameters. Best accuracy, highest memory cost. Use for small models or when you have large GPUs.
+**LoRA** adds low-rank adapter matrices $A \in \mathbb{R}^{d \times r}$, $B \in \mathbb{R}^{r \times k}$ to frozen weights:
 
-```yaml
-peft:
-  enabled: false
-```
-
-### LoRA (Low-Rank Adaptation)
-
-Trains small adapter matrices while freezing the base model. ~10× less memory than full fine-tuning.
-
-```yaml
-peft:
-  enabled: true
-  type: lora
-  r: 16
-  alpha: 32
-```
-
-**How it works:** For a weight matrix $W \in \mathbb{R}^{d \times k}$, LoRA adds two smaller matrices $A \in \mathbb{R}^{d \times r}$ and $B \in \mathbb{R}^{r \times k}$:
-
-$$\text{output} = Wx + \underbrace{ABx}_{\text{LoRA delta}}$$
-
-where $r \ll \min(d, k)$. Typical $r$ values: 8, 16, 32, 64.
-
-### QLoRA (Quantized LoRA)
-
-Combines 4-bit quantization with LoRA adapters. Run 7B models on an 8 GB GPU.
-
-```yaml
-peft:
-  enabled: true
-  type: qlora
-  r: 16
-quantization:
-  enabled: true
-  bits: 4
-  quant_type: nf4
-  compute_dtype: bfloat16
-```
+$$\text{output} = Wx + \underbrace{ABx}_{\text{LoRA delta}}, \quad r \ll \min(d, k)$$
 
 ---
 
-## 🌐 Distributed Training Strategies
+## 🌐 Distributed Strategies
 
-### DDP (DistributedDataParallel)
+**DDP** — each GPU holds a full model copy; gradients are all-reduced after each backward pass. Best for models that fit in a single GPU.
 
-Each GPU holds a **complete copy** of the model. Gradients are all-reduced after each backward pass.
-
-```
-GPU 0: Full Model    GPU 1: Full Model    GPU 2: Full Model
-       |                    |                    |
-  [Forward]           [Forward]            [Forward]
-       |                    |                    |
-  [Backward]          [Backward]           [Backward]
-       |                    |                    |
-       +---------> All-Reduce Gradients <--------+
-                            |
-                   [Optimizer Step]
-```
-
-**Best for:** Models that fit in a single GPU's memory. Simplest to use.
-
-### FSDP (FullyShardedDataParallel)
-
-Parameters are sharded across GPUs — each GPU stores only $1/N$ of the model.
-
-```
-GPU 0: Shard 0    GPU 1: Shard 1    GPU 2: Shard 2
-    |                  |                  |
-    +------ All-Gather Parameters --------+
-    |                  |                  |
-[Forward]          [Forward]          [Forward]
-    |                  |                  |
-    +--- Reduce-Scatter Gradients --------+
-    |                  |                  |
-[Update]           [Update]           [Update]
-```
-
-**Best for:** Models larger than a single GPU's memory (7B+ parameters).
-
----
-
-## 🔬 AI/ML Concepts
-
-### Mixed Precision
-
-Uses lower precision for speed while keeping FP32 for stability:
-
-```
-Forward Pass  : BF16 (fast)
-Backward Pass : BF16 (fast)
-Grad Accum    : FP32 (stable)
-Optimizer Step: FP32 (stable)
-```
-
-### Gradient Checkpointing
-
-Trades recompute for memory. Intermediate activations are discarded during forward and recomputed during backward. Reduces activation memory by $O(\sqrt{L})$ for $L$ layers.
-
-### Layer Prefetching
-
-Overlaps FSDP all-gather communication with compute by fetching the next layer's parameters before the current layer finishes — both in forward and backward passes.
-
-### Gradient Accumulation
-
-Simulates a larger effective batch size without extra memory:
-
-$$\text{Effective Batch} = \text{batch\_size} \times \text{grad\_accum\_steps} \times \text{world\_size}$$
-
-### Learning Rate Schedules
-
-| Schedule | Formula |
-|----------|---------|
-| Cosine | $\eta_t = \eta_{\min} + \frac{1}{2}(\eta_{\max} - \eta_{\min})(1 + \cos(\pi \cdot t / T))$ |
-| Linear | $\eta_t = \eta_{\max} - (\eta_{\max} - \eta_{\min}) \cdot t / T$ |
-| Warmup | $\eta_t = \eta_{\max} \cdot t / t_{\text{warmup}}$ for $t < t_{\text{warmup}}$ |
-
----
-
-## 🔧 Technical Deep Dive
-
-### Distributed Setup (`distributed_utils.py`)
-
-At startup, backend is selected automatically:
-- **`nccl`** — CUDA + Linux (optimized NVIDIA multi-GPU comms)
-- **`gloo`** — CPU fallback
-
-`torchrun` injects `RANK`, `LOCAL_RANK`, and `WORLD_SIZE` as environment variables. The process group is initialized with `device_id` passed directly to NCCL for correct hardware binding.
-
-### DDP Path
-
-All ranks independently call `AutoModelForCausalLM.from_pretrained(low_cpu_mem_usage=True)`, move the model to their device, and wrap it:
-
-```python
-model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
-```
-
-### FSDP Path
-
-1. **Meta-device init** — the model is created on `torch.device("meta")` (no memory allocated):
-   ```python
-   with torch.device("meta"):
-       model = AutoModelForCausalLM.from_config(config)
-   ```
-2. **Mixed precision policy** — `MixedPrecisionPolicy(param_dtype, reduce_dtype, output_dtype)` is configured.
-3. **Layer sharding** — each transformer block is wrapped with `fully_shard(layer)`, then the root module.
-4. **Weight loading** — three paths:
-   - **Resume:** load from existing checkpoint folder.
-   - **Fresh from HF:** rank 0 downloads weights, saves a seed checkpoint, all ranks load and shard it.
-   - **Random init:** materialize on GPU with `model.to_empty(device=device)`.
-
-### Checkpointing (`checkpoint.py`)
-
-Two checkpoint backends selectable via `fsdp.dcp_api`:
-
-| Backend | Method | Notes |
-|---------|--------|-------|
-| **DCP API** (`dcp_api: true`) | `set_model_state_dict` / `get_model_state_dict` | PyTorch native; rank 0 loads, broadcasts + shards automatically |
-| **DTensor API** (`dcp_api: false`) | `distribute_tensor` / `full_tensor()` | Manual per-parameter distribution |
-
-### Training Loop (`train.py`)
-
-```
-Stage 1: init_process_group()
-Stage 2: load tokenizer
-Stage 3: apply_ddp() or apply_fsdp()
-Stage 4: get_dataloader() with DistributedSampler
-Stage 5: for each epoch:
-           sampler.set_epoch(epoch)          # reshuffle
-           zero_grad → forward → loss.backward
-           clip_grad_norm_(1.0)
-           optimizer.step()
-Stage 6: save_checkpoint() → dist.destroy_process_group()
-```
-
-### Data Pipeline (`data.py`)
-
-1. Load dataset from Hugging Face (with optional streaming)
-2. Filter very short sequences
-3. Tokenize with `labels = input_ids` for causal LM loss
-4. Wrap with `DistributedSampler(num_replicas=world_size, rank=rank, shuffle=True)`
-5. Return `DataLoader(pin_memory=True, num_workers=N)`
+**FSDP** — parameters, gradients, and optimizer state are sharded; each GPU stores only $1/N$ of the model. Best for 7B+ models.
 
 ---
 
 ## 🖥️ Web UI
 
-A lightweight dark-themed browser interface to configure, launch, and monitor training in real time.
-
-### Features
-
-- View and live-edit `config.yaml`
-- Display key training settings and environment readiness (`HF_TOKEN`, CUDA, `.env`)
-- Start / stop training (calls `launch.sh` underneath)
-- Stream training logs live in the browser
-
-### Start the UI
-
 ```bash
-cd dist-train-project
 source .venv/bin/activate
-
-# Default (localhost:8787)
-bash ui/launch_ui.sh
-
-# Or with uvicorn directly
-uvicorn ui.app:app --reload --port 8787
-
-# For remote server (bind all interfaces)
-uvicorn ui.app:app --host 0.0.0.0 --port 8787
+bash ui/launch_ui.sh                               # localhost:8787
+UI_HOST=0.0.0.0 UI_PORT=9000 bash ui/launch_ui.sh  # remote / custom port
 ```
 
-Open: **http://127.0.0.1:8787**
-
-Optional overrides:
-
-```bash
-UI_HOST=0.0.0.0 UI_PORT=9000 bash ui/launch_ui.sh
-```
+Open **http://127.0.0.1:8787**. The UI lets you configure, launch, and monitor training from the browser.
 
 ---
 
 ## 🖧 SLURM / Multi-Node
 
-### Submit a Job
-
 ```bash
-# Using the SLURM batch script
+# Batch script
 sbatch scripts/slurm_train.sh configs/llm_full_finetune_fsdp.yaml
 
-# Custom resources
-sbatch --nodes=4 --gpus-per-node=8 scripts/slurm_train.sh configs/my_config.yaml
-```
-
-### Python SLURM Launcher
-
-```bash
-# Generate and submit a job
+# Python launcher
 python scripts/launch_slurm.py \
     --config configs/llm_fsdp.yaml \
-    --nodes 4 \
-    --gpus 8
+    --nodes 4 --gpus 8
 
-# Dry run (print script without submitting)
-python scripts/launch_slurm.py \
-    --config configs/llm_fsdp.yaml \
-    --nodes 4 \
-    --dry-run
-
-# With venv activation on the cluster
-python scripts/launch_slurm.py \
-    --config configs/llm_fsdp.yaml \
-    --nodes 2 --gpus 4 \
-    --venv /path/to/.venv
+# Dry run
+python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 4 --dry-run
 ```
 
 | Argument | Default | Description |
@@ -714,117 +260,29 @@ python scripts/launch_slurm.py \
 | `--config` | required | Path to YAML config |
 | `--nodes` | 2 | Number of nodes |
 | `--gpus` | 4 | GPUs per node |
-| `--cpus` | 32 | CPUs per task |
-| `--mem` | 256G | Memory per node |
 | `--time` | 24:00:00 | Time limit |
 | `--partition` | gpu | SLURM partition |
 | `--venv PATH` | — | Activate a virtualenv |
-| `--conda-env NAME` | — | Activate a conda env |
-| `--nccl-debug` | WARN | NCCL log level |
 | `--dry-run` | — | Print without submitting |
 
 ---
 
 ## 🧪 Testing
 
-The test suite lives in `tests/` and is split into two tiers.
-
-### Install test dependencies
-
 ```bash
-# pytest is already in requirements.txt
-pip install -r requirements.txt
+python -m pytest          # unit tests — fast, no GPU needed (~2 s)
+python -m pytest -m smoke # smoke tests — real training jobs, requires GPU
 ```
 
-### Unit tests — fast, no GPU required
+| File | Covers |
+|------|--------|
+| `test_config_validation.py` | Invalid strategies, dtypes, PEFT/quant guard conditions |
+| `test_config_combinations.py` | All valid strategy × PEFT × quantization × dtype combos |
+| `test_helpers.py` | Helper functions (`_dtype_from_name`, `get_model_layers`, etc.) |
+| `test_model.py` | Custom Transformer forward pass, output shape, no NaN |
+| `test_smoke.py` | End-to-end training runs with `facebook/opt-125m` |
 
-Covers config validation, helper functions, and the custom Transformer model.
-
-```bash
-python -m pytest          # runs all unit tests (~2 s)
-python -m pytest -v       # verbose output
-python -m pytest -k ddp   # filter by name
-```
-
-| File | What it tests |
-|------|---------------|
-| `tests/test_config_validation.py` | Invalid strategies, dtypes, training params, PEFT/quant guard conditions |
-| `tests/test_config_combinations.py` | All valid cross-product combinations of strategy × PEFT × quantization × dtype |
-| `tests/test_helpers.py` | `_dtype_from_name`, `_normalize_target_modules`, `_checkpoint_run_tag`, `get_model_layers` |
-| `tests/test_model.py` | Custom Transformer forward pass, output shape, no NaN, layer detection |
-
-### Smoke tests — real training jobs, requires GPU (~30–60 s each)
-
-Launches actual `train.py` subprocesses (via `torchrun` or `python`) with `facebook/opt-125m` on 1% of wikitext for 1 epoch.
-
-```bash
-python -m pytest -m smoke -v            # all cases
-python -m pytest -m smoke -v -k fsdp   # filter by name
-python -m pytest -m smoke -v -k "strategy=ddp and peft_enabled=true"
-```
-
-Smoke tests are excluded from the default `pytest` run and skipped automatically on CPU-only machines.
-
-#### Configuring which combinations to test (`SMOKE_GRID`)
-
-Open `tests/test_smoke.py` and edit `SMOKE_GRID`. Each key is a config parameter, each value is a list of options to try. The framework generates one test per combination automatically.
-
-```python
-SMOKE_GRID = {
-    "strategy":                              ["solo", "ddp", "fsdp"],
-    ("peft", "enabled"):                     [False, True],
-
-    # Add any parameter from config.yaml using the same nested-key syntax:
-    ("dist_parameters", "mixed_precision"):  [False, True],
-    ("training", "gradient_checkpointing"):  [False, True],
-    ("peft", "r"):                           [4, 8],          # LoRA rank
-    ("training", "batch_size"):              [2, 4],
-    "num_gpus":                              [1, 2],
-}
-```
-
-**Key syntax** — mirrors the structure of `config.yaml`:
-
-| Grid key | `config.yaml` field | What it controls |
-|---|---|---|
-| `"strategy"` | `strategy` | Training strategy (`solo` / `ddp` / `fsdp`) |
-| `("peft", "enabled")` | `peft.enabled` | Turn LoRA on/off |
-| `("peft", "r")` | `peft.r` | LoRA rank (only meaningful when `peft.enabled=True`) |
-| `("peft", "alpha")` | `peft.alpha` | LoRA scaling factor |
-| `("dist_parameters", "mixed_precision")` | `dist_parameters.mixed_precision` | Mixed precision |
-| `("dist_parameters", "distribute_api")` | `dist_parameters.distribute_api` | `dcp_api` vs `dtensor_api` |
-| `("training", "batch_size")` | `training.batch_size` | Batch size |
-| `("training", "gradient_checkpointing")` | `training.gradient_checkpointing` | Gradient checkpointing |
-| `"num_gpus"` | `num_gpus` | GPUs per run (auto-skipped if machine has fewer) |
-
-**Combinations grow fast** — 3 strategies × 2 peft × 2 mixed_precision = 12 tests × ~45 s = ~9 min. Use `SMOKE_GRID_FILTERS` to drop invalid or redundant combos:
-
-```python
-SMOKE_GRID_FILTERS = [
-    # bitsandbytes can't be sharded by FSDP — always invalid
-    lambda cfg: cfg["strategy"] == "fsdp" and cfg["quantization"]["enabled"],
-    # varying peft.r only matters when peft is enabled
-    lambda cfg: not cfg["peft"]["enabled"] and cfg["peft"]["r"] != 4,
-    # skip multi-GPU tests when the machine doesn't have enough GPUs
-    lambda cfg: int(cfg.get("num_gpus", 1)) > torch.cuda.device_count(),
-]
-```
-
-#### Save → Resume tests (`SMOKE_EXTRA_CASES`)
-
-Multi-phase scenarios (e.g. train + save, then resume) that can't be expressed as a simple grid go in `SMOKE_EXTRA_CASES`. Phase 2 gets `resume_path` injected automatically from the phase-1 checkpoint:
-
-```python
-SMOKE_EXTRA_CASES = [
-    {
-        "id": "fsdp_save_resume",
-        "phases": [
-            {"strategy": "fsdp", "save": True},               # phase 1: train + save
-            {"strategy": "fsdp", ("save_load", "resume"): True},  # phase 2: resume
-        ],
-    },
-]
-```
+Smoke tests are excluded from the default run and auto-skipped on CPU-only machines. See `tests/test_smoke.py` to configure `SMOKE_GRID` and `SMOKE_GRID_FILTERS`.
 
 ---
 
@@ -832,11 +290,36 @@ SMOKE_EXTRA_CASES = [
 
 | Error | Fix |
 |-------|-----|
-| `CUDA out of memory` | Reduce `batch_size`, `max_length`, or use a smaller model |
-| `401 / 403` from HF | Verify `HF_TOKEN` is valid and exported |
-| Distributed init / port conflict | Change `MASTER_PORT` in `launch.sh` or `config.yaml` |
-| W&B auth error | Set `WANDB_API_KEY` or set `wandb.enabled: false` |
+| `CUDA out of memory` | Reduce `batch_size` or `max_length`, or enable gradient checkpointing |
+| `401 / 403` from HF | Verify `HF_TOKEN` in `.env` is valid |
+| Port conflict on distributed init | Change `MASTER_PORT` in `scripts/launch.sh` |
 | `ImportError: peft / bitsandbytes` | `pip install peft bitsandbytes accelerate` |
+| W&B auth error | Set `WANDB_API_KEY` or set `wandb.enabled: false` |
 | QLoRA config error | Ensure `peft.type: qlora`, `quantization.enabled: true`, `bits: 4` |
 | `NCCL timeout` on multi-node | Increase `NCCL_TIMEOUT`, check network/IB connectivity |
-| Checkpoint load mismatch | Ensure same `dcp_api` setting used for save and load |
+| Checkpoint load mismatch | Use the same `dcp_api` setting for save and load |
+
+---
+
+## 🔧 Roadmap
+
+### SLURM — True Multi-Node Training
+
+Today `torchrun` spawns all processes on one node. The goal is to span them across many nodes, each with its own GPUs, over InfiniBand.
+
+| What | Detail |
+|------|--------|
+| Auto-generated job scripts | `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE` derived from `config.yaml` automatically |
+| Elastic rendezvous | `torchrun --nnodes=N --rdzv-backend=c10d` — nodes can join/leave without restarting the job |
+| Auto-requeue on preemption | Checkpoint on signal → SLURM re-queues → training resumes from last checkpoint |
+
+### Multi-Dimensional Parallelism *(in progress)*
+
+Combining Data, Tensor, and Pipeline Parallelism via `DeviceMesh` — the path to training 1T+ parameter models.
+
+| Strategy | How it works |
+|----------|-------------|
+| **Tensor Parallelism (TP)** | Weight matrices are split across GPUs within a node; each rank owns a row or column shard |
+| **Pipeline Parallelism (PP)** | Model is sliced by layers across stages; only activations cross stage boundaries (tolerates slow inter-node links) |
+| **DeviceMesh (DP × TP × PP)** | Named grid dimensions give each strategy its own process group — the same approach used by Megatron-LM |
+| **4D / 6D parallelism** | Adds Context Parallel + Expert Parallel for MoE models at full scale |
