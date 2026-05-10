@@ -542,32 +542,14 @@ const extraTemplates = [
   // BEiT
   { name: 'cnn_beit_base', display: 'BEiT Base', type: 'vision', desc: 'BERT-style pre-trained ViT' },
   { name: 'cnn_beit_large', display: 'BEiT Large', type: 'vision', desc: 'Large BERT-style ViT' },
-  // Detection
-  { name: 'detection_yolov8n', display: 'YOLOv8 Nano', type: 'detection' },
-  { name: 'detection_yolov8s', display: 'YOLOv8 Small', type: 'detection' },
-  { name: 'detection_yolov8m', display: 'YOLOv8 Medium', type: 'detection' },
-  { name: 'detection_yolov8l', display: 'YOLOv8 Large', type: 'detection' },
-  { name: 'detection_yolov8x', display: 'YOLOv8 XLarge', type: 'detection' },
-  { name: 'detection_yolov9n', display: 'YOLOv9 Nano', type: 'detection' },
-  { name: 'detection_yolov9s', display: 'YOLOv9 Small', type: 'detection' },
-  { name: 'detection_yolov9m', display: 'YOLOv9 Medium', type: 'detection' },
-  { name: 'detection_yolov9l', display: 'YOLOv9 Large', type: 'detection' },
-  { name: 'detection_yolov9x', display: 'YOLOv9 XLarge', type: 'detection' },
-  { name: 'detection_yolov10n', display: 'YOLOv10 Nano', type: 'detection' },
-  { name: 'detection_yolov10s', display: 'YOLOv10 Small', type: 'detection' },
-  { name: 'detection_yolov10m', display: 'YOLOv10 Medium', type: 'detection' },
-  { name: 'detection_yolov10l', display: 'YOLOv10 Large', type: 'detection' },
-  { name: 'detection_yolov10x', display: 'YOLOv10 XLarge', type: 'detection' },
-  { name: 'detection_yolov11n', display: 'YOLOv11 Nano', type: 'detection' },
-  { name: 'detection_yolov11s', display: 'YOLOv11 Small', type: 'detection' },
-  { name: 'detection_yolov11m', display: 'YOLOv11 Medium', type: 'detection' },
-  { name: 'detection_yolov11l', display: 'YOLOv11 Large', type: 'detection' },
-  { name: 'detection_yolov11x', display: 'YOLOv11 XLarge', type: 'detection' },
-  { name: 'detection_yolov12n', display: 'YOLOv12 Nano', type: 'detection' },
-  { name: 'detection_yolov12s', display: 'YOLOv12 Small', type: 'detection' },
-  { name: 'detection_yolov12m', display: 'YOLOv12 Medium', type: 'detection' },
-  { name: 'detection_yolov12l', display: 'YOLOv12 Large', type: 'detection' },
-  { name: 'detection_yolov12x', display: 'YOLOv12 XLarge', type: 'detection' },
+  // Detection (MIT/Apache 2.0 — no Ultralytics)
+  { name: 'detection_yolos_tiny',  display: 'YOLOS Tiny',  type: 'detection', desc: 'Fastest YOLO via ViT (MIT)' },
+  { name: 'detection_yolos_small', display: 'YOLOS Small', type: 'detection', desc: 'Balanced YOLO via ViT (MIT)' },
+  { name: 'detection_yolos_base',  display: 'YOLOS Base',  type: 'detection', desc: 'Strongest YOLO via ViT (MIT)' },
+  { name: 'detection_rtdetr_r18',  display: 'RT-DETR R18', type: 'detection', desc: 'Real-time DETR, lightest (Apache 2.0)' },
+  { name: 'detection_rtdetr_r50',  display: 'RT-DETR R50', type: 'detection', desc: 'Real-time DETR, balanced (Apache 2.0)' },
+  { name: 'detection_rtdetr_r101', display: 'RT-DETR R101',type: 'detection', desc: 'Real-time DETR, strongest (Apache 2.0)' },
+  { name: 'detection_detr_r50',    display: 'DETR R50',    type: 'detection', desc: 'Original DETR (Apache 2.0)' },
   // Embedding — text
   { name: 'embedding_e5_large_v2', display: 'E5-Large-v2 (Microsoft)', type: 'embedding', desc: 'State-of-the-art text embeddings' },
   { name: 'embedding_e5_mistral_7b', display: 'E5-Mistral-7B (Microsoft)', type: 'embedding', desc: 'LLM-based text embeddings' },
@@ -701,8 +683,6 @@ function closeGuidePage() {
 // =========================================================================
 // Form Logic (Config Page)
 // =========================================================================
-// Track where license modal was triggered from
-let _licenseModalContext = null;
 
 function onModelTypeChange() {
   resetFsdpCheck();
@@ -766,6 +746,7 @@ function updateDataFormatOptions(modelType) {
 
   const formats = {
     cnn: [{ value: 'image_folder', label: 'Image Folder' }],
+    vision: [{ value: 'image_folder', label: 'Image Folder' }],
     llm: [
       { value: 'json', label: 'JSON/JSONL' },
       { value: 'parquet', label: 'Parquet' },
@@ -871,22 +852,21 @@ function onModelSourceChange() {
   toggle('fg-model-url', false);
   toggle('fg-model-path', false);
   toggle('fg-model-upload', false);
-  // Hide YOLO dropdown unless source is ultralytics (or model type is detection, handled by onModelTypeChange)
-  if (source !== 'ultralytics' && modelType !== 'detection') {
+  // Detection model dropdown is shown/hidden by onModelTypeChange, not by source
+  if (modelType !== 'detection') {
     toggle('fg-yolo-model', false);
   }
 
   if (source === 'huggingface') {
-    toggle('fg-model-name', true);
+    if (modelType !== 'detection') {
+      toggle('fg-model-name', true);
+    }
     const el = document.getElementById('f-model-name');
     if (el) el.placeholder = 'e.g. facebook/opt-125m';
   } else if (source === 'torchvision') {
     toggle('fg-model-name', true);
     const el = document.getElementById('f-model-name');
     if (el) el.placeholder = 'e.g. resnet50, vit_b_16, efficientnet_b0';
-  } else if (source === 'ultralytics') {
-    // Ultralytics models are selected via the YOLO model dropdown
-    toggle('fg-yolo-model', true);
   } else if (source === 'url') {
     toggle('fg-model-url', true);
   } else if (source === 'local') {
@@ -1237,7 +1217,8 @@ function applyExtraTemplate(template) {
     onFinetuneModeChange();
   } else if (template.type === 'cnn') {
     let modelName = 'resnet50';
-    if (name.includes('vit_base')) modelName = 'vit_b_16';
+    if (name.includes('resnet18')) modelName = 'resnet18';
+    else if (name.includes('vit_base')) modelName = 'vit_b_16';
     else if (name.includes('efficientnet_b0')) modelName = 'efficientnet_b0';
 
     setVal('f-model-name', modelName);
@@ -1288,41 +1269,17 @@ function applyExtraTemplate(template) {
 
     onFinetuneModeChange();
   } else if (template.type === 'detection') {
-    let yoloModel = 'yolov8n.pt';
-    if (name.includes('yolov12')) {
-      if (name.includes('12n')) yoloModel = 'yolov12n.pt';
-      else if (name.includes('12s')) yoloModel = 'yolov12s.pt';
-      else if (name.includes('12m')) yoloModel = 'yolov12m.pt';
-      else if (name.includes('12l') || name.includes('12b')) yoloModel = 'yolov12l.pt';
-      else if (name.includes('12x')) yoloModel = 'yolov12x.pt';
-      else yoloModel = 'yolov12s.pt';
-    } else if (name.includes('yolov11')) {
-      if (name.includes('11n')) yoloModel = 'yolov11n.pt';
-      else if (name.includes('11s')) yoloModel = 'yolov11s.pt';
-      else if (name.includes('11m')) yoloModel = 'yolov11m.pt';
-      else if (name.includes('11l') || name.includes('11b')) yoloModel = 'yolov11l.pt';
-      else if (name.includes('11x')) yoloModel = 'yolov11x.pt';
-      else yoloModel = 'yolov11s.pt';
-    } else if (name.includes('yolov10')) {
-      if (name.includes('10n')) yoloModel = 'yolov10n.pt';
-      else if (name.includes('10s')) yoloModel = 'yolov10s.pt';
-      else if (name.includes('10m')) yoloModel = 'yolov10m.pt';
-      else if (name.includes('10l') || name.includes('10b')) yoloModel = 'yolov10l.pt';
-      else if (name.includes('10x')) yoloModel = 'yolov10x.pt';
-      else yoloModel = 'yolov10s.pt';
-    } else if (name.includes('yolov9')) {
-      if (name.includes('9t') || name.includes('9n')) yoloModel = 'yolov9t.pt';
-      else if (name.includes('9s')) yoloModel = 'yolov9s.pt';
-      else if (name.includes('9m')) yoloModel = 'yolov9m.pt';
-      else if (name.includes('9c') || name.includes('9l') || name.includes('9b')) yoloModel = 'yolov9c.pt';
-      else if (name.includes('9e') || name.includes('9x')) yoloModel = 'yolov9e.pt';
-      else yoloModel = 'yolov9s.pt';
-    } else if (name.includes('yolov8s')) {
-      yoloModel = 'yolov8s.pt';
-    }
+    // All models are permissively licensed (MIT/Apache 2.0), loaded via AutoModelForObjectDetection
+    let detectionModel = 'hustvl/yolos-small';
+    if (name.includes('yolos_tiny'))  detectionModel = 'hustvl/yolos-tiny';
+    else if (name.includes('yolos_base'))  detectionModel = 'hustvl/yolos-base';
+    else if (name.includes('rtdetr_r18')) detectionModel = 'PekingU/rtdetr_r18vd';
+    else if (name.includes('rtdetr_r50')) detectionModel = 'PekingU/rtdetr_r50vd';
+    else if (name.includes('rtdetr_r101')) detectionModel = 'PekingU/rtdetr_r101vd';
+    else if (name.includes('detr_r50'))  detectionModel = 'facebook/detr-resnet-50';
 
-    setVal('f-model-name', yoloModel);
-    setVal('f-yolo-model', yoloModel);
+    setVal('f-model-source', 'huggingface');
+    setVal('f-yolo-model', detectionModel);
     setVal('f-image-size', '640');
 
     // Default dataset: COCO128 sample — small enough for quick runs
@@ -1481,7 +1438,7 @@ function applyConfigToForm(cfg) {
   // Step 2: Now set all the specific values AFTER the reset
   // Model source and name
   if (modelType === 'detection') {
-    setVal('f-model-source', 'ultralytics');
+    setVal('f-model-source', 'huggingface');
   } else if (modelType === 'cnn') {
     setVal('f-model-source', 'torchvision');
     setVal('f-model-name', modelName);
@@ -1497,7 +1454,7 @@ function applyConfigToForm(cfg) {
 
   // Model-specific settings
   setVal('f-num-classes', m.num_classes || 10);
-  setVal('f-yolo-model', m.yolo_model || 'yolov8n.pt');
+  setVal('f-yolo-model', m.yolo_model || 'hustvl/yolos-small');
   const freezeEl = document.getElementById('f-freeze-backbone');
   if (freezeEl) freezeEl.checked = m.freeze_backbone === true;
 
@@ -1607,12 +1564,9 @@ function buildConfigFromForm() {
   const modelSource = getVal('f-model-source');
   let modelName = '';
   if (modelSource === 'huggingface') {
-    modelName = getVal('f-model-name');
+    modelName = modelType === 'detection' ? getVal('f-yolo-model') : getVal('f-model-name');
   } else if (modelSource === 'torchvision') {
     modelName = getVal('f-model-name');
-  } else if (modelSource === 'ultralytics') {
-    // For Ultralytics, the model name comes from the YOLO model dropdown
-    modelName = 'yolo';  // Placeholder, actual model is in yolo_model field
   } else if (modelSource === 'url') {
     modelName = getVal('f-model-url');
   } else if (modelSource === 'local') {
@@ -1688,10 +1642,25 @@ function buildConfigFromForm() {
   }
 
   cfg.data = { type: 'dummy', num_workers: 4 };
+  const dataSource = getVal('f-data-source');
+  cfg.data._source = dataSource || 'huggingface';
   const dataName = getVal('f-data-name');
   const dataSubset = getVal('f-data-subset');
   const dataSplit = getVal('f-data-split');
-  if (dataName) cfg.data.name = dataName;
+  if (dataSource === 'local') {
+    const dataPath = getVal('f-data-path');
+    const dataFormat = getVal('f-data-format');
+    if (dataPath) cfg.data._path = dataPath;
+    if (dataFormat) cfg.data.format = dataFormat;
+  } else if (dataSource === 'torchvision') {
+    cfg.data.name = getVal('f-data-torchvision') || 'cifar10';
+  } else if (dataSource === 'url') {
+    const dataUrl = getVal('f-data-url');
+    if (dataUrl) cfg.data._url = dataUrl;
+    if (dataName) cfg.data.name = dataName;
+  } else {
+    if (dataName) cfg.data.name = dataName;
+  }
   if (dataSubset) cfg.data.subset = dataSubset;
   if (dataSplit) cfg.data.split = dataSplit;
   if (modelType === 'cnn' || modelType === 'vision' || modelType === 'vlm' || modelType === 'detection') {
@@ -2091,25 +2060,6 @@ function proceedToEnvPage() {
   navigateTo('yaml.html');
 }
 
-function showUltralyticsLicenseModal() {
-  const modal = document.getElementById('ultralytics-license-modal');
-  if (modal) modal.classList.add('active');
-}
-
-function closeUltralyticsLicenseModal() {
-  const modal = document.getElementById('ultralytics-license-modal');
-  if (modal) modal.classList.remove('active');
-}
-
-function acceptUltralyticsLicense() {
-  closeUltralyticsLicenseModal();
-  localStorage.setItem('ultralytics_license_accepted', 'true');
-  // Only proceed to env page if triggered from "Next" button, not from dropdown selection
-  if (_licenseModalContext === 'envpage') {
-    proceedToEnvPage();
-  }
-  _licenseModalContext = null;
-}
 
 async function initEnvPage() {
   loadFormState();
@@ -2303,7 +2253,10 @@ wandb:
 
 function configToYaml(cfg) {
   const modelName = cfg.model?.name || 'facebook/opt-350m';
-  const dataName = cfg.data?.name || 'wikitext';
+  const dataSource = cfg.data?._source || 'huggingface';
+  const dataPath = cfg.data?._path || '';
+  const dataUrl = cfg.data?._url || '';
+  const dataName = dataSource === 'local' ? '' : (cfg.data?.name || 'wikitext');
   const dataSubset = cfg.data?.subset || 'wikitext-2-raw-v1';
   const dataSplit = cfg.data?.split || cfg.data?.train_split || 'train[:1%]';
 
@@ -2358,12 +2311,22 @@ function configToYaml(cfg) {
   const wandbEntity = cfg.wandb?.wandb_entity || 'dist-train-project';
   const wandbProject = cfg.wandb?.wandb_project || 'dist-train-project';
 
+  const datasetNameLine = dataSource === 'local'
+    ? `  path: ${dataPath}  # local image folder`
+    : dataSource === 'url'
+    ? `  name: ${dataUrl}`
+    : dataSource === 'torchvision'
+    ? `  name: ${dataName}  # torchvision built-in dataset`
+    : `  name: ${dataName} # other datasets: wikitext-103, PennTreebank, c4, squad`;
+  const datasetSubsetLine = dataSource === 'local' || dataSource === 'torchvision' || dataSource === 'url'
+    ? ''
+    : `  subset: ${dataSubset} # other subsets: wikitext-103-raw-v1, PennTreebank (no subset)\n`;
+
   return `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl
 
 dataset:
-  name: ${dataName} # other datasets: wikitext-103, PennTreebank, c4, squad
-  subset: ${dataSubset} # other subsets: wikitext-103-raw-v1, PennTreebank (no subset)
-  split: ${dataSplit}  ## 
+${datasetNameLine}
+${datasetSubsetLine}  split: ${dataSplit}  ## 
 
 training:
   epochs: ${epochs}                     ## Number of epochs to train

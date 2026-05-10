@@ -1,18 +1,18 @@
-checkpoint_dir: checkpoints/mini_style_fsdp
+checkpoint_dir: checkpoints/bert_lora_triplet
 dataset:
-  name: wikitext
+  name: sentence-transformers/all-nli
   split: train[:1%]
-  subset: wikitext-2-raw-v1
+  subset: triplet
 dist_parameters:
   cast_forward_inputs: false
   dcp_api: true
   distribute_api: dcp_api
   dtensor_api: false
-  mixed_precision: true
+  mixed_precision: false
   output_dtype: bfloat16
   param_dtype: bfloat16
   reduce_dtype: float32
-model_name: facebook/opt-350m
+model_name: bert-base-uncased
 model_type: llm
 multi_dimensional_parallelism:
   device_mesh_shape:
@@ -27,7 +27,7 @@ multi_dimensional_parallelism:
   pp_size: 0
   tp_enabled: false
   tp_size: 0
-num_gpus: 4
+num_gpus: 1
 peft:
   alpha: 32
   bias: none
@@ -51,14 +51,14 @@ save_load:
   load_model_from_hf: true
   resume: false
   resume_path: ''
-strategy: fsdp
+strategy: solo
 training:
-  batch_size: 16
-  epochs: 1
+  batch_size: 32
+  epochs: 5
   grad_clip: 1
   gradient_checkpointing: true
-  learning_rate: 1.0e-05
-  max_length: 128
+  learning_rate: 0.0001
+  max_length: 256
   warmup_steps: 100
   weight_decay: 0.01
 wandb:

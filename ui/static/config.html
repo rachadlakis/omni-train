@@ -95,7 +95,6 @@
               <option value="" disabled selected hidden>Select source...</option>
               <option value="huggingface">HuggingFace</option>
               <option value="torchvision">Torchvision</option>
-              <option value="ultralytics">Ultralytics</option>
               <option value="url">External URL</option>
               <option value="local">Local Path</option>
               <option value="upload">Upload File</option>
@@ -131,59 +130,25 @@
             <input type="number" id="f-num-classes" value="10">
           </div>
           <div class="form-group" id="fg-yolo-model" style="display:none;">
-            <label>YOLO Variant <span class="required-star" aria-hidden="true">*</span></label>
+            <label>Detection Model <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="All models are permissively licensed (MIT/Apache 2.0) and loaded via AutoModelForObjectDetection — no Ultralytics required.">?</span></label>
             <select id="f-yolo-model">
-              <option value="" disabled selected hidden>Select YOLO variant...</option>
-              <optgroup label="YOLOv12">
-                <option value="yolov12n.pt">YOLOv12 Nano</option>
-                <option value="yolov12s.pt">YOLOv12 Small</option>
-                <option value="yolov12m.pt">YOLOv12 Medium</option>
-                <option value="yolov12l.pt">YOLOv12 Large</option>
-                <option value="yolov12x.pt">YOLOv12 XLarge</option>
+              <option value="" disabled selected hidden>Select detection model...</option>
+              <optgroup label="YOLOS (MIT license)">
+                <option value="hustvl/yolos-tiny">YOLOS Tiny (fastest)</option>
+                <option value="hustvl/yolos-small" selected>YOLOS Small (recommended)</option>
+                <option value="hustvl/yolos-base">YOLOS Base (strongest)</option>
               </optgroup>
-              <optgroup label="YOLOv11">
-                <option value="yolov11n.pt">YOLOv11 Nano</option>
-                <option value="yolov11s.pt">YOLOv11 Small</option>
-                <option value="yolov11m.pt">YOLOv11 Medium</option>
-                <option value="yolov11l.pt">YOLOv11 Large</option>
-                <option value="yolov11x.pt">YOLOv11 XLarge</option>
+              <optgroup label="RT-DETR (Apache 2.0)">
+                <option value="PekingU/rtdetr_r18vd">RT-DETR R18 (lightest)</option>
+                <option value="PekingU/rtdetr_r50vd">RT-DETR R50</option>
+                <option value="PekingU/rtdetr_r101vd">RT-DETR R101 (largest)</option>
               </optgroup>
-              <optgroup label="YOLOv10">
-                <option value="yolov10n.pt">YOLOv10 Nano</option>
-                <option value="yolov10s.pt">YOLOv10 Small</option>
-                <option value="yolov10m.pt">YOLOv10 Medium</option>
-                <option value="yolov10l.pt">YOLOv10 Large</option>
-                <option value="yolov10x.pt">YOLOv10 XLarge</option>
+              <optgroup label="DETR (Apache 2.0)">
+                <option value="facebook/detr-resnet-50">DETR ResNet-50</option>
+                <option value="facebook/detr-resnet-101">DETR ResNet-101</option>
               </optgroup>
-              <optgroup label="YOLOv9">
-                <option value="yolov9t.pt">YOLOv9 Nano</option>
-                <option value="yolov9s.pt">YOLOv9 Small</option>
-                <option value="yolov9m.pt">YOLOv9 Medium</option>
-                <option value="yolov9c.pt">YOLOv9 Large</option>
-                <option value="yolov9e.pt">YOLOv9 XLarge</option>
-              </optgroup>
-              <optgroup label="YOLOv8">
-                <option value="yolov8n.pt">YOLOv8 Nano</option>
-                <option value="yolov8s.pt">YOLOv8 Small</option>
-                <option value="yolov8m.pt">YOLOv8 Medium</option>
-                <option value="yolov8l.pt">YOLOv8 Large</option>
-                <option value="yolov8x.pt">YOLOv8 XLarge</option>
-              </optgroup>
-              <optgroup label="YOLOv7">
-                <option value="yolov7n.pt">YOLOv7 Nano</option>
-                <option value="yolov7s.pt">YOLOv7 Small</option>
-                <option value="yolov7m.pt">YOLOv7 Medium</option>
-                <option value="yolov7l.pt">YOLOv7 Large</option>
-                <option value="yolov7x.pt">YOLOv7 XLarge</option>
-              </optgroup>
-              <optgroup label="YOLO-World (Open Vocabulary)">
-                <option value="yolov8s-world.pt">YOLO-World Small</option>
-                <option value="yolov8m-world.pt">YOLO-World Medium</option>
-                <option value="yolov8l-world.pt">YOLO-World Large</option>
-              </optgroup>
-              <optgroup label="RT-DETR">
-                <option value="rtdetr-l.pt">RT-DETR Large</option>
-                <option value="rtdetr-x.pt">RT-DETR XLarge</option>
+              <optgroup label="Conditional DETR (Apache 2.0)">
+                <option value="microsoft/conditional-detr-resnet-50">Conditional DETR R50</option>
               </optgroup>
             </select>
           </div>
@@ -574,55 +539,6 @@
     </div>
     <div class="message-modal-footer">
       <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
-    </div>
-  </div>
-</div>
-
-<!-- Ultralytics License Modal -->
-<div class="modal-overlay" id="ultralytics-license-modal">
-  <div class="license-modal" onclick="event.stopPropagation()">
-    <div class="license-modal-header">
-      <div class="license-icon">⚠️</div>
-      <h2>Ultralytics License Notice</h2>
-    </div>
-    <div class="license-modal-body">
-      <p class="license-intro">
-        YOLO models are provided by <strong>Ultralytics</strong> under the <strong>AGPL-3.0 license</strong>.
-      </p>
-
-      <div class="license-terms">
-        <div class="license-term free">
-          <span class="term-icon">✓</span>
-          <div>
-            <strong>FREE for:</strong>
-            <span>Personal, Educational, or Open-Source projects</span>
-          </div>
-        </div>
-        <div class="license-term paid">
-          <span class="term-icon">$</span>
-          <div>
-            <strong>LICENSE REQUIRED for:</strong>
-            <span>Commercial or Business use</span>
-          </div>
-        </div>
-      </div>
-
-      <p class="license-action">
-        If you are using YOLO for <strong>commercial purposes</strong>, you must purchase an Enterprise License from Ultralytics.
-      </p>
-
-      <div class="license-links">
-        <a href="https://www.ultralytics.com/license" target="_blank" class="license-link">
-          📄 View License Details
-        </a>
-        <a href="mailto:licensing@ultralytics.com" class="license-link">
-          ✉️ Contact: licensing@ultralytics.com
-        </a>
-      </div>
-    </div>
-    <div class="license-modal-footer">
-      <button class="btn btn-secondary" onclick="closeUltralyticsLicenseModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="acceptUltralyticsLicense()">I Understand, Continue →</button>
     </div>
   </div>
 </div>

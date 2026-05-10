@@ -29,7 +29,8 @@ huggingface_hub==1.5.0
 accelerate==1.12.0
 
 ## Object detection
-ultralytics==8.4.18
+# ultralytics removed — GPL-3.0; use transformers AutoModelForObjectDetection instead
+# (RT-DETR, DETR, etc. via HuggingFace — already a dependency above)
 
 ## Logging and progress
 wandb==0.25.0

@@ -1,7 +1,8 @@
-# Object Detection with YOLOv8n on custom YOLO format dataset (single GPU)
+# Object Detection with YOLOS (You Only Look at One Sequence) on custom dataset (single GPU)
+# YOLOS is the YOLO architecture adapted from ViT, MIT licensed, loaded via transformers AutoModelForObjectDetection
 # You can run it with: python train.py --config configs/detection_yolo_single_gpu.yaml
 
-model_name: yolov8n.pt          ## yolov8n/s/m/l/x or yolo11n/s/m/l/x
+model_name: hustvl/yolos-small   ## MIT licensed — swap for yolos-tiny (fastest) or yolos-base (strongest)
 model_type: yolo
 
 dataset:
@@ -21,7 +22,7 @@ training:
 
 strategy: solo
 num_gpus: 1
-checkpoint_dir: checkpoints/yolov8n_custom
+checkpoint_dir: checkpoints/yolos_small_custom
 save: true
 
 dist_parameters:
@@ -70,4 +71,4 @@ wandb:
   wandb_log_with_train: false
   wandb_entity: omni_train
   wandb_project: omni_train
-  wandb_run_name: detection-yolov8n-custom
+  wandb_run_name: detection-yolos-small-custom
