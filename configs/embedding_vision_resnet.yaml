@@ -1,32 +1,80 @@
-seed: 42
+# ResNet-50 fine-tuning with InfoNCE loss for vision embedding (DDP)
+# You can run it with: python train.py --config configs/embedding_vision_resnet.yaml
 
-model:
-  type: embedding
-  name: resnet50
+model_name: microsoft/resnet-50
+model_type: vision
+
+dataset:
+  name: ./data/image_pairs.jsonl
+  subset: ""
+  split: train
+
+training:
+  epochs: 20
+  batch_size: 64
+  max_length: 224           ## image_size (not a sequence length for vision models)
+  learning_rate: 1e-3
+  warmup_steps: 100
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  gradient_checkpointing: false
+
+strategy: ddp
+num_gpus: 1
+checkpoint_dir: checkpoints/resnet_embedding
+save: true
+
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: true
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: false
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
   embedding_type: vision
   pretrained: true
   freeze_backbone: false
   embedding_dim: 256
   loss_type: infonce
   loss_temperature: 0.1
-
-data:
-  type: local_file
-  name: ./data/image_pairs.jsonl
   embedding_format: pairs
   image_size: 224
   augmentation: standard
   num_workers: 4
-
-distributed:
-  strategy: ddp
-  mixed_precision: true
-
-training:
-  epochs: 20
-  batch_size: 64
-  lr: 1e-3
-  weight_decay: 1e-4
-  checkpoint_dir: checkpoints/resnet_embedding
   save_every_n_epochs: 5
   log_interval: 100
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: embedding-vision-resnet

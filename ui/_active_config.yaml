@@ -27,12 +27,12 @@ multi_dimensional_parallelism:
   pp_size: 0
   tp_enabled: false
   tp_size: 0
-num_gpus: 1
+num_gpus: 4
 peft:
   alpha: 32
   bias: none
   dropout: 0.05
-  enabled: false
+  enabled: true
   r: 16
   target_modules: all-linear
   type: lora
@@ -41,7 +41,7 @@ prefetch:
   explicit: true
   forward: 2
 quantization:
-  bits: 8
+  bits: 4
   compute_dtype: bfloat16
   double_quant: true
   enabled: false
@@ -54,7 +54,7 @@ save_load:
 strategy: fsdp
 training:
   batch_size: 16
-  epochs: 10
+  epochs: 1
   grad_clip: 1
   gradient_checkpointing: true
   learning_rate: 1.0e-05
@@ -63,5 +63,5 @@ training:
   weight_decay: 0.01
 wandb:
   wandb_entity: dist-train-project
-  wandb_log_with_train: true
+  wandb_log_with_train: false
   wandb_project: dist-train-project

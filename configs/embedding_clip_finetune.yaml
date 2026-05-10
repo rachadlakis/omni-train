@@ -1,37 +1,79 @@
-seed: 42
+# CLIP LoRA fine-tuning with InfoNCE loss for vision-text embeddings (FSDP)
+# You can run it with: python train.py --config configs/embedding_clip_finetune.yaml
 
-model:
-  type: embedding
-  name: openai/clip-vit-base-patch32
-  embedding_type: clip
-  finetune_mode: lora
-  loss_type: infonce
-  loss_temperature: 0.07
-  lora_r: 8
-  lora_alpha: 16
-  lora_target_modules:
-    - q_proj
-    - v_proj
-    - k_proj
+model_name: openai/clip-vit-base-patch32
+model_type: vlm
 
-data:
-  type: hf_dataset
+dataset:
   name: conceptual_captions
-  train_split: train
-  max_seq_len: 77
-  image_size: 224
-  num_workers: 4
-
-distributed:
-  strategy: fsdp
-  mixed_precision: true
-  activation_checkpointing: true
+  subset: ""
+  split: train
 
 training:
   epochs: 10
   batch_size: 32
-  lr: 5e-5
+  max_length: 77
+  learning_rate: 5e-5
+  warmup_steps: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gradient_checkpointing: true
+
+strategy: fsdp
+num_gpus: 4
+checkpoint_dir: checkpoints/clip_finetuned
+save: true
+
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: true
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: true
+  type: lora
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  embedding_type: clip
+  loss_type: infonce
+  loss_temperature: 0.07
+  image_size: 224
+  num_workers: 4
   grad_accum_steps: 4
-  checkpoint_dir: checkpoints/clip_finetuned
   save_every_n_epochs: 2
   log_interval: 100
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: embedding-clip-finetune

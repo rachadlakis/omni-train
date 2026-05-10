@@ -58,3 +58,4 @@ wandb:
   wandb_log_with_train: false   ## whether to log training metrics to Weights & Biases
   wandb_entity: "your-entity"   ## your W&B entity (username or team)
   wandb_project: "omni-train"   ## your W&B project name
+  wandb_run_name: llm-lora-s3   ## run name for W&B

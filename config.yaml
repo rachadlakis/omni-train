@@ -10,7 +10,7 @@
 #   subset: wikitext-2-raw-v1 
 #   split: train[:10%] 
   
-model_name: google/gemma-2-2b 
+model_name: facebook/opt-125m 
 ##### LLM examples: 
 
 ## --- TINY (for quick smoke tests) ---
@@ -62,7 +62,7 @@ dataset:
   split: train[:1%]         ## which split and how much of it to use for training.  like "train[:2%]+validation[:3%]"
 
 training:
-  epochs: 2                     ## Number of epochs to train
+  epochs: 1                     ## Number of epochs to train
   batch_size: 16                ## Batch size for training 
   max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
@@ -71,7 +71,7 @@ training:
   weight_decay: 0.01            ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
+num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: true                  ## whether to save checkpoints
 

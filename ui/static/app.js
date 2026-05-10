@@ -865,11 +865,16 @@ function syncGpuOptionsWithStrategy() {
 
 function onModelSourceChange() {
   const source = getVal('f-model-source');
+  const modelType = getVal('f-model-type');
 
   toggle('fg-model-name', false);
   toggle('fg-model-url', false);
   toggle('fg-model-path', false);
   toggle('fg-model-upload', false);
+  // Hide YOLO dropdown unless source is ultralytics (or model type is detection, handled by onModelTypeChange)
+  if (source !== 'ultralytics' && modelType !== 'detection') {
+    toggle('fg-yolo-model', false);
+  }
 
   if (source === 'huggingface') {
     toggle('fg-model-name', true);
@@ -880,8 +885,8 @@ function onModelSourceChange() {
     const el = document.getElementById('f-model-name');
     if (el) el.placeholder = 'e.g. resnet50, vit_b_16, efficientnet_b0';
   } else if (source === 'ultralytics') {
-    // Ultralytics models are selected via YOLO model dropdown, no text input needed
-    // The fg-yolo-model group handles this
+    // Ultralytics models are selected via the YOLO model dropdown
+    toggle('fg-yolo-model', true);
   } else if (source === 'url') {
     toggle('fg-model-url', true);
   } else if (source === 'local') {
@@ -2650,7 +2655,7 @@ async function startTrainingFromYaml() {
   try {
     cfg = parseYaml(yamlStr);
   } catch (e) {
-    alert('YAML Parsing Error: ' + e.message);
+    showMessage('YAML Syntax Error', e.message || String(e), 'error');
     return;
   }
 
@@ -2673,8 +2678,8 @@ async function startTrainingFromYaml() {
     if (!res.ok) {
       hideTrainingOverlay();
       stopTrainingTimer();
-      const err = await res.json();
-      alert('Training Error: ' + (err.detail || 'Failed to start training'));
+      const err = await res.json().catch(() => ({}));
+      showMessage('Training Error', err.detail || 'Failed to start training', 'error');
       return;
     }
 
@@ -2684,7 +2689,7 @@ async function startTrainingFromYaml() {
   } catch (e) {
     hideTrainingOverlay();
     stopTrainingTimer();
-    alert('Training Error: ' + e.message);
+    showMessage('Training Error', e.message || String(e), 'error');
   }
 }
 
@@ -2758,11 +2763,8 @@ function startYamlPagePolling() {
 
       } else if (data.status === 'error' || data.status === 'stopped') {
         stopYamlPagePolling();
-        hideTrainingOverlay();
         stopTrainingTimer();
-
-        // Show error in the page instead of alert
-        showTrainingError(data.logs || []);
+        showTrainingError(data.logs || [], data.error_summary, data.exit_code);
 
       } else if (data.status === 'finished') {
         stopYamlPagePolling();
@@ -2779,9 +2781,8 @@ function startYamlPagePolling() {
           );
           if (hasError) {
             stopYamlPagePolling();
-            hideTrainingOverlay();
             stopTrainingTimer();
-            showTrainingError(data.logs);
+            showTrainingError(data.logs, data.error_summary, data.exit_code);
           }
         }
       }
@@ -2799,69 +2800,114 @@ function stopYamlPagePolling() {
   }
 }
 
-function showTrainingError(logs) {
-  // Get last 20 lines of logs
-  const errorLogs = logs.slice(-20);
+/**
+ * Extract the most meaningful error from a list of log lines.
+ * Returns { headline, contextLines } where headline is the exception message
+ * and contextLines is the relevant traceback/error block.
+ */
+function extractTrainingError(logs, serverErrorSummary) {
+  // Prefer the pre-extracted summary from the backend
+  const headline = serverErrorSummary && serverErrorSummary.trim() ? serverErrorSummary.trim() : null;
 
-  // Create error display in the page
-  const container = document.querySelector('.yaml-page') || document.body;
+  // Find the last "Traceback (most recent call last)" in all logs
+  let tracebackStart = -1;
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (logs[i].includes('Traceback (most recent call last)')) {
+      tracebackStart = i;
+      break;
+    }
+  }
 
-  // Remove any existing error display
-  const existing = document.getElementById('training-error-display');
-  if (existing) existing.remove();
+  if (tracebackStart !== -1) {
+    // Show from traceback start to end (up to 80 lines)
+    const contextLines = logs.slice(tracebackStart, tracebackStart + 80);
+    // If no backend headline, derive it from the last non-indented line in the traceback
+    if (!headline) {
+      for (let i = contextLines.length - 1; i >= 0; i--) {
+        const line = contextLines[i].trim();
+        if (line && !/^\s/.test(contextLines[i]) && contextLines[i] !== contextLines[tracebackStart]) {
+          return { headline: line, contextLines };
+        }
+      }
+    }
+    return { headline, contextLines };
+  }
 
-  const errorDiv = document.createElement('div');
-  errorDiv.id = 'training-error-display';
-  errorDiv.style.cssText = `
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: #1a1a2e;
-    border: 2px solid #e74c3c;
-    border-radius: 12px;
-    padding: 24px;
-    max-width: 80%;
-    max-height: 80%;
-    overflow: auto;
-    z-index: 10000;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-  `;
-
-  const errorText = errorLogs.join('\n');
-
-  errorDiv.innerHTML = `
-    <h3 style="color: #e74c3c; margin: 0 0 16px 0; font-size: 18px;">Training Failed</h3>
-    <div style="position: relative;">
-      <button onclick="copyTrainingError(this)" title="Copy output" style="position: absolute; top: 8px; right: 8px; background: #2a2a3e; border: 1px solid #444; border-radius: 4px; color: #aaa; cursor: pointer; padding: 4px 8px; font-size: 11px; line-height: 1;">📋 Copy</button>
-      <pre id="training-error-pre" style="background: #0d0d1a; padding: 16px; padding-right: 80px; border-radius: 8px; overflow: auto; max-height: 400px; color: #ccc; font-size: 12px; white-space: pre-wrap; word-break: break-word;">${escapeHtml(errorText)}</pre>
-    </div>
-    <button onclick="closeTrainingError()" style="margin-top: 16px; padding: 10px 24px; background: #e74c3c; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
-  `;
-
-  container.appendChild(errorDiv);
-
-  // Add backdrop
-  const backdrop = document.createElement('div');
-  backdrop.id = 'training-error-backdrop';
-  backdrop.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 9999;
-  `;
-  backdrop.onclick = closeTrainingError;
-  container.appendChild(backdrop);
+  // No traceback — look for any line with a known error keyword
+  const errorPattern = /Error:|Exception:|CUDA error|RuntimeError|ValueError|TypeError|KeyError|ImportError|ModuleNotFoundError/i;
+  let fallbackHeadline = headline;
+  let fallbackContext = logs.slice(-30);
+  if (!fallbackHeadline) {
+    for (let i = logs.length - 1; i >= 0; i--) {
+      if (errorPattern.test(logs[i])) {
+        fallbackHeadline = logs[i].trim();
+        // Show surrounding context
+        fallbackContext = logs.slice(Math.max(0, i - 5), Math.min(logs.length, i + 15));
+        break;
+      }
+    }
+  }
+  return { headline: fallbackHeadline, contextLines: fallbackContext };
 }
 
-function closeTrainingError() {
-  const errorDiv = document.getElementById('training-error-display');
-  const backdrop = document.getElementById('training-error-backdrop');
-  if (errorDiv) errorDiv.remove();
-  if (backdrop) backdrop.remove();
+function showTrainingError(logs, serverErrorSummary, exitCode) {
+  const { headline } = extractTrainingError(logs, serverErrorSummary);
+
+  // Turn the existing overlay red — keep it open with all output visible
+  const modal = document.querySelector('.training-modal');
+  if (modal) modal.classList.add('training-modal--error');
+
+  // Replace spinner/animation with a failure icon
+  const animation = document.getElementById('training-animation');
+  if (animation) {
+    animation.innerHTML = '<div style="font-size:56px;line-height:1;">✖</div>';
+  }
+
+  // Update title
+  const title = document.getElementById('training-title');
+  const titleSuffix = exitCode != null ? ` (exit ${exitCode})` : '';
+  if (title) {
+    title.textContent = `Training Failed${titleSuffix}`;
+    title.style.color = '#e74c3c';
+  }
+
+  // Show headline under the title if we have one
+  const subtitle = document.getElementById('training-subtitle');
+  if (subtitle && headline) {
+    subtitle.textContent = headline;
+    subtitle.style.color = '#ff8080';
+    subtitle.style.fontFamily = 'monospace';
+    subtitle.style.fontSize = '12px';
+  } else if (subtitle) {
+    subtitle.textContent = 'See console output above for details.';
+    subtitle.style.color = '#e74c3c';
+  }
+
+  // Hide progress bar and timer
+  const progress = document.querySelector('.training-progress');
+  if (progress) progress.style.display = 'none';
+  const timer = document.getElementById('training-timer');
+  if (timer) timer.style.display = 'none';
+
+  // Swap the Stop button into a Close button
+  const btnStop = document.getElementById('btn-stop-training');
+  if (btnStop) {
+    btnStop.textContent = 'Close';
+    btnStop.style.background = '#e74c3c';
+    btnStop.onclick = hideTrainingOverlay;
+  } else {
+    // Fallback: add a Close button after the live log panel
+    const livePanel = document.querySelector('.training-live-panel');
+    if (livePanel && !document.getElementById('training-error-close-btn')) {
+      const closeBtn = document.createElement('button');
+      closeBtn.id = 'training-error-close-btn';
+      closeBtn.className = 'btn btn-danger';
+      closeBtn.textContent = 'Close';
+      closeBtn.style.marginTop = '20px';
+      closeBtn.onclick = hideTrainingOverlay;
+      livePanel.insertAdjacentElement('afterend', closeBtn);
+    }
+  }
 }
 
 function copyTrainingError(btn) {
@@ -3087,7 +3133,7 @@ function showTrainingOverlay(strategy, gpuCount = null) {
   if (queueBox) queueBox.style.display = 'none';
   if (progressContainer) progressContainer.style.display = 'block';
   if (timerContainer) timerContainer.style.display = 'block';
-  if (btnStop) btnStop.style.display = 'inline-block';
+  if (btnStop) { btnStop.style.display = 'inline-block'; btnStop.textContent = 'Stop Training'; btnStop.style.background = ''; btnStop.onclick = stopTraining; }
   if (btnCancel) btnCancel.style.display = 'none';
 
   // Use provided gpuCount or infer from strategy
@@ -3123,6 +3169,15 @@ function showTrainingOverlay(strategy, gpuCount = null) {
 function hideTrainingOverlay() {
   const overlay = document.getElementById('training-overlay');
   if (overlay) overlay.classList.remove('active');
+  // Reset error state so next run starts clean
+  const modal = document.querySelector('.training-modal');
+  if (modal) modal.classList.remove('training-modal--error');
+  const title = document.getElementById('training-title');
+  if (title) title.style.color = '';
+  const subtitle = document.getElementById('training-subtitle');
+  if (subtitle) { subtitle.style.color = ''; subtitle.style.fontFamily = ''; subtitle.style.fontSize = ''; }
+  const closeBtn = document.getElementById('training-error-close-btn');
+  if (closeBtn) closeBtn.remove();
 }
 
 // =========================================================================

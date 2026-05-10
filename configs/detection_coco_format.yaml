@@ -1,30 +1,77 @@
-seed: 42
+# Object Detection with YOLOv8m on COCO format dataset
+# You can run it with: python train.py --config configs/detection_coco_format.yaml
 
-model:
-  type: detection
-  name: yolo
-  yolo_model: yolov8m.pt
+model_name: yolov8m.pt
+model_type: yolo
 
-data:
-  type: coco
-  name: data/coco_yolo_converted  # Output directory for converted data
-  image_size: 640
-  num_workers: 8
-  # COCO annotation files and image directories
-  coco_train_json: /data/coco/annotations/instances_train2017.json
-  coco_val_json: /data/coco/annotations/instances_val2017.json
-  coco_train_images: /data/coco/train2017
-  coco_val_images: /data/coco/val2017
-
-distributed:
-  strategy: none
+dataset:
+  name: data/coco_yolo_converted  ## output directory for converted COCO data
+  subset: ""
+  split: train
 
 training:
   epochs: 50
   batch_size: 8
-  lr: 0.01
-  min_lr: 1e-4
-  weight_decay: 5e-4
+  max_length: 640           ## image_size (not a sequence length for detection models)
+  learning_rate: 0.01
   warmup_steps: 500
-  checkpoint_dir: checkpoints/yolov8m_coco
+  weight_decay: 5e-4
+  grad_clip: 1.0
+  gradient_checkpointing: false
+
+strategy: solo
+num_gpus: 1
+checkpoint_dir: checkpoints/yolov8m_coco
+save: true
+
+dist_parameters:
+  mixed_precision: false
+  param_dtype: float32
+  reduce_dtype: float32
+  output_dtype: float32
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: false
+
+prefetch:
+  explicit: false
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: false
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  data_type: coco
+  image_size: 640
+  num_workers: 8
+  coco_train_json: /data/coco/annotations/instances_train2017.json
+  coco_val_json: /data/coco/annotations/instances_val2017.json
+  coco_train_images: /data/coco/train2017
+  coco_val_images: /data/coco/val2017
+  min_lr: 1e-4
   log_interval: 10
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: detection-yolov8m-coco

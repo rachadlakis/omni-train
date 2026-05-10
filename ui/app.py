@@ -80,12 +80,53 @@ class TrainingState:
         self.logs: deque[str] = deque(maxlen=2000)
         self.config: dict | None = None
         self.lock = threading.Lock()
+        self.error_summary: str = ""
+        self.exit_code: int | None = None
 
     def reset(self):
         self.process = None
         self.status = "idle"
         self.logs.clear()
         self.config = None
+        self.error_summary = ""
+        self.exit_code = None
+
+
+def _extract_error_summary(log_lines: list[str]) -> str:
+    """Scan log lines and return the most meaningful error message.
+
+    Looks for the last Python traceback and returns the final exception line.
+    Falls back to the last line containing an error keyword.
+    """
+    # Find the last traceback
+    traceback_start = -1
+    for i in range(len(log_lines) - 1, -1, -1):
+        if "Traceback (most recent call last)" in log_lines[i]:
+            traceback_start = i
+            break
+
+    if traceback_start != -1:
+        error_context = log_lines[traceback_start:]
+        # The final non-blank, non-indented line is the exception
+        for line in reversed(error_context):
+            stripped = line.strip()
+            if stripped and not line.startswith((" ", "\t")):
+                return stripped
+        # Fallback: last non-blank line in traceback
+        for line in reversed(error_context):
+            if line.strip():
+                return line.strip()
+
+    # No traceback — find last line that looks like an error
+    error_pattern = re.compile(
+        r"(Error|Exception|CUDA error|RuntimeError|ValueError|TypeError|KeyError|ImportError|ModuleNotFoundError)",
+        re.IGNORECASE,
+    )
+    for line in reversed(log_lines):
+        if error_pattern.search(line) and line.strip():
+            return line.strip()
+
+    return ""
 
 
 state = TrainingState()
@@ -878,6 +919,7 @@ async def start_training(payload: ConfigPayload):
             pass
         proc.wait()
         with state.lock:
+            state.exit_code = proc.returncode
             if proc.returncode == 0:
                 state.status = "finished"
             elif state.status == "running":
@@ -898,6 +940,7 @@ async def start_training(payload: ConfigPayload):
                     except Exception:
                         pass
                 state.logs.append(f"Process exited with code {proc.returncode}")
+                state.error_summary = _extract_error_summary(list(state.logs))
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
@@ -912,6 +955,8 @@ async def training_status():
         "status": state.status,
         "logs": list(state.logs),
         "config": state.config,
+        "error_summary": state.error_summary,
+        "exit_code": state.exit_code,
     }
 
 @app.post("/api/train/stop")

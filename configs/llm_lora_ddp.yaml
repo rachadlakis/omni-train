@@ -11,6 +11,7 @@ model_name: meta-llama/Llama-3.3-70B-Instruct  ## Change to any model above
 
 dataset:
   name: tatsu-lab/alpaca        ## other datasets: wikitext, c4, squad
+  subset: ""                    ## no subset for alpaca
   split: train                  ## fraction of the dataset to use for training
 
 training:
@@ -64,3 +65,4 @@ wandb:
   wandb_log_with_train: false   ## whether to log training metrics to Weights & Biases
   wandb_entity: "your-entity"   ## your W&B entity (username or team)
   wandb_project: "omni-train"   ## your W&B project name
+  wandb_run_name: llm-lora-ddp  ## run name for W&B

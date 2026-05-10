@@ -1,43 +1,80 @@
-seed: 42
+# LLaVA LoRA fine-tuning for Vision Language Model (single GPU)
+# You can run it with: python train.py --config configs/vlm_llava_lora_single_gpu.yaml
 
-model:
-  type: vlm
-  name: llava-hf/llava-1.5-7b-hf
-  finetune_mode: lora
-  use_flash_attention: true
-  quantize: true
-  quant_bits: 4
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
-  lora_target: llm_only  # "llm_only" | "vision_only" | "both"
-  lora_target_modules:
-    - q_proj
-    - v_proj
-    - k_proj
-    - o_proj
+model_name: llava-hf/llava-1.5-7b-hf
+model_type: vlm
 
-data:
-  type: dummy  # Use "hf_dataset" or "local_file" for real training
-  # name: liuhaotian/LLaVA-Instruct-150K  # Example HuggingFace dataset
-  train_split: train
-  max_seq_len: 2048
-  image_size: 336
-  num_workers: 4
-
-distributed:
-  strategy: none
-  mixed_precision: true
+dataset:
+  name: dummy           ## Use "liuhaotian/LLaVA-Instruct-150K" for real training
+  subset: ""
+  split: train
 
 training:
   epochs: 1
   batch_size: 1
-  lr: 2e-4
+  max_length: 2048
+  learning_rate: 2e-4
+  warmup_steps: 100
   weight_decay: 0.01
   grad_clip: 1.0
+  gradient_checkpointing: false
+
+strategy: solo
+num_gpus: 1
+checkpoint_dir: checkpoints/llava_lora
+save: true
+
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: false
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: true
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+  bias: none
+
+quantization:
+  enabled: true
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  use_flash_attention: true
+  lora_target: llm_only         ## "llm_only" | "vision_only" | "both"
+  image_size: 336
+  num_workers: 4
   grad_accum_steps: 16
-  warmup_steps: 100
   lr_schedule: cosine
-  checkpoint_dir: checkpoints/llava_lora
   save_every_n_epochs: 1
   log_interval: 10
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: vlm-llava-lora

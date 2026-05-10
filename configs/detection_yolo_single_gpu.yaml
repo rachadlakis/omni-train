@@ -1,25 +1,73 @@
-seed: 42
+# Object Detection with YOLOv8n on custom YOLO format dataset (single GPU)
+# You can run it with: python train.py --config configs/detection_yolo_single_gpu.yaml
 
-model:
-  type: detection
-  name: yolo
-  yolo_model: yolov8n.pt  # yolov8n/s/m/l/x or yolo11n/s/m/l/x
+model_name: yolov8n.pt          ## yolov8n/s/m/l/x or yolo11n/s/m/l/x
+model_type: yolo
 
-data:
-  type: yolo
-  data_yaml: /data/my_dataset/data.yaml  # YOLO format data.yaml
-  image_size: 640
-  num_workers: 8
-
-distributed:
-  strategy: none
+dataset:
+  name: /data/my_dataset/data.yaml  ## YOLO format data.yaml
+  subset: ""
+  split: train
 
 training:
   epochs: 100
   batch_size: 16
-  lr: 0.01
-  min_lr: 1e-4
-  weight_decay: 5e-4
+  max_length: 640           ## image_size (not a sequence length for detection models)
+  learning_rate: 0.01
   warmup_steps: 300
-  checkpoint_dir: checkpoints/yolov8n_custom
+  weight_decay: 5e-4
+  grad_clip: 1.0
+  gradient_checkpointing: false
+
+strategy: solo
+num_gpus: 1
+checkpoint_dir: checkpoints/yolov8n_custom
+save: true
+
+dist_parameters:
+  mixed_precision: false
+  param_dtype: float32
+  reduce_dtype: float32
+  output_dtype: float32
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: false
+
+prefetch:
+  explicit: false
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: false
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  data_type: yolo
+  image_size: 640
+  num_workers: 8
+  min_lr: 1e-4
   log_interval: 10
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: detection-yolov8n-custom

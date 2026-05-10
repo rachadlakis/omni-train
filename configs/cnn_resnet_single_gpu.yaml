@@ -1,31 +1,78 @@
-seed: 42
+# CNN ResNet-50 fine-tuning on CIFAR-10 (single GPU)
+# You can run it with: python train.py --config configs/cnn_resnet_single_gpu.yaml
 
-model:
-  type: cnn
-  name: resnet50
-  num_classes: 10
-  pretrained: true
-  freeze_backbone: false
+model_name: microsoft/resnet-50
+model_type: vision
 
-data:
-  type: torchvision
-  name: CIFAR10
-  image_size: 224
-  augmentation: standard
-  num_workers: 4
-
-distributed:
-  strategy: none
+dataset:
+  name: cifar10
+  subset: ""
+  split: train
 
 training:
   epochs: 10
   batch_size: 32
-  lr: 1e-3
-  min_lr: 1e-5
+  max_length: 224           ## image_size (not a sequence length for vision models)
+  learning_rate: 1e-3
+  warmup_steps: 500
   weight_decay: 1e-4
   grad_clip: 1.0
-  warmup_steps: 500
+  gradient_checkpointing: false
+
+strategy: solo
+num_gpus: 1
+checkpoint_dir: checkpoints/resnet50_cifar10
+save: true
+
+dist_parameters:
+  mixed_precision: false
+  param_dtype: float32
+  reduce_dtype: float32
+  output_dtype: float32
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: false
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: false
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  num_classes: 10
+  pretrained: true
+  freeze_backbone: false
+  image_size: 224
+  augmentation: standard
+  num_workers: 4
   lr_schedule: cosine
-  checkpoint_dir: checkpoints/resnet50_cifar10
+  min_lr: 1e-5
   save_every_n_epochs: 2
   log_interval: 50
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: cnn-resnet50-cifar10

@@ -2082,6 +2082,12 @@ body {
   text-align: center;
   max-width: 760px;
   width: 92%;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.training-modal--error {
+  border-color: #e74c3c;
+  box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25), 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
 .training-animation {

@@ -1,37 +1,81 @@
-seed: 42
+# BERT LoRA fine-tuning with triplet loss for text embedding (DDP)
+# You can run it with: python train.py --config configs/embedding_bert_lora_triplet.yaml
 
-model:
-  type: embedding
-  name: bert-base-uncased
-  embedding_type: text
-  embedding_backend: transformers
-  finetune_mode: lora
-  pooling_mode: cls
-  loss_type: triplet
-  loss_margin: 0.3
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.05
-  lora_target_modules:
-    - query
-    - value
-    - key
+model_name: bert-base-uncased
+model_type: encoder
 
-data:
-  type: local_file
+dataset:
   name: ./data/triplets.jsonl
-  embedding_format: triplets
-  max_seq_len: 256
-  num_workers: 4
-
-distributed:
-  strategy: ddp
+  subset: ""
+  split: train
 
 training:
   epochs: 5
   batch_size: 32
-  lr: 1e-4
+  max_length: 256
+  learning_rate: 1e-4
+  warmup_steps: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gradient_checkpointing: false
+
+strategy: ddp
+num_gpus: 1
+checkpoint_dir: checkpoints/bert_lora_triplet
+save: true
+
+dist_parameters:
+  mixed_precision: false
+  param_dtype: float32
+  reduce_dtype: float32
+  output_dtype: float32
+  cast_forward_inputs: false
+  dcp_api: true
+  dtensor_api: false
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: true
+  forward: 2
+  backward: 2
+
+peft:
+  enabled: true
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - query
+    - value
+    - key
+  bias: none
+
+quantization:
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+model_extras:
+  embedding_type: text
+  embedding_backend: transformers
+  pooling_mode: cls
+  loss_type: triplet
+  loss_margin: 0.3
+  embedding_format: triplets
+  num_workers: 4
   grad_accum_steps: 2
-  checkpoint_dir: checkpoints/bert_lora_triplet
   save_every_n_epochs: 1
   log_interval: 50
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: omni_train
+  wandb_project: omni_train
+  wandb_run_name: embedding-bert-lora-triplet
