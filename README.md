@@ -2,6 +2,8 @@
 
 A modular framework for training language models across multiple GPUs using PyTorch FSDP and DDP.
 
+> **License:** Free for personal, research, and educational use. Commercial use requires a separate agreement — see [LICENSE](LICENSE).
+
 ---
 
 ## 📚 Documentation
