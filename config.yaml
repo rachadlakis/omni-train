@@ -11,6 +11,7 @@
 #   split: train[:10%] 
   
 model_name: facebook/opt-125m 
+model_type: llm   ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 ##### LLM examples: 
 
 ## --- TINY (for quick smoke tests) ---
@@ -50,24 +51,21 @@ model_name: facebook/opt-125m
 # Qwen/Qwen2.5-72B              # 72B   - no auth
 # meta-llama/Llama-3.1-405B     # 405B  - requires HF_TOKEN
 
-
-
 ## vision (google/vit-base-patch16-224, microsoft/resnet-18)
 ## custom (custom_transformer)
-model_type: llm   ## supported: llm, seq2seq, vision, yolo, vlm, encoder
 
 dataset:
   name: wikitext            ## dataset name from Hugging Face datasets library
   subset: wikitext-2-raw-v1 ## subset name if the dataset has multiple subsets 
-  split: train[:1%]         ## which split and how much of it to use for training.  like "train[:2%]+validation[:3%]"
+  split: train[:1%]         ## which split and how much to use for trai. Ex. train[:2%]+validation[:3%]"
 
 training:
-  epochs: 1                     ## Number of epochs to train
+  epochs: 4                     ## Number of epochs to train
   batch_size: 16                ## Batch size for training 
   max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
-  gradient_checkpointing: false ## whether to use gradient checkpointing
-  warmup_steps: 10             ## Number of warmup steps for learning rate scheduler
+  gradient_checkpointing: false ## whether to use gradient checkpointing 
+  warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
@@ -85,8 +83,8 @@ dist_parameters:
 
 save_load:
   resume: false              ## whether to resume from a checkpoint
-  resume_path: ""           ## path to checkpoint to resume from
-  load_model_from_hf: true  ## whether to load  from Hugging Face
+  resume_path: ""            ## path to checkpoint to resume from
+  load_model_from_hf: true   ## whether to load  from Hugging Face
 
 prefetch:
   explicit: true  ## explicit prefetching?

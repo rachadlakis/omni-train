@@ -396,7 +396,8 @@ if __name__ == "__main__":
     try: 
         if int(os.environ.get("RANK", "0")) == 0:
             print_config(args)
-    except ValueError:
+
+    except ValueError as e:
         rank = 0
-        print_on_rank_0(rank, "Could not parse RANK env variable, defaulting to 0 for config print. Error:", "⚠️")
+        print_on_rank_0(rank, f"Could not parse RANK env variable, defaulting to 0 for config print. Error: {e}", "⚠️")
     main(args)

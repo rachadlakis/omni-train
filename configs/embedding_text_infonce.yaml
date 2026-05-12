@@ -30,8 +30,7 @@ dist_parameters:
   reduce_dtype: float32
   output_dtype: bfloat16
   cast_forward_inputs: false
-  dcp_api: true
-  dtensor_api: false
+  distribute_api: dcp_api
 
 save_load:
   resume: false

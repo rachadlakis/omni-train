@@ -91,47 +91,10 @@ def gather_rank_debug(rank, world_size, title, message):
 def gpu_memory_snapshot(device):
     """Returns a string with the current GPU memory usage (allocated and reserved) for the given device."""
     if device.type != "cuda":
-        return "Cuda not detected."
+        return "CUDA not detected."
     allocated = torch.cuda.memory_allocated(device) / (1024 ** 3)
     reserved = torch.cuda.memory_reserved(device) / (1024 ** 3)
     return f"allocated={allocated:.2f} GB | reserved={reserved:.2f} GB"
-
-# def setup_dist_process_group():
-#     """Initializes the distributed process group and sets the CUDA device for this process.
-#     Expects environment variables RANK, LOCAL_RANK, and WORLD_SIZE to be set by the launcher (e.g. torchrun)."""
-#     try:
-#         rank = int(os.environ.get("RANK", "0"))
-#         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-#         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
-#         dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"))
-
-#         if torch.cuda.is_available():
-#             torch.cuda.set_device(f"cuda:{local_rank}")
-#             print_on_rank_0(rank, f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}", "✅")
-#         return local_rank
-#     except Exception as e:
-#         print_on_rank_0(int(os.environ.get("RANK", "0")), f"❌ Failed to initialize process group: {e}", "❌")
-#         raise
-
-# def setup_dist_process_group():
-#     try:
-#         rank = int(os.environ.get("RANK", "0"))
-#         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-#         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
-
-#         if torch.cuda.is_available():
-#             device = torch.device(f"cuda:{local_rank}")
-#             torch.cuda.set_device(device)
-#             dist.init_process_group(backend=BACKEND, device_id=device)
-#         else:
-#             dist.init_process_group(backend=BACKEND)
-#         print_on_rank_0(rank,f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}","✅")
-#         return local_rank
-
-#     except Exception as e:
-#         print_on_rank_0(int(os.environ.get("RANK", "0")),f"❌ Failed to initialize process group: {e}","❌")
-#         raise
-
 
 def setup_dist_process_group():
     rank = int(os.environ.get("RANK", "0"))
@@ -158,8 +121,6 @@ def setup_dist_process_group():
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to initialize process group: {e}", "❌")
         raise
-
-
 
 def cleanup():
     try:
@@ -379,6 +340,7 @@ def _apply_peft_quantization(model, args, rank):
     return model
 
 
+### Apply  policies --------------- ##
 
 def apply_solo(device, rank, args):
     """Loads a single-process model and moves it to the selected device."""
@@ -572,7 +534,7 @@ def apply_fsdp(local_rank, rank, device, args):
                 print_on_rank_0(rank, f"Materialized meta buffer '{name}' as zeros on {device}", "🔧")
 
     try:
-        if getattr(args, "model_type", "llm") == "custom_transformer":
+        if getattr(args, "model_type" ) == "custom_transformer":
             from model import Transformer, ModelArgs
             model_args = ModelArgs(
                 n_layers=args.custom_n_layers,
@@ -849,7 +811,7 @@ def apply_fsdp(local_rank, rank, device, args):
                 _materialize_meta_buffers(model, device)
 
         elif load_model_from_hf:
-            print_on_rank_0(rank, "Fresh run — loading pretrained weights from HuggingFace on rank 0", "🆕")
+            print_on_rank_0(rank, "Loading pretrained weights from HuggingFace on rank 0", "🆕")
             pretrained_seed_folder = f"{args.checkpoint_dir}/pretrained_seed"
 
             _ts = [int(time.time() * 1000) if rank == 0 else 0]
@@ -899,13 +861,30 @@ def apply_fsdp(local_rank, rank, device, args):
                     del seed_model
                     torch.cuda.empty_cache()
                     
-            dist_barrier(rank)
-
-            dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
+            dist_barrier(local_rank)
+            # dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
 
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
+
+            #### --------------- ###################
+
+
+
             seed_checkpointer.load_model(model)
+
+
+
+            # Replace:
+            # seed_checkpointer.load_model(model)
+            # # With:
+            # model.to_empty(device=device)
+            # state_dict = torch.load(pretrained_seed_path, map_location='cpu')
+            # model.load_state_dict(state_dict, strict=False, assign=True)
+
+
             print_on_rank_0(rank, "Pretrained weights loaded and sharded ✓")
+
+            ################--------------- ######################
 
             # ------------------------------------------------------------------ #
             # FIX: materialize any buffers still on meta after weight loading.
@@ -979,7 +958,7 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
 
         if dist.is_initialized():
             _local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-            dist_barrier(rank)  
+            dist_barrier(_local_rank)  
             
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to save checkpoint: {e}", "❌")

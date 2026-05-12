@@ -32,8 +32,7 @@ dist_parameters:
   reduce_dtype: float32         ## what dtype to use for reduction?
   output_dtype: bfloat16        ## what dtype to use for output?
   cast_forward_inputs: false    ## whether to cast forward inputs to the dtype of the wrapped module
-  dcp_api: true                 ## whether to use DCP API
-  dtensor_api: false            ## whether to use DTensor API
+  distribute_api: dcp_api
 
 save_load:
   resume: false                 ## whether to resume from a checkpoint

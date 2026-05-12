@@ -320,3 +320,41 @@
 
 #             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
 #             seed_checkpointer.load_model(model)
+
+
+
+# def setup_dist_process_group():
+#     """Initializes the distributed process group and sets the CUDA device for this process.
+#     Expects environment variables RANK, LOCAL_RANK, and WORLD_SIZE to be set by the launcher (e.g. torchrun)."""
+#     try:
+#         rank = int(os.environ.get("RANK", "0"))
+#         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+#         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
+#         dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"))
+
+#         if torch.cuda.is_available():
+#             torch.cuda.set_device(f"cuda:{local_rank}")
+#             print_on_rank_0(rank, f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}", "✅")
+#         return local_rank
+#     except Exception as e:
+#         print_on_rank_0(int(os.environ.get("RANK", "0")), f"❌ Failed to initialize process group: {e}", "❌")
+#         raise
+
+# def setup_dist_process_group():
+#     try:
+#         rank = int(os.environ.get("RANK", "0"))
+#         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+#         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
+
+#         if torch.cuda.is_available():
+#             device = torch.device(f"cuda:{local_rank}")
+#             torch.cuda.set_device(device)
+#             dist.init_process_group(backend=BACKEND, device_id=device)
+#         else:
+#             dist.init_process_group(backend=BACKEND)
+#         print_on_rank_0(rank,f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}","✅")
+#         return local_rank
+
+#     except Exception as e:
+#         print_on_rank_0(int(os.environ.get("RANK", "0")),f"❌ Failed to initialize process group: {e}","❌")
+#         raise
