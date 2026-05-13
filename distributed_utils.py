@@ -798,6 +798,8 @@ def apply_fsdp(local_rank, rank, device, args):
                         tie_word_embeddings=False,
                     )
                     seed_model.config.tie_word_embeddings = False
+                    print_on_rank_0(rank, "Pretrained model loaded on rank 0 ✓", "🧠")
+
 
                     # ------------------------------------------------------------------ #
                     # FIX: lm_head.weight missing from state_dict when tie_word_embeddings=False
@@ -822,7 +824,7 @@ def apply_fsdp(local_rank, rank, device, args):
                     os.makedirs(pretrained_seed_subfolder, exist_ok=True)
                     print_on_rank_0(rank, "Saving seed weights to disk (other ranks waiting)...", "💾")
                     torch.save(seed_model.state_dict(), pretrained_seed_path)
-                    print_on_rank_0(rank, "Seed weights saved ✓ | releasing barrier", "✅")
+                    print_on_rank_0(rank, "Seed weights saved ✓ | releasing barrier")
                     del seed_model
                     torch.cuda.empty_cache()
                     
@@ -832,8 +834,6 @@ def apply_fsdp(local_rank, rank, device, args):
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
 
             #### --------------- ###################
-
-
 
             seed_checkpointer.load_model(model)
 

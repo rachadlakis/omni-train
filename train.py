@@ -248,6 +248,7 @@ def main(args):
         # print_on_rank_0(rank, f"Counting Model Parameters", )
         print_on_rank_0(rank,f"Counting model parameters for training time estimation... (this may take a moment)""⏳",)
         model_total_params = sum(p.numel() for p in model.parameters())
+        print_on_rank_0(rank, f"Total model parameters: {model_total_params:,}")
 
         if rank == 0 and hasattr(dataloader, "__len__"):
             # Print a quick wall-clock estimate from static config knobs for faster experiment planning.
