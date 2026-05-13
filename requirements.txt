@@ -59,8 +59,8 @@ uniplot
 pyyaml==6.0.3
 plotext
 
-## Quantization
-bitsandbytes==0.46.1
+## Quantization shifted to quanto package for better maintenance and support across platforms
+# bitsandbytes==0.46.1 
 
 ## Weights and Biases
 wandb==0.25.0

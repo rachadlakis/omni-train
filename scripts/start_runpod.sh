@@ -7,7 +7,15 @@ set -euo pipefail
 
 ## Install dependencies
 pip install --upgrade pip
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+## check cuda version and install compatible torch with nvcc --version
+## but bitsandbytes does not supprt cuda 13 yet, so we need to install torch with cuda 12.4
+
+# pip install torch  torchvision  torchaudio  --index-url https://download.pytorch.org/whl/cu124
+
+# pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+
 pip install -r requirements.txt
 
 ## Configure git

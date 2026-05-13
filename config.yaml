@@ -101,11 +101,11 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA, options: "none", "all", "lora_only"
 
 quantization:
-  enabled: false          ## whether to apply quantization
-  bits: 8                 ## number of bits for quantization, typically 4 or 8
-  quant_type: nf4         ## nf4 or fp4 for 4-bit
-  compute_dtype: bfloat16 ## dtype for computations with quantized models
-  double_quant: true      ## whether to apply double quantization (for 4-bit)
+  enabled: false          ## whether to apply quantization (uses quanto backend)
+  bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8)
+  quant_type: nf4         ## unused with quanto (was bitsandbytes-specific)
+  compute_dtype: bfloat16 ## unused with quanto (was bitsandbytes-specific)
+  double_quant: true      ## unused with quanto (was bitsandbytes-specific)
   
 wandb:
   wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases

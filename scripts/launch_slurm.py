@@ -87,30 +87,30 @@ def parse_args():
     parser.add_argument("--config", type=str, required=True, help="Path to training config YAML") # type: ignore
 
     # SLURM resources
-    parser.add_argument("--nodes", type=int, default=2, help="Number of nodes (default: 2)")
-    parser.add_argument("--gpus", type=int, default=4, help="GPUs per node (default: 4)")
-    parser.add_argument("--cpus", type=int, default=32, help="CPUs per task (default: 32)")
-    parser.add_argument("--mem", type=str, default="256G", help="Memory per node (default: 256G)")    
-    parser.add_argument("--time", type=str, default="24:00:00", help="Time limit (default: 24:00:00)")
+    parser.add_argument("--nodes",  type=int, default=2, help="Number of nodes (default: 2)")
+    parser.add_argument("--gpus",   type=int, default=4, help="GPUs per node (default: 4)")
+    parser.add_argument("--cpus",   type=int, default=32, help="CPUs per task (default: 32)")
+    parser.add_argument("--mem",    type=str, default="256G", help="Memory per node (default: 256G)")    
+    parser.add_argument("--time",   type=str, default="24:00:00", help="Time limit (default: 24:00:00)")
     parser.add_argument("--partition", type=str, default="gpu", help="SLURM partition (default: gpu)")
 
     # Job settings
-    parser.add_argument("--job-name", type=str, default=None, help="Job name (default: auto-generated)")
-    parser.add_argument("--master-port", type=int, default=29500, help="Master port (default: 29500)")
+    parser.add_argument("--job-name",       type=str, default=None, help="Job name (default: auto-generated)")
+    parser.add_argument("--master-port",    type=int, default=29500, help="Master port (default: 29500)")
 
     # Environment
-    parser.add_argument("--conda-env", type=str, default=None, help="Conda environment to activate")
-    parser.add_argument("--venv", type=str, default=None, help="Path to virtualenv to activate")
-    parser.add_argument("--module", type=str, action="append", default=[], help="Module to load (can specify multiple)")
+    parser.add_argument("--conda-env",  type=str, default=None, help="Conda environment to activate")
+    parser.add_argument("--venv",       type=str, default=None, help="Path to virtualenv to activate")
+    parser.add_argument("--module",     type=str, action="append", default=[], help="Module to load (can specify multiple)")
 
     # NCCL settings
     parser.add_argument("--nccl-debug", type=str, default="WARN", choices=["INFO", "WARN", "ERROR"], help="NCCL debug level (default: WARN)")
     parser.add_argument("--disable-ib", action="store_true", help="Disable InfiniBand")
 
     # Extra arguments
-    parser.add_argument("--extra-sbatch", type=str, default="", help="Extra SBATCH directives")
-    parser.add_argument("--extra-env", type=str, default="", help="Extra environment variables (KEY=VALUE,...)")
-    parser.add_argument("--extra-args", type=str, default="", help="Extra arguments to pass to train.py")
+    parser.add_argument("--extra-sbatch",   type=str, default="", help="Extra SBATCH directives")
+    parser.add_argument("--extra-env",      type=str, default="", help="Extra environment variables (KEY=VALUE,...)")
+    parser.add_argument("--extra-args",     type=str, default="", help="Extra arguments to pass to train.py")
 
     # Actions
     parser.add_argument("--dry-run", action="store_true", help="Print script without submitting")

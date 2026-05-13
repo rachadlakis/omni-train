@@ -15,8 +15,8 @@ from transformers import (
     AutoModelForObjectDetection, 
     AutoModelForImageTextToText, 
     AutoModel, 
-    AutoConfig, 
-    BitsAndBytesConfig
+    AutoConfig,
+    QuantoConfig
 )
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard, MixedPrecisionPolicy
 from checkpoint import Checkpointer
@@ -250,26 +250,11 @@ def _build_quantization_config(args, rank):
     # Keep the non-quantized path untouched by returning None unless explicitly enabled.
     if not getattr(args, "quantization_enabled", False):
         return None
-    # bitsandbytes quantization in this project is CUDA-only.
-    if not torch.cuda.is_available():
-        raise ValueError("Quantization currently requires CUDA in this project.")
 
-    compute_dtype = _dtype_from_name(getattr(args, "quantization_compute_dtype", "bfloat16"))
     bits = int(getattr(args, "quantization_bits", 4))
-
-    if bits == 4:
-        # 4-bit config for QLoRA-style finetuning (nf4/fp4 + optional double quant).
-        print_on_rank_0(rank, "Using bitsandbytes 4-bit quantization (QLoRA style)", "🧮")
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type=getattr(args, "quantization_type", "nf4"),
-            bnb_4bit_use_double_quant=bool(getattr(args, "quantization_double_quant", True)),
-            bnb_4bit_compute_dtype=compute_dtype,
-        )
-
-    # 8-bit config for LoRA-on-int8 training.
-    print_on_rank_0(rank, "Using bitsandbytes 8-bit quantization", "🧮")
-    return BitsAndBytesConfig(load_in_8bit=True)
+    weights = "int4" if bits == 4 else "int8"
+    print_on_rank_0(rank, f"Using quanto {bits}-bit quantization", "🧮")
+    return QuantoConfig(weights=weights)
 
 
 def _normalize_target_modules(target_modules):
@@ -286,24 +271,11 @@ def _normalize_target_modules(target_modules):
 
 
 def _apply_peft_quantization(model, args, rank):
-    quantized = getattr(args, "quantization_enabled", False)
     peft_enabled = getattr(args, "peft_enabled", False)
 
-    if quantized and peft_enabled:
-        # prepare_model_for_kbit_training freezes all base weights so only LoRA adapters
-        # are trained. Only call it when PEFT is actually being applied; for 8-bit full
-        # fine-tune we leave the weights trainable.
-        from peft import prepare_model_for_kbit_training
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", True))
-        )
-        print_on_rank_0(rank, "Prepared quantized model for k-bit training", "🔧")
-
     if bool(getattr(args, "gradient_checkpointing", True)) and hasattr(model, "gradient_checkpointing_enable"):
-        if not (quantized and peft_enabled):  # already handled above via prepare_model_for_kbit_training
-            model.gradient_checkpointing_enable()
-            print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
+        model.gradient_checkpointing_enable()
+        print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
 
     if peft_enabled:
         from peft import LoraConfig, TaskType, get_peft_model
@@ -367,10 +339,7 @@ def apply_solo(device, rank, args):
             "low_cpu_mem_usage": True,
         }
         if quant_cfg is not None:
-            # Quantized models are already placed via device_map and should not be moved with .to(...).
             model_kwargs["quantization_config"] = quant_cfg
-            if torch.cuda.is_available():
-                model_kwargs["device_map"] = {"": 0}
         else:
             # Standard float model load path keeps existing dtype behavior.
             model_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
@@ -380,9 +349,7 @@ def apply_solo(device, rank, args):
             **model_kwargs,
         )
         model = _apply_peft_quantization(model, args, rank)
-        if not args.quantization_enabled:
-            # Safe to move only non-quantized models after load.
-            model = model.to(device)
+        model = model.to(device)
         print_on_rank_0(rank, "Solo model ready ✓")
         return model
     except Exception as e:
@@ -478,9 +445,7 @@ def apply_ddp(local_rank, rank, device, args):
                         m.reset_parameters()  # type: ignore
 
         model = _apply_peft_quantization(model, args, rank)
-        if not args.quantization_enabled:
-            # Important: avoid .to(device) on bitsandbytes models; it can break quantized modules.
-            model = model.to(device)  # type: ignore
+        model = model.to(device)  # type: ignore
         model = DDP(model, device_ids=[local_rank] if device.type == "cuda" else None,
                     find_unused_parameters=False)
         print_on_rank_0(rank, "DDP wrapper applied ✓")

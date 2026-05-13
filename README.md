@@ -57,6 +57,18 @@ dist-train-project/
 
 ## ⚡ Quick Start
 
+## ⚠️ Prerequisites
+
+### CUDA Toolkit
+Download and install from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
+
+> **Note:** The CUDA driver (via `nvidia-smi`) and the CUDA Toolkit (`nvcc`) are separate.
+> PyTorch bundles its own CUDA runtime, so the toolkit is only required if you use
+> `bitsandbytes`, `FlashAttention`, `DeepSpeed`, or compile custom CUDA kernels.
+> For plain PyTorch training, the toolkit is optional.
+
+**WSL users:** Install the WSL-Ubuntu variant of the toolkit — do not install the GPU driver inside WSL.
+
 ### Step 1 — Check your CUDA version
 
 ```bash
@@ -66,10 +78,11 @@ nvcc --version    # toolkit version (may differ — nvidia-smi is what matters)
 
 | `nvidia-smi` CUDA | PyTorch wheel | Index URL |
 |---|---|---|
+| 13.2 | `torch==2.11.0` | `https://download.pytorch.org/whl/cu130` |
 | 12.8 | `torch==2.10.0` | `https://download.pytorch.org/whl/cu128` |
-| 12.4 | `torch==2.6.0` | `https://download.pytorch.org/whl/cu124` |
-| 12.1 | `torch==2.3.0` | `https://download.pytorch.org/whl/cu121` |
-| CPU only | `torch==2.6.0` | `https://download.pytorch.org/whl/cpu` |
+| 12.4 | `torch==2.6.0`  | `https://download.pytorch.org/whl/cu124` |
+| 12.1 | `torch==2.3.0`  | `https://download.pytorch.org/whl/cu121` |
+| CPU  | `torch==2.6.0`  | `https://download.pytorch.org/whl/cpu`   |
 
 ---
 
@@ -89,7 +102,7 @@ pip install --upgrade pip
 ### Step 3 — Install PyTorch (pick your CUDA version)
 
 ```bash
-# CUDA 13.2 - torch 2.11.0
+# CUDA 13.2 - torch 2.11.0 (cu132 is not releases yet)
 pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
 
 # CUDA 12.8 — torch 2.10.0
@@ -110,6 +123,8 @@ Verify:
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
 ```
 
 ---
