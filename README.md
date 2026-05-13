@@ -89,21 +89,21 @@ pip install --upgrade pip
 ### Step 3 — Install PyTorch (pick your CUDA version)
 
 ```bash
-# CUDA 12.8
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
-    --index-url https://download.pytorch.org/whl/cu128
+# CUDA 13.2 - torch 2.11.0
+pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
 
-# CUDA 12.4
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+# CUDA 12.8 — torch 2.10.0
+pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
 
-# CUDA 12.1
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 \
-    --index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.4 — torch 2.6.0
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
-# CPU only
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
-    --index-url https://download.pytorch.org/whl/cpu
+# CUDA 12.1 — torch 2.3.0
+pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
+
+# CPU only — torch 2.6.0
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+
 ```
 
 Verify:
