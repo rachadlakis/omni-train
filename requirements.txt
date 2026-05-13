@@ -1,71 +1,62 @@
-## Core ML frameworks
-# Note: torch packages version may vary based on CUDA version
-# Install with: 
-# pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+# =========================
+# PyTorch (CUDA 12.8 example)
+# =========================
+## Install separately:
+# pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
 
-# torch==2.10.0
-# torchvision==0.25.0
-# torchaudio==2.10.0
-
-## Image processing
+# =========================
+# Core
+# =========================
 pillow==12.0.0
-
-## Configuration
+av==14.1.0
 pyyaml==6.0.3
-
-## Web UI
-fastapi==0.129.0
-pydantic==2.12.3
-uvicorn==0.38.0
-starlette==0.48.0
-
-## HuggingFace ecosystem
-transformers==5.2.0
-peft==0.18.1
-datasets==4.6.0
-tokenizers==0.22.2
-safetensors==0.7.0
-huggingface_hub==1.5.0
-accelerate==1.12.0
-
-## Object detection
-# ultralytics removed — GPL-3.0; use transformers AutoModelForObjectDetection instead
-# (RT-DETR, DETR, etc. via HuggingFace — already a dependency above)
-
-## Logging and progress
-wandb==0.25.0
-tqdm==4.67.1
-
-## Utilities
 numpy==2.2.6
 scipy==1.15.3
 requests==2.32.5
-filelock==3.24.3
-fsspec==2026.2.0
-regex==2026.2.19
+tqdm==4.67.3
+filelock==3.19.1
+fsspec==2025.3.2
+regex==2026.4.4
 
-## Testing
-pytest==8.3.5
+# =========================
+# Web API
+# =========================
+fastapi==0.136.0
+pydantic==2.13.4
+uvicorn==0.46.0
+starlette==0.48.0
 
-# Sentence embeddings (optional, for embedding models)
-# sentence-transformers==3.0.0
+# =========================
+# Hugging Face ecosystem
+# =========================
+transformers==5.8.1
+tokenizers==0.22.1
+datasets==4.8.5
+accelerate==1.11.0
+huggingface_hub==1.13.0
+safetensors==0.6.2
 
-# Quantization (Linux only)
-# bitsandbytes==0.41.3
+# =========================
+# PEFT / Quantization
+# =========================
+peft==0.19.0
+optimum==1.27.0
+quanto==0.2.0
 
-## Environment
-python-dotenv==1.1.0
-uniplot
-pyyaml==6.0.3
-plotext
+# =========================
+# Logging
+# =========================
+wandb==0.26.1
+tensorboard==2.20.0
 
-## Quantization shifted to quanto package for better maintenance and support across platforms
-# bitsandbytes==0.46.1 
+# =========================
+# Environment / CLI
+# =========================
+python-dotenv==1.2.2
+plotext==5.3.2
+uniplot==0.21.4
 
-## Weights and Biases
-wandb==0.25.0
-tensorboard
-
-## PEFT & Quantization
-peft==0.18.1
-
+# =========================
+# Testing
+# =========================
+pytest==8.4.2

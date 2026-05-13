@@ -102,6 +102,7 @@ warnings.filterwarnings("ignore", message=".*_get_pg_default_device.*")
 warnings.filterwarnings("ignore", message="Materializing param")
 warnings.filterwarnings("ignore", message="Materializing param", category=UserWarning)   
 
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
@@ -130,9 +131,9 @@ def main(args):
         
         ## WANDB setup - only on rank 0 to avoid multiple runs/logs for distributed strategies
         if args.wandb_log_with_train and rank == 0:            
-            wandb.login(key=WANDB_API_KEY)
+            wandb.login(key=WANDB_API_KEY) # type: ignore
             print_on_rank_0(rank, f"WANDB logging enabled | project={args.wandb_project}", "📊")
-            run = wandb.init(
+            run = wandb.init( # type: ignore
                 project=args.wandb_project,
                 config=vars(args),
                 tensorboard=True 
@@ -163,7 +164,7 @@ def main(args):
                 tokenizer.pad_token = tokenizer.eos_token
             print_on_rank_0(rank, "Tokenizer ready ✓")
         elif args.model_type in {"vision", "yolo"}:
-            from transformers import AutoImageProcessor
+            from transformers import AutoImageProcessor 
             print_banner_on_rank_0(rank, "LOADING IMAGE PROCESSOR")
             print_on_rank_0(rank, f"Fetching image processor: {args.model_name}", "🖼️")
             tokenizer = AutoImageProcessor.from_pretrained(args.model_name, token=HF_TOKEN)
