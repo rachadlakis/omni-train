@@ -21,7 +21,7 @@ from transformers import (
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard, MixedPrecisionPolicy
 from checkpoint import Checkpointer
 from dotenv import load_dotenv
-from utils import dist_barrier
+from utils import dist_barrier, inspect_model
 
 
 load_dotenv()
@@ -32,6 +32,23 @@ DTYPE_MAP = {
     "float32": torch.float32, 
     "float16": torch.float16
 }
+
+
+
+
+# rank = int(os.environ["LOCAL_RANK"])
+# if torch.accelerator.is_available():
+#     device_type = torch.accelerator.current_accelerator()
+#     device = torch.device(f"{device_type}:{rank}")
+#     torch.accelerator.device_index(rank)
+#     print(f"Running on rank {rank} on device {device}")
+# else:
+#     device = torch.device("cpu")
+#     print(f"Running on device {device}")
+
+# BACKEND = torch.distributed.get_default_backend_for_device(device)
+# torch.distributed.init_process_group(backend=BACKEND, device_id=device)
+
 
 if torch.cuda.is_available():
     if not sys.platform.startswith("linux"):
@@ -289,25 +306,30 @@ def _apply_peft_quantization(model, args, rank):
             "encoder": TaskType.FEATURE_EXTRACTION,
         }
         _task_type = _peft_task_type_map.get(getattr(args, "model_type", "llm"), TaskType.CAUSAL_LM)
-        peft_cfg = LoraConfig(
-            r=int(getattr(args, "peft_r", 16)),
-            lora_alpha=int(getattr(args, "peft_alpha", 32)),
-            lora_dropout=float(getattr(args, "peft_dropout", 0.05)),
-            target_modules=_normalize_target_modules(getattr(args, "peft_target_modules", "all-linear")),
-            bias=str(getattr(args, "peft_bias", "none")), # type: ignore
-            task_type=_task_type,
-        )
-        model = get_peft_model(model, peft_cfg)
-        # LoRA adapter weights default to float32; cast all floating params to param_dtype
-        # so FSDP sees a uniform dtype across base weights and adapter weights.
-        if not getattr(args, "quantization_enabled", False):
-            target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
-            for param in model.parameters():
-                if param.is_floating_point():
-                    param.data = param.data.to(target_dtype)
-        if rank == 0 and hasattr(model, "print_trainable_parameters"):
-            model.print_trainable_parameters()
-        print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')})", "🧩")
+        try:
+            peft_cfg = LoraConfig(
+                r=int(getattr(args, "peft_r", 16)),
+                lora_alpha=int(getattr(args, "peft_alpha", 32)),
+                lora_dropout=float(getattr(args, "peft_dropout", 0.05)),
+                target_modules=_normalize_target_modules(getattr(args, "peft_target_modules", "all-linear")),
+                bias=str(getattr(args, "peft_bias", "none")), # type: ignore
+                task_type=_task_type,
+            )
+            model = get_peft_model(model, peft_cfg)
+            ## LoRA adapter weights default to float32; cast all floating params to param_dtype
+            ## so FSDP sees a uniform dtype across base weights and adapter weights.
+            if not getattr(args, "quantization_enabled", False):
+                target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
+                for param in model.parameters():
+                    if param.is_floating_point():
+                        param.data = param.data.to(target_dtype)
+            if rank == 0 and hasattr(model, "print_trainable_parameters"):
+                model.print_trainable_parameters()
+            print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')})", "🧩")
+        except Exception as e:
+            print_on_rank_0(rank, f"Failed to apply PEFT configuration in Solo mode: {e}", "❌")
+            traceback.print_exc()
+            raise
 
     return model
 
@@ -499,7 +521,10 @@ def apply_fsdp(local_rank, rank, device, args):
                 print_on_rank_0(rank, f"Materialized meta buffer '{name}' as zeros on {device}", "🔧")
 
     try:
-        if getattr(args, "model_type" ) == "custom_transformer":
+        # =================================================================================== #
+        # PATH 1: Custom Transformer Path (Classic FSDP1/Standard Fallback API)
+        # =================================================================================== #
+        if getattr(args, "model_type") == "custom_transformer":
             from model import Transformer, ModelArgs
             model_args = ModelArgs(
                 n_layers=args.custom_n_layers,
@@ -517,8 +542,11 @@ def apply_fsdp(local_rank, rank, device, args):
             model = fully_shard(model)
             print_on_rank_0(rank, f"Custom Transformer (FSDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
             return model, None
-
-        # PEFT/quantized runs must start from materialized pretrained weights (non-meta path) before FSDP wrapping.
+        
+        
+        # =================================================================================== #
+        # PATH 2: PEFT & Quantization Path (Requires Materialization Before Wrapping)
+        # =================================================================================== #
         use_peft_or_quant = bool(getattr(args, "peft_enabled", False) or getattr(args, "quantization_enabled", False))
 
         if use_peft_or_quant:
@@ -531,18 +559,9 @@ def apply_fsdp(local_rank, rank, device, args):
                 _expected_tag = _checkpoint_run_tag(args)
                 _checkpoint_is_plain = "__" not in _resume_folder_name
                 if _expected_tag and _expected_tag not in _resume_folder_name:
-                    raise ValueError(
-                        f"Cannot resume a PEFT/quantized run (tag='{_expected_tag}') from a non-PEFT checkpoint "
-                        f"at '{args.resume_path}'. The checkpoint was saved without adapter weights — "
-                        f"there is nothing to restore the LoRA layers from. "
-                        f"Start a fresh run or point --resume-path to a checkpoint with '{_expected_tag}' in its folder name."
-                    )
+                    raise ValueError(f"Cannot resume PEFT run from non-PEFT checkpoint.")
                 if not _expected_tag and not _checkpoint_is_plain:
-                    raise ValueError(
-                        f"Cannot resume a non-PEFT run from a PEFT checkpoint at '{args.resume_path}'. "
-                        f"The checkpoint contains adapter weights that have no corresponding LoRA layers in the current model. "
-                        f"Enable PEFT in your config or point --resume-path to a plain checkpoint."
-                    )
+                    raise ValueError(f"Cannot resume non-PEFT run from PEFT checkpoint.")
 
                 print_on_rank_0(rank, "Resuming — building PEFT model structure from config (no HF download)", "♻️")
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
@@ -577,20 +596,12 @@ def apply_fsdp(local_rank, rank, device, args):
                     seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                         args.model_name, **pretrained_kwargs
                     )
-                    seed_model.config.use_cache = False
-                    seed_model.config.tie_word_embeddings = False
+                    # seed_model.config.use_cache = False
+                    # seed_model.config.tie_word_embeddings = False
 
-                    # ------------------------------------------------------------------ #
-                    # FIX: lm_head.weight missing from state_dict when tie_word_embeddings=False
-                    # Llama saves lm_head.weight tied to embed_tokens.weight by default.
-                    # After disabling tying, lm_head.weight is absent from the checkpoint,
-                    # causing it to be randomly re-initialized on load.
-                    # We explicitly clone embed_tokens.weight into lm_head.weight so it is
-                    # present in the state dict and loads correctly on all ranks.
-                    # ------------------------------------------------------------------ #
+                    # Fix truncated weight-tying cloning logic
                     if hasattr(seed_model, "lm_head") and hasattr(seed_model, "model") and hasattr(seed_model.model, "embed_tokens"):
                         if seed_model.lm_head.weight.data_ptr() == seed_model.model.embed_tokens.weight.data_ptr():
-                            # Weights are still tied (same tensor); clone before saving
                             seed_model.lm_head.weight = torch.nn.Parameter(
                                 seed_model.model.embed_tokens.weight.clone()
                             )
@@ -599,13 +610,11 @@ def apply_fsdp(local_rank, rank, device, args):
                     os.makedirs(peft_seed_subfolder, exist_ok=True)
                     torch.save(seed_model.state_dict(), peft_seed_path)
                     del seed_model
-                    torch.cuda.empty_cache()
-                # dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
-                dist_barrier(rank)
 
+                dist_barrier(rank)
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
-                config.use_cache = False
-                config.tie_word_embeddings = False
+                # config.use_cache = False
+                # config.tie_word_embeddings = False
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                     config,
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
@@ -662,6 +671,7 @@ def apply_fsdp(local_rank, rank, device, args):
                 print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
 
             fully_shard(model, **fsdp_kwargs)
+
             print_on_rank_0(rank, "FSDP sharding applied ✓", "✅")
 
             if args.explicit_prefetching and layers is not None:
@@ -671,24 +681,28 @@ def apply_fsdp(local_rank, rank, device, args):
 
             checkpointer = None
             if resuming:
-                _rp = os.path.normpath(os.path.abspath(args.resume_path))
-                timestamp = os.path.basename(_rp)
-                api_dir = os.path.basename(os.path.dirname(_rp))
-                base = str(os.path.dirname(os.path.dirname(os.path.dirname(_rp))))
+                _resume_path = os.path.normpath(os.path.abspath(args.resume_path))
+                timestamp = os.path.basename(_resume_path)
+                api_dir = os.path.basename(os.path.dirname(_resume_path))
+                base = str(os.path.dirname(os.path.dirname(os.path.dirname(_resume_path))))
                 if (args.dcp_api and api_dir != "dcp_api") or (not args.dcp_api and api_dir != "dtensor_api"):
                     print_on_rank_0(rank, f"Warning: resume_path API {api_dir} does not match dcp_api={args.dcp_api}. Attempting to load anyway.", "⚠️")
                 checkpointer = Checkpointer(folder=base, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
                 checkpointer.last_training_time = timestamp
                 checkpointer.load_model(model) # type: ignore
-                print_on_rank_0(rank, "Checkpoint loaded into PEFT model ✓")
+                print_on_rank_0(rank, "Checkpoint loaded into PEFT model from saved ✓")
             else:
                 checkpointer = Checkpointer(folder=args.checkpoint_dir, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
+                print_on_rank_0(rank, "Checkpoint loaded into PEFT model ✓")
 
             print(f"[Rank {rank}] num params: {sum(p.numel() for p in model.parameters())}")
+            
             return model, checkpointer
-
-
-        ## Non-PEFT path: loading from HF with FSDP 
+        
+        # =================================================================================== #
+        # PATH 3: Standard Non-PEFT / Non-Quantized FSDP Meta-Initialization Route
+        # =================================================================================== #
+        #         
         ## FSDP Step 1: build model on meta device (no memory)
         print_on_rank_0(rank, "Instantiating model on meta device...", "🧠")
         config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
@@ -724,6 +738,8 @@ def apply_fsdp(local_rank, rank, device, args):
             else:
                 print_on_rank_0(rank, "This model does not support Gradient Checkpointing (Activation Checkpointing).", "⚠️")
 
+        # fsdp_kwargs["mesh"] = DeviceMesh("cuda", mesh_shape=(dist.get_world_size(),), mesh_dim_names=["data_parallel"]) if torch.cuda.is_available() else None
+        
         layers, layer_type = get_model_layers(model)
         if layers is not None:
             print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers...", "🔀")
@@ -733,7 +749,8 @@ def apply_fsdp(local_rank, rank, device, args):
             print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
 
         fully_shard(model, **fsdp_kwargs)
-        print_on_rank_0(rank, "FSDP sharding applied ✓")
+        inspect_model(model)
+        print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
         if args.explicit_prefetching and layers is not None:
             print_on_rank_0(rank, f"Setting up explicit prefetching: forward={args.forward_prefetch}, backward={args.backward_prefetch}", "🔄")
@@ -756,10 +773,10 @@ def apply_fsdp(local_rank, rank, device, args):
                 raise ValueError("No resume path provided")
             else:
                 print_on_rank_0(rank, f"Resuming from: {args.resume_path}", "♻️")
-                _rp = os.path.normpath(os.path.abspath(args.resume_path))
-                timestamp = os.path.basename(_rp)
-                api_dir = os.path.basename(os.path.dirname(_rp))
-                base = str(os.path.dirname(os.path.dirname(os.path.dirname(_rp))))
+                _resume_path = os.path.normpath(os.path.abspath(args.resume_path))
+                timestamp = os.path.basename(_resume_path)
+                api_dir = os.path.basename(os.path.dirname(_resume_path))
+                base = str(os.path.dirname(os.path.dirname(os.path.dirname(_resume_path))))
                 if (args.dcp_api and api_dir != "dcp_api") or (not args.dcp_api and api_dir != "dtensor_api"):
                     print_on_rank_0(rank, f"Warning: resume_path API {api_dir} does not match dcp_api={args.dcp_api}. Attempting to load anyway.", "⚠️")
                 checkpointer = Checkpointer(folder=base, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
@@ -800,16 +817,7 @@ def apply_fsdp(local_rank, rank, device, args):
                     seed_model.config.tie_word_embeddings = False
                     print_on_rank_0(rank, "Pretrained model loaded on rank 0 ✓", "🧠")
 
-
-                    # ------------------------------------------------------------------ #
-                    # FIX: lm_head.weight missing from state_dict when tie_word_embeddings=False
-                    # Llama saves lm_head.weight tied to embed_tokens.weight by default.
-                    # After disabling tying, lm_head.weight is absent from the checkpoint,
-                    # causing it to be randomly re-initialized on load — hurting early training.
-                    # We check if the weights are still sharing the same tensor and clone
-                    # embed_tokens.weight into lm_head.weight so it is explicitly present
-                    # in the saved state dict and loads correctly on all ranks.
-                    # ------------------------------------------------------------------ #
+                    # Fix truncated weight-tying cloning logic for the common case where lm_head is tied to embed_tokens
                     if (
                         hasattr(seed_model, "lm_head")
                         and hasattr(seed_model, "model")
@@ -829,27 +837,9 @@ def apply_fsdp(local_rank, rank, device, args):
                     torch.cuda.empty_cache()
                     
             dist_barrier(local_rank)
-            # dist.barrier(device_ids=[local_rank] if dist.get_backend() == "nccl" else None)
-
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
-
-            #### --------------- ###################
-
             seed_checkpointer.load_model(model)
-
-
-
-            # Replace:
-            # seed_checkpointer.load_model(model)
-            # # With:
-            # model.to_empty(device=device)
-            # state_dict = torch.load(pretrained_seed_path, map_location='cpu')
-            # model.load_state_dict(state_dict, strict=False, assign=True)
-
-
             print_on_rank_0(rank, "Pretrained weights loaded and sharded ✓")
-
-            ################--------------- ######################
 
             # ------------------------------------------------------------------ #
             # FIX: materialize any buffers still on meta after weight loading.
@@ -874,15 +864,14 @@ def apply_fsdp(local_rank, rank, device, args):
                         m.reset_parameters()
             checkpointer = None
 
-        return model, checkpointer
+        return model, checkpointer   
+
 
     except Exception as e:
         print(f"\n[rank {rank}] ❌ Failed in apply_fsdp: {e}", flush=True)
         traceback.print_exc()
         cleanup()
         raise
-#########################################
-            # Materialize any buffers still on meta device (e.g. RoPE inv_freq in Llama)
 
             
 

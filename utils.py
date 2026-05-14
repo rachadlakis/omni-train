@@ -5,10 +5,18 @@ import plotext as plt
 import os
 import yaml
 import sys
-
+from torch.distributed.fsdp import FSDPModule
+from torch.distributed.tensor import Shard
 
 import torch
 import torch.distributed as dist
+
+from torch.distributed.tensor import DTensor, Shard, Replicate
+
+from torch.distributed import get_rank
+from torch.nn import Module
+
+
 # ----------------------------------------------------------------------
 # Plots
 # ----------------------------------------------------------------------
@@ -80,6 +88,57 @@ def print_config(args):
         print(f"  ║{' ' * width}║")
 
     print(f"  ╚{'═' * width}╝\n")
+
+
+# ----------------------------------------------------------------------
+# Model Inspection
+# ----------------------------------------------------------------------
+
+
+def inspect_model(model: Module, verbose: bool = True) -> None: 
+    """
+    Inspects and validates an FSDP2 / DTensor-backed model distribution state
+    using standard python print operations.
+    """
+    rank = get_rank()
+    
+    # 1. Print full architecture if verbose is enabled
+    if verbose and rank == 0: 
+        print("\nModel Architecture:\n ", flush=True) 
+        print(model, flush=True)
+
+    sharded_params = 0
+    replicated_params = 0
+    total_elements = 0
+
+    # 2. Inspect placement strategies across all parameters safely
+    for name, param in model.named_parameters():
+        total_elements += param.numel()
+        
+        # Check if the parameter is managed as a Distributed Tensor
+        if isinstance(param, DTensor):
+            placements = param.placements
+            
+            # Identify if it is sharded along dimension 0 or replicated
+            if any(isinstance(p, Shard) and p.dim == 0 for p in placements):
+                sharded_params += 1
+            elif any(isinstance(p, Replicate) for p in placements):
+                replicated_params += 1
+        else:
+            # Fallback for standard un-sharded torch.Tensors
+            replicated_params += 1
+
+    # 3. Print the execution summary
+    if rank == 0: 
+        print( " \n FSDP INSPECTION: ", flush=True) 
+        print(f"   Total Weight & Bias Tensors: {sharded_params + replicated_params}", flush=True)
+        print(f"   └─ Sharded Tensors  (Shard(0)): {sharded_params}", flush=True)
+        print(f"   └─ Replicated Tensors (Replicate): {replicated_params}", flush=True)
+        print(f"   Total Model Parameters (Floats): {total_elements:,}", flush=True)
+        print("✅  Inspection completed successfully.\n", flush=True)
+
+
+
 
 # ----------------------------------------------------------------------
 # Config
