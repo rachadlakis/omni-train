@@ -22,19 +22,74 @@ from torch.nn import Module
 # ----------------------------------------------------------------------
 
 def plot_losses_in_terminal(_losses):
+    """Plot training loss curve, handling NaN values gracefully."""
+    import math
+    
     print("\nPlotting training loss...")
     print(f"Losses: {_losses}")
-    epochs = list(range(1, len(_losses) + 1))
+    
+    # Check if losses list is empty
+    if not _losses:
+        print("⚠️ No loss data to plot (empty list)")
+        return
+    
+    # Check if all losses are NaN
+    all_nan = all(isinstance(x, (float, int)) and math.isnan(x) for x in _losses if x is not None)
+    if all_nan or len(_losses) == 0:
+        print("⚠️ All loss values are NaN. Cannot generate plot.")
+        print("   Possible causes:")
+        print("   - Gradient explosion (learning rate too high)")
+        print("   - Numerical instability in quantization")
+        print("   - Data type mismatches (try disabling mixed precision)")
+        print("   - Try reducing learning rate or enabling gradient clipping")
+        return
+    
+    # Filter out NaN values for plotting, but keep indices for context
+    valid_epochs = []
+    valid_losses = []
+    nan_epochs = []
+    
+    for i, loss in enumerate(_losses, start=1):
+        if loss is not None and not math.isnan(loss):
+            valid_epochs.append(i)
+            valid_losses.append(loss)
+        else:
+            nan_epochs.append(i)
+    
+    if not valid_losses:
+        print("⚠️ No valid loss values to plot (all NaN)")
+        return
+    
+    # Clear and create plot
     plt.clear_figure()
-    plt.plot(epochs, _losses, marker="braille", label="loss curve")
-    plt.scatter(epochs, _losses, marker="dot", label="epoch loss")
+    
+    # Plot valid loss points
+    plt.plot(valid_epochs, valid_losses, marker="braille", label="loss curve")
+    plt.scatter(valid_epochs, valid_losses, marker="dot", label="epoch loss")
+    
+    # Mark NaN epochs if any (as red X markers at the bottom)
+    if nan_epochs:
+        # Place markers at the minimum valid loss (or 0 if no valid losses)
+        y_position = min(valid_losses) if valid_losses else 0
+        plt.scatter(nan_epochs, [y_position] * len(nan_epochs), 
+                   marker="x", color="red", label=f"NaN (epochs {nan_epochs})")
+        print(f"⚠️ NaN losses detected at epoch(s): {nan_epochs}")
+    
+    # Configure plot
     plt.plot_size(80, 30)
-    plt.title("Training Loss")
+    plt.title("Training Loss" + (" (with NaN values)" if nan_epochs else ""))
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.xticks(epochs)
+    plt.xticks(list(range(1, len(_losses) + 1)))
     plt.theme("dark")
+    
+    # Add warning text if there were NaNs
+    if nan_epochs:
+        print("\n💡 Tip: NaN losses often indicate training instability.")
+        print("   Try reducing learning rate, checking gradient clipping, or disabling mixed precision.")
+    
     plt.show()
+    
 
 def print_config(args):
     """ Print the training configs """
@@ -397,56 +452,6 @@ def build_args(cfg):
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
     return args
-
-# ----------------------------------------------------------------------
-# VRAM Estimator
-# ----------------------------------------------------------------------
-
-# def estimate_training_vram(
-#     model_type: str,       # llm, seq2seq, vision, yolo, vlm, encoder
-#     num_params: int,        # e.g. 125_000_000 for opt-125m
-#     param_dtype_bits: int,  # 16 for bfloat16, 32 for float32
-#     batch_size: int,
-#     seq_len: int,
-#     num_layers: int,
-#     hidden_dim: int,
-#     num_heads: int,
-#     activation_checkpointing: bool = False):
-    
-#     """ Estimates VRAM usage in GB for weights, gradients, optimizer states, and activations. """
-#     if model_type not in {"llm", "seq2seq", "vision", "yolo", "vlm", "encoder"}:
-#         raise ValueError(f"Unsupported model_type={model_type}. Use one of: llm, seq2seq, vision, yolo, vlm, encoder")
-    
-
-#     bytes_per_param = param_dtype_bits / 8 
-#     weights_gb    = num_params * bytes_per_param / 1e9
-#     gradients_gb  = weights_gb                          # same shape as weights
-#     optimizer_gb  = weights_gb * 3
-    
-#     if model_type in {"vision", "yolo"}:
-#         # Vision models often have large activations due to high-res inputs, but we'll use the same formula for simplicity.
-#         pass
-#     elif model_type == "vlm":
-#         # VLMs can have additional components (e.g. vision tower), but we'll use the same formula for simplicity.
-#         pass
-#     elif model_type == "encoder":
-#         # Encoder-only models may have slightly different activation patterns, but we'll use the same formula for simplicity.
-#         pass
-#     elif model_type in {"llm", "seq2seq"}:
-#         act_bytes = (num_layers * 2 * seq_len * batch_size * hidden_dim *
-#                     (16 + 2 / bytes_per_param +
-#                     2 * num_heads * seq_len / hidden_dim))
-#         activations_gb = act_bytes / 1e9
-#         if activation_checkpointing:
-#             activations_gb = activations_gb / (num_layers ** 0.5)
-#         total_gb = weights_gb + gradients_gb + optimizer_gb + activations_gb
-#         return {
-#         "weights_gb":     round(weights_gb, 2),
-#         "gradients_gb":   round(gradients_gb, 2),
-#         "optimizer_gb":   round(optimizer_gb, 2),
-#         "activations_gb": round(activations_gb, 2),
-#         "total_gb":       round(total_gb, 2),
-#     }
 
 def estimate_training_vram(
     model_type: str,               # llm, seq2seq, vision, yolo, vlm, encoder

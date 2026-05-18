@@ -289,13 +289,18 @@ def _normalize_target_modules(target_modules):
 
 def _apply_peft_quantization(model, args, rank):
     peft_enabled = getattr(args, "peft_enabled", False)
+    quantization_enabled = getattr(args, "quantization_enabled", False)
 
-    if bool(getattr(args, "gradient_checkpointing", True)) and hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
-        print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
+    gradient_checkpointing = bool(getattr(args, "gradient_checkpointing", True))
+    if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+        if peft_enabled or not quantization_enabled:
+            model.gradient_checkpointing_enable()
+            print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
+        else:
+            print_on_rank_0(rank, "⚠️ Gradient checkpointing disabled for pure quantization (can cause NaN)", "⚠️")
 
     if peft_enabled:
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import LoraConfig, TaskType, get_peft_model # type: ignore
 
         _peft_task_type_map = {
             "llm":     TaskType.CAUSAL_LM,
@@ -318,7 +323,7 @@ def _apply_peft_quantization(model, args, rank):
             model = get_peft_model(model, peft_cfg)
             ## LoRA adapter weights default to float32; cast all floating params to param_dtype
             ## so FSDP sees a uniform dtype across base weights and adapter weights.
-            if not getattr(args, "quantization_enabled", False):
+            if not quantization_enabled:
                 target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
                 for param in model.parameters():
                     if param.is_floating_point():
@@ -334,7 +339,7 @@ def _apply_peft_quantization(model, args, rank):
     return model
 
 
-### Apply  policies --------------- ##
+######################---------------- Apply  policies ######################---------------- ##
 
 def apply_solo(device, rank, args):
     """Loads a single-process model and moves it to the selected device."""
@@ -361,17 +366,19 @@ def apply_solo(device, rank, args):
             "low_cpu_mem_usage": True,
         }
         if quant_cfg is not None:
-            model_kwargs["quantization_config"] = quant_cfg
+            model_kwargs["quantization_config"] = quant_cfg            
+            model_kwargs["device_map"] = {"": device}   # ✅ key change
         else:
             # Standard float model load path keeps existing dtype behavior.
             model_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+            model_kwargs["device_map"] = None
 
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
             args.model_name,
             **model_kwargs,
         )
         model = _apply_peft_quantization(model, args, rank)
-        model = model.to(device)
+        # model = model.to(device)
         print_on_rank_0(rank, "Solo model ready ✓")
         return model
     except Exception as e:
