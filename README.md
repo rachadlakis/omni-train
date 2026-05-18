@@ -81,27 +81,20 @@ CUDA Version: 13.2
 
 ---
 
-## 4. Install PyTorch
+## 4. Install PyTorch and packages
 
 Choose the wheel matching your CUDA version.
 
-### CUDA 13.x
+
+### PyTorch Installation
+
+Install PyTorch before the rest of the requirements:
 
 ```bash
-pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-### CUDA 12.8
-
-```bash
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
-```
-
-### CPU-only
-
-```bash
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
-```
+This wheel targets CUDA 12.4. CUDA is backward-compatible, so it will also work on newer CUDA versions (13.x, etc.). If you need a different CUDA version, pick the appropriate wheel from [pytorch.org](https://pytorch.org/get-started/locally/) — but note that changing the CUDA/PyTorch version may require updating several other package versions in `requirements.txt` (e.g. `peft`, `transformers`, `accelerate`) to maintain compatibility.
 
 ---
 
