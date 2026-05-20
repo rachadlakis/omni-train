@@ -378,7 +378,8 @@ def apply_solo(device, rank, args):
             **model_kwargs,
         )
         model = _apply_peft_quantization(model, args, rank)
-        # model = model.to(device)
+        if quant_cfg is None:
+            model = model.to(device)
         print_on_rank_0(rank, "Solo model ready ✓")
         return model
     except Exception as e:
