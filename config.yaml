@@ -64,7 +64,7 @@ training:
   batch_size: 16                ## Batch size for training 
   max_length: 64                ## Not used for vision models
   learning_rate: 2e-5           ## Learning rate for training
-  gradient_checkpointing: false ## whether to use gradient checkpointing 
+  gradient_checkpointing: false ## whether to use gradient checkpointing (activation checkpointing)
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 

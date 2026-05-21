@@ -4,7 +4,7 @@
 Combines three parallelism dimensions using PyTorch native APIs,
 modelled closely on the official PyTorch distributed examples:
 
-  - Tensor Parallel  (TP) — col/row-wise weight sharding within a host
+  - Tensor Parallel  (TP) — col-wise/row-wise weight sharding within a host
   - Pipeline Parallel (PP) — layer stages across hosts, GPipe schedule
   - Data Parallel    (DP) — FSDP2 (fully_shard) across DP ranks
 
@@ -275,8 +275,8 @@ def apply_tp(stage: StageModule, tp_mesh):
             parallelize_plan={
                 "attention_norm": SequenceParallel(),
                 "attention": PrepareModuleInput(
-                    input_layouts=(Shard(1), Replicate()),
-                    desired_input_layouts=(Replicate(), Replicate()),
+                    input_layouts=(Shard(1), Replicate()),                      # type: ignore
+                    desired_input_layouts=(Replicate(), Replicate()),           # type: ignore
                 ),
                 "attention.wq": ColwiseParallel(use_local_output=False),
                 "attention.wk": ColwiseParallel(use_local_output=False),
@@ -315,8 +315,8 @@ def apply_tp(stage: StageModule, tp_mesh):
 # ---------------------------------------------------------------------------
 
 def apply_fsdp(stage: StageModule, dp_mesh):
-    for blk in stage.layers:
-        fully_shard(blk, mesh=dp_mesh)
+    for layer in stage.layers:
+        fully_shard(layer, mesh=dp_mesh)
     fully_shard(stage, mesh=dp_mesh)
 
 
