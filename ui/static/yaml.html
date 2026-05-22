@@ -8,8 +8,6 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/eclipse.min.css">
 </head>
 <body>
@@ -38,13 +36,7 @@
         <span class="yaml-toolbar-hint">Edit your training configuration below. Options are shown in comments.</span>
       </div>
       <div class="yaml-toolbar-right">
-        <label class="yaml-theme-label" for="yaml-theme-select">Theme</label>
-        <select class="yaml-theme-select" id="yaml-theme-select" aria-label="Editor theme">
-          <option value="material">Material</option>
-          <option value="dracula">Dracula</option>
-          <option value="monokai">Monokai</option>
-          <option value="eclipse">Eclipse</option>
-        </select>
+        <span id="yaml-lint-status" style="font-size:12px;color:var(--text-dim);"></span>
         <button class="btn btn-secondary" onclick="resetYamlTemplate()">Reset to Template</button>
       </div>
     </div>
@@ -81,7 +73,10 @@
     <div class="training-live-panel">
       <div class="training-live-header">
         <span>Live Console Output</span>
-        <span id="training-log-meta">Waiting for logs...</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span id="training-log-meta">Waiting for logs...</span>
+          <button class="log-expand-btn" onclick="toggleLogExpand(this)" title="Expand/collapse log">⤢</button>
+        </span>
       </div>
       <div class="training-live-log" id="training-live-log"></div>
       <div class="training-live-hint" id="training-live-hint">Latest training output will appear here live.</div>

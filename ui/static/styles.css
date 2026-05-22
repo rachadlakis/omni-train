@@ -23,6 +23,15 @@
   --blue-dim: rgba(59, 130, 246, 0.15);
   --radius: 12px;
   --radius-sm: 8px;
+
+  /* Aliases for missing variable names used in queue/FSDP sections */
+  --text-muted: var(--text-dim);
+  --text-secondary: var(--text-dim);
+  --text-primary: var(--text);
+  --surface-elevated: var(--surface2);
+  --success: var(--green);
+  --warning: var(--orange);
+  --primary: var(--accent);
 }
 
 /* Light theme */
@@ -283,7 +292,7 @@ body {
   color: var(--text-dim);
   font-size: 14px;
   max-width: 620px;
-  margin: -12px auto 28px;
+  margin: 0 auto 28px;
   line-height: 1.7;
   opacity: 0.75;
 }
@@ -775,6 +784,7 @@ body {
   align-items: center;
   gap: 6px;
   text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .btn-back:hover { background: var(--surface3); }
@@ -1419,12 +1429,11 @@ body {
   text-decoration: none;
 }
 
-.btn-primary { background: var(--navy); color: white; }
-.btn-primary:hover { background: var(--navy-hover); }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-danger { background: var(--red); color: white; }
-#btn-stop-main { display: none; }
 .btn-danger:hover { background: #dc2626; }
 
 .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
@@ -2320,6 +2329,47 @@ body {
   color: var(--green);
 }
 
+/* ==================== STRATEGY WARNING ==================== */
+.strategy-warning {
+  display: none;
+  font-size: 12px;
+  color: var(--orange);
+  background: var(--orange-dim);
+  border: 1px solid var(--orange);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: 8px;
+  grid-column: 1 / -1;
+}
+
+/* ==================== LOG EXPAND BUTTON ==================== */
+.log-expand-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.log-expand-btn:hover { background: var(--surface3); color: var(--text); }
+
+.training-live-log.expanded {
+  max-height: 480px;
+}
+
+/* ==================== TRAINING OVERLAY hides theme toggle ==================== */
+body:has(.training-overlay.active) .theme-toggle {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+/* ==================== W&B SECTION ==================== */
+.wandb-fields { margin-top: 12px; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -2334,6 +2384,10 @@ body {
 
 @media (max-width: 900px) {
   .landing-options { grid-template-columns: 1fr; max-width: 340px; }
+  /* Fix the persistent left margin gap on mobile */
+  .config-layout {
+    margin-left: 0 !important;
+  }
   .side-panel {
     position: fixed;
     left: 0;
@@ -2749,3 +2803,30 @@ body {
   color: var(--text-secondary);
   white-space: nowrap;
 }
+
+/* ── Toast notification ───────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--surface2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+  z-index: 99999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+.toast.toast--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast.toast--success { border-color: var(--green); color: var(--green); }
+.toast.toast--info    { border-color: var(--accent); color: var(--accent); }

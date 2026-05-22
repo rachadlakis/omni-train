@@ -65,13 +65,33 @@ class Checkpointer:
             f"{self.folder}/fsdp/{'dcp_api' if self.dcp_api else 'dtensor_api'}"
             f"/{self.last_training_time}/{MODEL_CHECKPOINT}"
         )
-        full_state_dict = torch.load(
-            last_model_checkpoint, 
-            mmap=True, 
-            weights_only=True, 
-            map_location="cpu"
-        )
         if self.dcp_api:
+            # CHANGED: only rank 0 loads the file from disk; all other ranks pass an empty dict.
+            #
+            # Reason: set_model_state_dict with broadcast_from_rank0=True ignores the state
+            # dict from every rank except rank 0 — it is discarded before any data is used.
+            # The old code loaded the full checkpoint on ALL ranks simultaneously:
+            #
+            #   full_state_dict = torch.load(last_model_checkpoint, mmap=True, ...)  ← all ranks
+            #   set_model_state_dict(..., broadcast_from_rank0=True)
+            #
+            # For a 70B model (140 GB checkpoint) with 8 ranks on 4 nodes, that was
+            # 8 × 140 GB = 1.1 TB of pointless CPU RAM and network I/O per checkpoint load.
+            # Now rank 0 is the single reader; all ranks receive their shard via NCCL broadcast.
+            #
+            # DTensor API does NOT use broadcast_from_rank0 — each rank calls distribute_tensor
+            # on the full tensor locally, so all ranks must still load there (see below).
+            import torch.distributed as _dist
+            _rank = _dist.get_rank() if _dist.is_initialized() else 0
+            if _rank == 0:
+                full_state_dict = torch.load(
+                    last_model_checkpoint,
+                    mmap=True,
+                    weights_only=True,
+                    map_location="cpu",
+                )
+            else:
+                full_state_dict = {}   # broadcast_from_rank0=True ignores this
             set_model_state_dict(
                 model=model, # type: ignore
                 model_state_dict=full_state_dict,
@@ -82,6 +102,16 @@ class Checkpointer:
             )
             return
 
+        # DTensor API path: each rank calls distribute_tensor() locally which requires the
+        # full source tensor to be present — there is no broadcast protocol here, so all
+        # ranks must load the checkpoint. mmap=True reduces physical RAM pressure via OS
+        # page mapping but does not eliminate the per-rank file read.
+        full_state_dict = torch.load(
+            last_model_checkpoint,
+            mmap=True,
+            weights_only=True,
+            map_location="cpu"
+        )
         meta_sharded_state_dict = model.state_dict() # type: ignore
         sharded_state_dict = {}
         for param_name, full_tensor in full_state_dict.items():

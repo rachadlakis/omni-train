@@ -57,14 +57,19 @@ def test_strategy_peft_and_quant_valid(cfg, strategy):
     assert args.quantization_enabled is True
 
 
-def test_fsdp_peft_and_quant_exits(cfg):
-    """FSDP + quantization must exit with code 1."""
+def test_fsdp_peft_and_quant_raises(cfg):
+    """FSDP + quantization must raise ValueError — build_args raises, train.py converts to sys.exit."""
+    # CHANGED: was pytest.raises(SystemExit) with code==1.
+    # Reason: build_args raises ValueError; sys.exit(1) only happens in train.py __main__.
+    # Old code:
+    #   with pytest.raises(SystemExit) as exc_info:
+    #       build_args(cfg)
+    #   assert exc_info.value.code == 1
     cfg["strategy"] = "fsdp"
     cfg["peft"]["enabled"] = True
     cfg["quantization"]["enabled"] = True
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(ValueError, match="FSDP"):
         build_args(cfg)
-    assert exc_info.value.code == 1
 
 
 @pytest.mark.parametrize("strategy", ["solo", "ddp", "fsdp"])

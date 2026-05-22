@@ -285,16 +285,8 @@ function toggleTheme() {
   const isLight = document.body.classList.contains('light');
   localStorage.setItem('theme', isLight ? 'light' : 'dark');
 
-  // Keep YAML editor aligned with light/dark mode unless user picked a custom editor theme.
-  const hasCustomEditorTheme = localStorage.getItem('yaml_editor_theme_user_set') === 'true';
-  if (!hasCustomEditorTheme) {
-    const autoTheme = getDefaultYamlEditorTheme();
-    setYamlEditorTheme(autoTheme, false);
-    const themeSelect = document.getElementById('yaml-theme-select');
-    if (themeSelect) {
-      themeSelect.value = autoTheme;
-    }
-  }
+  // YAML editor always follows the global toggle — no separate user preference.
+  _syncEditorTheme();
 }
 
 function loadTheme() {
@@ -304,18 +296,8 @@ function loadTheme() {
   }
 }
 
-function getDefaultYamlEditorTheme() {
-  return document.body.classList.contains('light') ? 'eclipse' : 'material';
-}
-
-function setYamlEditorTheme(theme, fromUser = true) {
-  if (!theme) return;
-
-  localStorage.setItem('yaml_editor_theme', theme);
-  if (fromUser) {
-    localStorage.setItem('yaml_editor_theme_user_set', 'true');
-  }
-
+function _syncEditorTheme() {
+  const theme = document.body.classList.contains('light') ? 'eclipse' : 'material';
   if (yamlCodeMirror) {
     yamlCodeMirror.setOption('theme', theme);
     yamlCodeMirror.refresh();
@@ -347,11 +329,8 @@ function setupYamlCodeEditor() {
   const editor = document.getElementById('yaml-editor');
   if (!editor || typeof window.CodeMirror === 'undefined' || yamlCodeMirror) return;
 
-  const savedTheme = localStorage.getItem('yaml_editor_theme');
-  const initialTheme = savedTheme || getDefaultYamlEditorTheme();
-  if (!savedTheme) {
-    setYamlEditorTheme(initialTheme, false);
-  }
+  // Theme always derived from the global dark/light mode — no separate preference stored.
+  const initialTheme = document.body.classList.contains('light') ? 'eclipse' : 'material';
 
   yamlCodeMirror = window.CodeMirror.fromTextArea(editor, {
     mode: 'yaml',
@@ -367,17 +346,30 @@ function setupYamlCodeEditor() {
     }
   });
 
+  let _yamlLintTimer = null;
   yamlCodeMirror.on('change', function(cm) {
     editor.value = cm.getValue();
-  });
 
-  const themeSelect = document.getElementById('yaml-theme-select');
-  if (themeSelect) {
-    themeSelect.value = initialTheme;
-    themeSelect.addEventListener('change', function(event) {
-      setYamlEditorTheme(event.target.value, true);
-    });
-  }
+    // Debounced real-time syntax check
+    clearTimeout(_yamlLintTimer);
+    _yamlLintTimer = setTimeout(() => {
+      const val = cm.getValue().trim();
+      const statusEl = document.getElementById('yaml-lint-status');
+      if (!statusEl) return;
+      if (!val) { statusEl.textContent = ''; return; }
+      try {
+        if (typeof window.jsyaml !== 'undefined') {
+          window.jsyaml.load(val);
+        }
+        statusEl.textContent = '✓ Valid YAML';
+        statusEl.style.color = 'var(--green)';
+      } catch (e) {
+        const loc = e.mark ? ` (line ${e.mark.line + 1})` : '';
+        statusEl.textContent = `✗ ${e.reason || 'Syntax error'}${loc}`;
+        statusEl.style.color = 'var(--red)';
+      }
+    }, 400);
+  });
 }
 
 // =========================================================================
@@ -542,14 +534,23 @@ const extraTemplates = [
   // BEiT
   { name: 'cnn_beit_base', display: 'BEiT Base', type: 'vision', desc: 'BERT-style pre-trained ViT' },
   { name: 'cnn_beit_large', display: 'BEiT Large', type: 'vision', desc: 'Large BERT-style ViT' },
-  // Detection (MIT/Apache 2.0 — no Ultralytics)
-  { name: 'detection_yolos_tiny',  display: 'YOLOS Tiny',  type: 'detection', desc: 'Fastest YOLO via ViT (MIT)' },
-  { name: 'detection_yolos_small', display: 'YOLOS Small', type: 'detection', desc: 'Balanced YOLO via ViT (MIT)' },
-  { name: 'detection_yolos_base',  display: 'YOLOS Base',  type: 'detection', desc: 'Strongest YOLO via ViT (MIT)' },
-  { name: 'detection_rtdetr_r18',  display: 'RT-DETR R18', type: 'detection', desc: 'Real-time DETR, lightest (Apache 2.0)' },
-  { name: 'detection_rtdetr_r50',  display: 'RT-DETR R50', type: 'detection', desc: 'Real-time DETR, balanced (Apache 2.0)' },
-  { name: 'detection_rtdetr_r101', display: 'RT-DETR R101',type: 'detection', desc: 'Real-time DETR, strongest (Apache 2.0)' },
-  { name: 'detection_detr_r50',    display: 'DETR R50',    type: 'detection', desc: 'Original DETR (Apache 2.0)' },
+  // Detection — YOLOS (MIT/Apache 2.0, HuggingFace-native)
+  { name: 'detection_yolos_tiny',        display: 'YOLOS Tiny',         type: 'detection', desc: 'Fastest YOLO via ViT (MIT)' },
+  { name: 'detection_yolos_small',       display: 'YOLOS Small',        type: 'detection', desc: 'Balanced YOLO via ViT (MIT)' },
+  { name: 'detection_yolos_base',        display: 'YOLOS Base',         type: 'detection', desc: 'Strongest YOLO via ViT (MIT)' },
+  // Detection — RT-DETR (Apache 2.0)
+  { name: 'detection_rtdetr_r18',        display: 'RT-DETR R18',        type: 'detection', desc: 'Real-time DETR, lightest (Apache 2.0)' },
+  { name: 'detection_rtdetr_r50',        display: 'RT-DETR R50',        type: 'detection', desc: 'Real-time DETR, balanced (Apache 2.0)' },
+  { name: 'detection_rtdetr_r101',       display: 'RT-DETR R101',       type: 'detection', desc: 'Real-time DETR, strongest (Apache 2.0)' },
+  // Detection — DETR family (Apache 2.0)
+  { name: 'detection_detr_r50',          display: 'DETR R50',           type: 'detection', desc: 'Original DETR (Apache 2.0)' },
+  { name: 'detection_detr_r101',         display: 'DETR R101',          type: 'detection', desc: 'DETR with ResNet-101 backbone (Apache 2.0)' },
+  { name: 'detection_conditional_detr',  display: 'Conditional DETR',   type: 'detection', desc: '10× faster convergence than DETR (Apache 2.0)' },
+  { name: 'detection_deformable_detr',   display: 'Deformable DETR',    type: 'detection', desc: 'Sparse attention, strong real-world perf (Apache 2.0)' },
+  { name: 'detection_dab_detr',          display: 'DAB-DETR R50',       type: 'detection', desc: 'Dynamic anchor boxes DETR (Apache 2.0)' },
+  // Detection — OWL-ViT zero-shot (Apache 2.0)
+  { name: 'detection_owlvit_base',       display: 'OWL-ViT Base',       type: 'detection', desc: 'Zero-shot open-vocabulary detection (Apache 2.0)' },
+  { name: 'detection_owlvit_large',      display: 'OWL-ViT Large',      type: 'detection', desc: 'Larger zero-shot detection model (Apache 2.0)' },
   // Embedding — text
   { name: 'embedding_e5_large_v2', display: 'E5-Large-v2 (Microsoft)', type: 'embedding', desc: 'State-of-the-art text embeddings' },
   { name: 'embedding_e5_mistral_7b', display: 'E5-Mistral-7B (Microsoft)', type: 'embedding', desc: 'LLM-based text embeddings' },
@@ -826,6 +827,36 @@ function onQuantizeChange() {
   }
 }
 
+// =========================================================================
+// W&B Toggle
+// =========================================================================
+function onWandbChange() {
+  const enabled = document.getElementById('f-wandb-enabled')?.checked;
+  toggle('fg-wandb-project', !!enabled);
+  toggle('fg-wandb-entity', !!enabled);
+  toggle('fg-wandb-run', !!enabled);
+}
+
+// =========================================================================
+// Strategy / GPU compatibility warning
+// =========================================================================
+function checkStrategyGpuCompatibility() {
+  const strategy = getVal('f-strategy');
+  const gpuCount = parseInt(getVal('f-gpu-count') || '1');
+  const warnEl = document.getElementById('strategy-gpu-warning');
+  if (!warnEl) return;
+
+  if (strategy === 'fsdp' && gpuCount < 2) {
+    warnEl.textContent = '⚠ FSDP requires multiple GPUs to shard parameters. Increase GPU count or switch to Solo/DDP.';
+    warnEl.style.display = 'block';
+  } else if (strategy === 'ddp' && gpuCount < 2) {
+    warnEl.textContent = '⚠ DDP with 1 GPU provides no throughput benefit. Use 2+ GPUs or switch to Solo mode.';
+    warnEl.style.display = 'block';
+  } else {
+    warnEl.style.display = 'none';
+  }
+}
+
 function syncGpuOptionsWithStrategy() {
   const strategy = getVal('f-strategy');
   const gpuSelect = document.getElementById('f-gpu-count');
@@ -970,8 +1001,8 @@ function toggleSidePanel() {
     if (configLayout) configLayout.style.marginLeft = '0';
   } else {
     if (icon) icon.textContent = '<';
-    if (actionBar) actionBar.style.left = '340px';
-    if (configLayout) configLayout.style.marginLeft = '340px';
+    if (actionBar) actionBar.style.left = '272px';
+    if (configLayout) configLayout.style.marginLeft = '272px';
   }
 }
 
@@ -1086,6 +1117,7 @@ function renderSideTemplates(filter = 'all') {
 }
 
 async function selectSideTemplate(item, event) {
+
   // Snap to top before any DOM changes — cover both window scroll and panel scroll
   window.scrollTo(0, 0);
   document.documentElement.scrollTop = 0;
@@ -1102,14 +1134,17 @@ async function selectSideTemplate(item, event) {
 
   if (item.isExtra) {
     applyExtraTemplate(item);
+    showToast(`Template loaded: ${item.display}`, 'success');
   } else {
     try {
       const res = await fetch(`/api/configs/${item.name}`);
       const data = await res.json();
       currentConfig = data.config;
       applyConfigToForm(data.config);
+      showToast(`Template loaded: ${item.display}`, 'success');
     } catch (e) {
       console.error('Failed to load template:', e);
+      showToast('Failed to load template', 'info');
     }
   }
 }
@@ -1269,14 +1304,19 @@ function applyExtraTemplate(template) {
 
     onFinetuneModeChange();
   } else if (template.type === 'detection') {
-    // All models are permissively licensed (MIT/Apache 2.0), loaded via AutoModelForObjectDetection
     let detectionModel = 'hustvl/yolos-small';
-    if (name.includes('yolos_tiny'))  detectionModel = 'hustvl/yolos-tiny';
-    else if (name.includes('yolos_base'))  detectionModel = 'hustvl/yolos-base';
-    else if (name.includes('rtdetr_r18')) detectionModel = 'PekingU/rtdetr_r18vd';
-    else if (name.includes('rtdetr_r50')) detectionModel = 'PekingU/rtdetr_r50vd';
-    else if (name.includes('rtdetr_r101')) detectionModel = 'PekingU/rtdetr_r101vd';
-    else if (name.includes('detr_r50'))  detectionModel = 'facebook/detr-resnet-50';
+    if      (name.includes('yolos_tiny'))        detectionModel = 'hustvl/yolos-tiny';
+    else if (name.includes('yolos_base'))        detectionModel = 'hustvl/yolos-base';
+    else if (name.includes('rtdetr_r18'))        detectionModel = 'PekingU/rtdetr_r18vd';
+    else if (name.includes('rtdetr_r50'))        detectionModel = 'PekingU/rtdetr_r50vd';
+    else if (name.includes('rtdetr_r101'))       detectionModel = 'PekingU/rtdetr_r101vd';
+    else if (name.includes('detr_r101'))         detectionModel = 'facebook/detr-resnet-101';
+    else if (name.includes('conditional_detr'))  detectionModel = 'microsoft/conditional-detr-resnet-50';
+    else if (name.includes('deformable_detr'))   detectionModel = 'SenseTime/deformable-detr';
+    else if (name.includes('dab_detr'))          detectionModel = 'IDEA-Research/dab-detr-r50';
+    else if (name.includes('owlvit_large'))      detectionModel = 'google/owlvit-large-patch14';
+    else if (name.includes('owlvit_base'))       detectionModel = 'google/owlvit-base-patch32';
+    else if (name.includes('detr_r50'))          detectionModel = 'facebook/detr-resnet-50';
 
     setVal('f-model-source', 'huggingface');
     setVal('f-yolo-model', detectionModel);
@@ -1553,6 +1593,15 @@ function applyConfigToForm(cfg) {
   setVal('f-grad-clip', t.grad_clip || 1.0);
   setVal('f-lr-schedule', t.lr_schedule || 'cosine');
   setVal('f-checkpoint-dir', t.checkpoint_dir || 'checkpoints');
+
+  // W&B settings
+  const wandb = cfg.wandb || {};
+  const wandbEl = document.getElementById('f-wandb-enabled');
+  if (wandbEl) wandbEl.checked = !!(wandb.wandb_log_with_train);
+  setVal('f-wandb-project', wandb.wandb_project || '');
+  setVal('f-wandb-entity', wandb.wandb_entity || '');
+  setVal('f-wandb-run', wandb.wandb_run_name || '');
+  onWandbChange();
 }
 
 function buildConfigFromForm() {
@@ -1703,7 +1752,7 @@ function buildConfigFromForm() {
   cfg.training = {
     epochs: parseInt(getVal('f-epochs')) || 3,
     batch_size: parseInt(getVal('f-batch-size')) || 8,
-    lr: parseFloat(getVal('f-lr')) || 2e-5,
+    lr: getVal('f-lr') || '2e-5',
     weight_decay: parseFloat(getVal('f-weight-decay')) || 0.01,
     grad_clip: parseFloat(getVal('f-grad-clip')) || 1.0,
     grad_accum_steps: parseInt(getVal('f-grad-accum')) || 1,
@@ -1711,6 +1760,15 @@ function buildConfigFromForm() {
     lr_schedule: getVal('f-lr-schedule') || 'cosine',
     checkpoint_dir: getVal('f-checkpoint-dir'),
     log_interval: 10,
+  };
+
+  // W&B logging
+  const wandbEnabled = document.getElementById('f-wandb-enabled')?.checked || false;
+  cfg.wandb = {
+    wandb_log_with_train: wandbEnabled,
+    wandb_project: getVal('f-wandb-project') || 'dist-train-project',
+    wandb_entity: getVal('f-wandb-entity') || '',
+    wandb_run_name: getVal('f-wandb-run') || '',
   };
 
   return cfg;
@@ -2322,11 +2380,36 @@ function configToYaml(cfg) {
     ? ''
     : `  subset: ${dataSubset} # other subsets: wikitext-103-raw-v1, PennTreebank (no subset)\n`;
 
-  return `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl
+  // Map UI model type to backend model_type (mirrors config_adapter.py _ui_to_model_type)
+  const uiModelType = (cfg.model?.type || 'llm').toLowerCase();
+  const _uiToMiniType = { llm: 'llm', vlm: 'vlm', vision: 'vision', embedding: 'encoder',
+    detection: 'yolo', cnn: 'llm', custom_transformer: 'custom_transformer' };
+  const miniModelType = _uiToMiniType[uiModelType] || 'llm';
 
+  // Build model-type-specific extra lines for the YAML
+  let modelTypeExtras = '';
+  if (uiModelType === 'cnn') {
+    const numClasses = cfg.model?.num_classes || 10;
+    const imgSize = cfg.data?.image_size || 224;
+    modelTypeExtras = `model_type: vision  # cnn model loaded via torchvision\nnum_classes: ${numClasses}\nimage_size: ${imgSize}\n`;
+  } else if (uiModelType === 'vision') {
+    const imgSize = cfg.data?.image_size || 224;
+    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
+  } else if (uiModelType === 'vlm') {
+    const imgSize = cfg.data?.image_size || 448;
+    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
+  } else if (uiModelType === 'detection') {
+    const imgSize = cfg.data?.image_size || 640;
+    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
+  } else if (uiModelType !== 'llm') {
+    modelTypeExtras = `model_type: ${miniModelType}\n`;
+  }
+
+  return `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl
+${modelTypeExtras}
 dataset:
 ${datasetNameLine}
-${datasetSubsetLine}  split: ${dataSplit}  ## 
+${datasetSubsetLine}  split: ${dataSplit}  ##
 
 training:
   epochs: ${epochs}                     ## Number of epochs to train
@@ -2409,6 +2492,14 @@ function initYamlPage() {
     setYamlEditorValue(generateYamlTemplate());
     yamlFromForm = false;
   }
+
+  // Keyboard shortcut: Ctrl/Cmd+Enter → Start Training
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const yamlPage = document.querySelector('.yaml-page');
+      if (yamlPage) startTrainingFromYaml();
+    }
+  });
 }
 
 function resetYamlTemplate() {
@@ -3052,6 +3143,32 @@ function showTrainingSuccess(logs = []) {
   container.appendChild(backdrop);
 }
 
+function closeTrainingError() {
+  const modal   = document.getElementById('training-error-display');
+  const backdrop = document.getElementById('training-error-backdrop');
+  if (modal)   modal.remove();
+  if (backdrop) backdrop.remove();
+  hideTrainingOverlay();
+}
+
+let _toastTimer = null;
+function showToast(message, type = 'info') {
+  let el = document.getElementById('app-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-toast';
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.className = `toast toast--${type}`;
+  // Force reflow so the transition fires even on rapid repeat calls
+  void el.offsetWidth;
+  el.classList.add('toast--visible');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('toast--visible'), 2200);
+}
+
 // =========================================================================
 // Training
 // =========================================================================
@@ -3474,14 +3591,10 @@ function onStrategyChange() {
 
   syncGpuOptionsWithStrategy();
 
-  if (strategy === 'none') {
+  // Solo always forces 1 GPU; hybrid starts at 1 (topology product drives it from there).
+  // DDP and FSDP leave the count unchanged so the user stays in control.
+  if (strategy === 'none' || strategy === 'hybrid') {
     if (gpuSelect) gpuSelect.value = '1';
-  } else if (strategy === 'ddp') {
-    if (gpuSelect && gpuSelect.value === '1') gpuSelect.value = '2';
-  } else if (strategy === 'fsdp') {
-    if (gpuSelect && parseInt(gpuSelect.value) < 4) gpuSelect.value = '4';
-  } else if (strategy === 'hybrid') {
-    if (gpuSelect && parseInt(gpuSelect.value) < 4) gpuSelect.value = '4';
   }
 
   // Show / hide 3D topology section
@@ -3502,6 +3615,7 @@ function onStrategyChange() {
 
   // Refresh availability display
   updateGpuAvailability();
+  checkStrategyGpuCompatibility();
 }
 
 function onLaunchModeChange() {
@@ -3558,6 +3672,7 @@ function updateTopologyHint() {
 function onGpuCountChange() {
   syncGpuOptionsWithStrategy();
   updateGpuAvailability();
+  checkStrategyGpuCompatibility();
   // Refresh topology hint if hybrid strategy is active
   const strategy = getVal('f-strategy');
   if (strategy === 'hybrid') updateTopologyHint();
@@ -3769,6 +3884,17 @@ function getVal(id) { const el = document.getElementById(id); return el ? el.val
 function toggle(id, show) { const el = document.getElementById(id); if (el) el.style.display = show ? '' : 'none'; }
 function escapeHtml(t) { return String(t ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+/**
+ * Toggle the live log panel between normal and expanded height.
+ */
+function toggleLogExpand(btn) {
+  const logEl = document.getElementById('training-live-log');
+  if (!logEl) return;
+  const isExpanded = logEl.classList.toggle('expanded');
+  if (btn) btn.textContent = isExpanded ? '⤡' : '⤢';
+  if (isExpanded) logEl.scrollTop = logEl.scrollHeight;
+}
+
 // =========================================================================
 // Drag and Drop
 // =========================================================================
@@ -3872,6 +3998,14 @@ async function initConfigPage() {
   setInterval(updateGpuAvailability, 10000);
 
   pollStatus();
+
+  // Keyboard shortcut: Ctrl/Cmd+Enter → Next (go to YAML editor)
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const btn = document.getElementById('btn-review-yaml');
+      if (btn && !btn.disabled) btn.click();
+    }
+  });
 }
 
 // Initialize on page load

@@ -71,11 +71,25 @@ def test_peft_unsupported_model_type_raises(cfg):
 # Quantization validation
 # ------------------------------------------------------------------
 
-def test_quantization_without_peft_raises(cfg):
+def test_4bit_quantization_without_peft_raises(cfg):
+    """4-bit without PEFT is mathematically impossible — hard error."""
     cfg["quantization"]["enabled"] = True
+    cfg["quantization"]["bits"] = 4
     cfg["peft"]["enabled"] = False
     with pytest.raises(ValueError, match="requires peft"):
         build_args(cfg)
+
+
+def test_8bit_quantization_without_peft_warns(cfg):
+    """8-bit without PEFT is unstable but allowed — emits UserWarning, does not raise."""
+    cfg["quantization"]["enabled"] = True
+    cfg["quantization"]["bits"] = 8
+    cfg["peft"]["enabled"] = False
+    cfg["strategy"] = "solo"   # avoid fsdp+quant hard error
+    with pytest.warns(UserWarning, match="NaN"):
+        args = build_args(cfg)
+    assert args.quantization_enabled is True
+    assert args.peft_enabled is False
 
 
 def test_invalid_quantization_bits_raises(cfg):
@@ -92,16 +106,23 @@ def test_qlora_requires_4bit(cfg):
 
 
 # ------------------------------------------------------------------
-# FSDP + quantization guard (calls sys.exit)
+# FSDP + quantization guard
 # ------------------------------------------------------------------
+# CHANGED: was pytest.raises(SystemExit) with code==1.
+# Reason: build_args() raises ValueError (not sys.exit). sys.exit(1) only happens
+# in train.py's __main__ block which wraps build_args in a try/except ValueError.
+# The test was calling build_args() directly, so SystemExit was never raised.
+# Old code:
+#   with pytest.raises(SystemExit) as exc_info:
+#       build_args(cfg)
+#   assert exc_info.value.code == 1
 
-def test_fsdp_plus_quantization_exits(cfg):
+def test_fsdp_plus_quantization_raises(cfg):
     cfg["strategy"] = "fsdp"
     cfg["peft"]["enabled"] = True
     cfg["quantization"]["enabled"] = True
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(ValueError, match="FSDP"):
         build_args(cfg)
-    assert exc_info.value.code == 1
 
 
 def test_ddp_plus_quantization_does_not_exit(cfg):

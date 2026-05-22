@@ -550,13 +550,14 @@ async def api_estimate_training_time(payload: ConfigPayload):
             steps_per_epoch=steps_per_epoch,
             epochs=epochs,
             batch_size=batch_size,
+            seq_len=max_length,
             num_gpus=num_gpus,
             gpu_type=gpu_type,
             peft_enabled=bool(getattr(args, "peft_enabled", False)),
             peft_r=int(getattr(args, "peft_r", 16)),
             gradient_checkpointing=bool(getattr(args, "gradient_checkpointing", False)),
             strategy=strategy,
-            mfu=0.35,
+            mfu=0.25,
             extra_overhead=1.0,
         )
 
@@ -564,6 +565,10 @@ async def api_estimate_training_time(payload: ConfigPayload):
         param_dtype = str(getattr(args, "param_dtype", "bfloat16")).lower()
         param_dtype_bits = 32 if "32" in param_dtype else 16
         model_type = str(getattr(args, "model_type", mini_cfg.get("model", {}).get("type", "llm"))).lower()
+
+        quant_bits = 0
+        if bool(getattr(args, "quantization_enabled", False)):
+            quant_bits = int(getattr(args, "quantization_bits", 4))
 
         vram_result = utils_mod.estimate_training_vram(
             model_type=model_type,
@@ -574,6 +579,9 @@ async def api_estimate_training_time(payload: ConfigPayload):
             num_layers=num_layers,
             hidden_dim=hidden_dim,
             activation_checkpointing=bool(getattr(args, "gradient_checkpointing", False)),
+            peft_enabled=bool(getattr(args, "peft_enabled", False)),
+            peft_r=int(getattr(args, "peft_r", 16)),
+            quantization_bits=quant_bits,
         )
 
         est_total_minutes = float(time_result.get("total_minutes", 0.0))
@@ -617,10 +625,6 @@ async def api_estimate_training_time(payload: ConfigPayload):
         gpu_count, gpu_tflops = get_gpu_tflops()
 
         strategy = distributed_config.get("strategy", "none")
-        if strategy == "ddp" and gpu_count == 1:
-            gpu_count = 2
-        elif strategy == "fsdp" and gpu_count == 1:
-            gpu_count = 4
 
         steps_per_epoch = max(1, math.ceil(dataset_size / max(1, batch_size)))
         total_steps = steps_per_epoch * max(1, epochs)

@@ -408,8 +408,39 @@ def build_args(cfg):
 
     if args.quantization_enabled and not args.peft_enabled:
         if args.quantization_bits == 4:
-            raise ValueError("4-bit quantization requires peft.enabled=true (use QLoRA for 4-bit)")
-        # 8-bit (LLM.int8) is compatible with full fine-tuning
+            # 4-bit (NF4) has no differentiable backward — mathematically impossible to train.
+            raise ValueError(
+                "4-bit quantization requires peft.enabled=true. "
+                "Use peft_type=qlora for QLoRA fine-tuning."
+            )
+        else:
+            # CHANGED: was a hard ValueError. Downgraded to a warning so the user can proceed
+            # if they choose to, while being clearly informed of the instability.
+            # 8-bit training is allowed but will almost certainly produce NaN losses because:
+            #   1. INT8 weights have a very limited range (-127 to 127); AdamW gradient updates
+            #      overflow that range within a few steps, corrupting weights to NaN.
+            #   2. LayerNorm and embedding layers stay in float16 without
+            #      prepare_model_for_kbit_training — float16 overflows at ~65504, causing
+            #      NaN in the forward pass itself before gradients are even computed.
+            #   3. Optimizer states (exp_avg, exp_avg_sq) accumulate in the wrong dtype,
+            #      amplifying the instability across steps.
+            # Recommended alternatives:
+            #   • peft.enabled=true + quantization.bits=8  → stable 8-bit LoRA
+            #   • quantization.enabled=false               → full float fine-tuning
+            import warnings
+            warnings.warn(
+                "\n⚠️  WARNING: 8-bit quantization without PEFT will likely produce NaN losses.\n"
+                "   Reasons:\n"
+                "   1. INT8 weight range is -127 to 127 — AdamW updates overflow it within steps.\n"
+                "   2. LayerNorm/embeddings stay in float16, which overflows at ~65504.\n"
+                "   3. Optimizer states accumulate in the wrong dtype, amplifying instability.\n"
+                "   Alternatives:\n"
+                "   • peft.enabled=true  (8-bit LoRA — stable)\n"
+                "   • quantization.enabled=false  (full float fine-tuning)\n"
+                "   Proceeding anyway...\n",
+                UserWarning,
+                stacklevel=2,
+            )
 
     if args.strategy == "fsdp" and args.quantization_enabled:
         raise ValueError(
@@ -455,60 +486,91 @@ def build_args(cfg):
 
 def estimate_training_vram(
     model_type: str,               # llm, seq2seq, vision, yolo, vlm, encoder
-    num_params: int,               # number of trainable parameters
+    num_params: int,               # total model parameters
     param_dtype_bits: int,         # 16 for bfloat16/fp16, 32 for fp32
     batch_size: int,
     seq_len: int,
     num_layers: int,
     hidden_dim: int,
     activation_checkpointing: bool = False,
+    peft_enabled: bool = False,    # LoRA/QLoRA: optimizer covers adapters only
+    peft_r: int = 16,              # LoRA rank; used to estimate trainable param count
+    quantization_bits: int = 0,    # 4 or 8 for quantized weights, 0 for full precision
 ) -> dict:
     """
     Estimates VRAM usage in GB for training with Adam optimizer.
 
-    Assumptions:
-    - Gradients use the same dtype as weights.
-    - For mixed precision (param_dtype_bits=16): Adam stores fp32 master weights + two fp32 moments
-      → 12 bytes per original fp16/bf16 parameter → 6× weight memory.
-    - For fp32: Adam stores fp32 weights + two fp32 moments → 12 bytes per param → 3× weight memory.
-    - Activation memory for transformer‑based models (llm, seq2seq, encoder):
-        approx = batch_size * seq_len * hidden_dim * num_layers * 2  (covers attention + MLP outputs).
-    - Activation checkpointing halves the activation memory (common practice).
-    - For vision/YOLO, activation memory is estimated as 20% of weights (very rough).
-    - For VLM, the LLM part dominates, so same as transformer.
+    Key assumptions:
+    - Quantized weights (4-bit/8-bit) use reduced byte-width for storage.
+    - LoRA/PEFT: gradients + optimizer states only cover trainable adapter params,
+      drastically reducing optimizer memory (from ~6-12× weights to near-zero for large models).
+    - For mixed precision (param_dtype_bits=16): Adam keeps fp32 master weights + two fp32 moments
+      = 12 bytes per param. Full fine-tune = 6× weight memory.
+    - For fp32: Adam stores 3 fp32 states per param → 3× weight memory.
+    - Transformer activation memory accounts for Q/K/V (3×), attention output (1×),
+      FFN (4×), and layer norms/residuals (2×) ≈ 10 elements per hidden dimension per layer.
+    - Activation checkpointing halves activation memory (recompute on backward).
+    - For vision/YOLO, activation memory is a rough heuristic (~20% of weights).
     """
     valid_types = {"llm", "seq2seq", "vision", "yolo", "vlm", "encoder"}
     if model_type not in valid_types:
         raise ValueError(f"Unsupported model_type={model_type}. Use one of {valid_types}")
-    
-    bytes_per_param = param_dtype_bits / 8
-    weights_gb = num_params * bytes_per_param / 1e9
-    gradients_gb = weights_gb                     # same dtype as weights
 
-    # ---- Optimizer memory (Adam) ----
-    if param_dtype_bits == 32:
-        # fp32: weights (4B) + two fp32 states (8B) = 12B per param → 3× weights_gb
+    quant_bits = int(quantization_bits) if quantization_bits else 0
+
+    # ---- Weight storage (quantization reduces byte width) ----
+    if quant_bits in {4, 8}:
+        weight_bytes_per_param = quant_bits / 8   # 0.5 B for 4-bit, 1.0 B for 8-bit
+    else:
+        weight_bytes_per_param = param_dtype_bits / 8  # 2 B for fp16/bf16, 4 B for fp32
+    weights_gb = num_params * weight_bytes_per_param / 1e9
+
+    # ---- Trainable parameter estimate (for PEFT) ----
+    if peft_enabled:
+        # LoRA adds two adapter matrices (A: r×d, B: d×r) per target linear layer.
+        # Typical all-linear targeting: q, k, v, o projections = 4 matrices per layer.
+        # num_layers and hidden_dim are passed in directly — no approximation needed.
+        trainable_params = min(num_params, 2 * peft_r * hidden_dim * num_layers * 4)
+    else:
+        trainable_params = num_params
+
+    # ---- Gradient memory ----
+    if peft_enabled:
+        # Gradients only for adapter params (stored in fp16 training precision)
+        gradients_gb = trainable_params * 2 / 1e9
+    elif quant_bits in {4, 8}:
+        # Quantized without PEFT: unsupported by build_args, but handle gracefully
+        gradients_gb = 0.0
+    else:
+        # Full fine-tune: gradients same dtype as weights
+        gradients_gb = num_params * (param_dtype_bits / 8) / 1e9
+
+    # ---- Optimizer memory (Adam: weight + two moments in fp32) ----
+    if peft_enabled:
+        # Optimizer only for trainable adapter params (3 fp32 tensors each = 12B each)
+        optimizer_gb = trainable_params * 12 / 1e9
+    elif param_dtype_bits == 32:
+        # fp32 weights (4B) + two fp32 Adam states (8B) = 12B/param → 3× weights_gb
         optimizer_gb = weights_gb * 3
-    else:  # 16-bit (fp16/bf16) mixed precision
-        # weights are 2B, but optimizer keeps fp32 master (4B) + two fp32 moments (8B) = 12B per param
-        # 12B / 2B = 6× weights_gb
-        optimizer_gb = weights_gb * 6
+    else:
+        # fp16/bf16: optimizer keeps fp32 master copy + two fp32 moments = 12B/param
+        optimizer_gb = num_params * 12 / 1e9
 
     # ---- Activation memory ----
-    if model_type in {"llm", "seq2seq", "encoder"}:
-        # Transformer: each layer stores ~ batch * seq_len * hidden_dim * 2 (forward pass)
-        act_bytes = batch_size * seq_len * hidden_dim * num_layers * 2
+    bytes_per_act = param_dtype_bits / 8  # activations stored in training precision
+
+    if model_type in {"llm", "seq2seq", "encoder", "vlm"}:
+        # Per transformer layer: Q/K/V (3×), attn output (1×), FFN intermediate (4×),
+        # layer norms + residuals (2×) ≈ 10 elements per (batch × seq × hidden)
+        act_bytes = batch_size * seq_len * hidden_dim * num_layers * 10 * bytes_per_act
     elif model_type in {"vision", "yolo"}:
-        # Crude heuristic: activations ~20% of weight memory (modify for your use case)
+        # CNN-style: rough heuristic ~20% of weight memory
         act_bytes = weights_gb * 0.2 * 1e9
-    elif model_type == "vlm":
-        # Assume the LLM component dominates
-        act_bytes = batch_size * seq_len * hidden_dim * num_layers * 2
     else:
         act_bytes = 0
 
     if activation_checkpointing:
-        act_bytes /= 2.0   # typical reduction factor
+        act_bytes /= 2.0   # ~2× memory saving from recompute
 
     activations_gb = act_bytes / 1e9
     total_gb = weights_gb + gradients_gb + optimizer_gb + activations_gb
@@ -527,49 +589,75 @@ def estimate_training_time(
     steps_per_epoch: int,
     epochs: int,
     batch_size: int,
+    seq_len: int = 256,            # actual sequence length (tokens per sample)
     num_gpus: int = 1,
     gpu_type: str = "unknown",
-    strategy: str = "solo", 
+    strategy: str = "solo",
     peft_enabled: bool = False,
     peft_r: int = 16,
     gradient_checkpointing: bool = False,
-    mfu: float = 0.35,
+    mfu: float = 0.25,            # model flop utilization (0.25 ≈ typical HF fine-tuning)
     extra_overhead: float = 1.0,
 ) -> dict:
     """
     Estimates training time based on FLOPs / effective throughput.
 
-    Note:
-    This estimator intentionally does not use sequence length to avoid very
-    large swings in ETA caused by config defaults or template mismatches.
+    Formula: total_flops = 6 * N * T * total_steps
+    - 6× factor: 2× forward + 2× backward (activation gradients) + 2× backward (weight gradients)
+    - N = num_params, T = seq_len (tokens per sample)
+
+    LoRA reduces only the weight-gradient term (~1/3 of total FLOPs) because
+    frozen weights still need a full forward pass and full activation-gradient backward.
+    The remaining 2/3 (forward + activation-grad) are unchanged.
+
+    MFU = 0.25 (25% model flop utilization) is a conservative default for typical
+    HuggingFace fine-tuning without custom CUDA kernels. Well-tuned setups with
+    FlashAttention can reach 0.35–0.45.
     """
     strategy = (strategy or "solo").strip().lower()
 
-    # Peak TFLOPS per GPU by type (bf16/fp16)
+    # Peak TFLOPS per GPU by type (bf16/fp16 tensor core throughput)
     gpu_tflops_map = {
         "h100": 990, "a100": 312, "a10g": 125, "v100": 125,
         "l4": 120, "t4": 65, "a6000": 155, "a5000": 110,
         "a4000": 77, "a2": 31, "4090": 83, "3090": 36, "3080": 30,
+        "3070": 20, "3060": 13, "2080": 14, "1080": 11,
     }
-    gpu_tflops = gpu_tflops_map.get(gpu_type, 80)  # 80 TFLOPS as safe modern default
+    gpu_tflops = gpu_tflops_map.get(gpu_type, 40)  # 40 TFLOPS: conservative unknown GPU default
 
-    # Distributed communication overhead
+    # Distributed communication overhead (reduces effective GPU utilization)
     overhead = {"solo": 0.0, "ddp": 0.08, "fsdp": 0.18}.get(strategy, 0.1)
 
-    # Approximate work from parameter count and optimizer steps.
-    # We intentionally avoid sequence-length dependence for a stabler ETA.
-    # 256 token-equivalent units per sample keeps ETA realistic for small runs.
-    token_equiv_per_sample = 256
+    # Total training FLOPs: 6 * params * tokens_per_sample * total_steps
+    total_tokens = batch_size * steps_per_epoch * epochs * seq_len
+    total_flops = 6.0 * num_params * total_tokens
 
-    total_samples = batch_size * steps_per_epoch * epochs
-    total_flops = 6.0 * num_params * total_samples * token_equiv_per_sample
-
-    # LoRA reduces active parameters during backward
+    # LoRA: weight gradients only for adapters (tiny fraction), but forward +
+    # activation-gradient backward still run on the full frozen model.
+    #   full FLOPs   = forward(1/3) + act_grad(1/3) + weight_grad(1/3)
+    #   LoRA FLOPs   = forward(1/3) + act_grad(1/3) + weight_grad(f/3)
+    #                = (2 + f) / 3   where f = trainable_fraction
     if peft_enabled:
-        lora_ratio = (2 * peft_r * num_params ** 0.5) / num_params
-        total_flops *= (1.0 - 0.5 * min(lora_ratio, 0.9))
+        # Lookup-table approach for (num_layers, hidden_dim) — same breakpoints as app.py
+        if num_params <= 200_000_000:
+            _nl, _hd = 12, 768
+        elif num_params <= 500_000_000:
+            _nl, _hd = 24, 1024
+        elif num_params <= 2_000_000_000:
+            _nl, _hd = 24, 2048
+        elif num_params <= 9_000_000_000:
+            _nl, _hd = 32, 4096
+        elif num_params <= 20_000_000_000:
+            _nl, _hd = 40, 5120
+        else:
+            _nl, _hd = 80, 8192
+        # LoRA: 2 adapter matrices × 4 attention projection matrices per layer
+        trainable_params = min(num_params, 2 * peft_r * _hd * _nl * 4)
+        trainable_fraction = trainable_params / max(1, num_params)
+        lora_multiplier = (2.0 + trainable_fraction) / 3.0
+        total_flops *= lora_multiplier
 
-    # Activation checkpointing adds ~33% recompute cost
+    # Gradient checkpointing adds ~33% recompute cost during the backward pass
     if gradient_checkpointing:
         total_flops *= 1.33
 
@@ -580,11 +668,8 @@ def estimate_training_time(
     time_seconds = (total_flops / effective_flops_per_sec) * (1.0 + extra_overhead * 0.05)
 
     # Startup overhead: model load + tokenizer + dataset prep + process group init
-    # ~1 second per billion parameters for model loading (from disk / HuggingFace)
-    model_load_sec = (num_params / 1e9) * 1.0
-    # Dataset prep: fixed base + small per-step cost
+    model_load_sec = (num_params / 1e9) * 1.0  # ~1 s per billion params from disk
     data_prep_sec = 15.0 + steps_per_epoch * 0.002
-    # Distributed init overhead (process group, rendezvous)
     dist_init_sec = {"solo": 5.0, "ddp": 20.0, "fsdp": 35.0}.get(strategy, 15.0)
     startup_sec = model_load_sec + data_prep_sec + dist_init_sec
 

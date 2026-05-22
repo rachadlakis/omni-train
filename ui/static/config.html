@@ -130,25 +130,31 @@
             <input type="number" id="f-num-classes" value="10">
           </div>
           <div class="form-group" id="fg-yolo-model" style="display:none;">
-            <label>Detection Model <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="All models are permissively licensed (MIT/Apache 2.0) and loaded via AutoModelForObjectDetection — no Ultralytics required.">?</span></label>
+            <label>Detection Model <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="All models load via HuggingFace AutoModelForObjectDetection — no extra dependencies required.">?</span></label>
             <select id="f-yolo-model">
               <option value="" disabled selected hidden>Select detection model...</option>
-              <optgroup label="YOLOS (MIT license)">
-                <option value="hustvl/yolos-tiny">YOLOS Tiny (fastest)</option>
-                <option value="hustvl/yolos-small" selected>YOLOS Small (recommended)</option>
-                <option value="hustvl/yolos-base">YOLOS Base (strongest)</option>
+              <optgroup label="── YOLOS (MIT license)">
+                <option value="hustvl/yolos-tiny">YOLOS Tiny (fastest, ~6M)</option>
+                <option value="hustvl/yolos-small" selected>YOLOS Small (~30M, recommended)</option>
+                <option value="hustvl/yolos-base">YOLOS Base (~127M, strongest)</option>
               </optgroup>
-              <optgroup label="RT-DETR (Apache 2.0)">
-                <option value="PekingU/rtdetr_r18vd">RT-DETR R18 (lightest)</option>
-                <option value="PekingU/rtdetr_r50vd">RT-DETR R50</option>
-                <option value="PekingU/rtdetr_r101vd">RT-DETR R101 (largest)</option>
+              <optgroup label="── RT-DETR (Apache 2.0)">
+                <option value="PekingU/rtdetr_r18vd">RT-DETR R18 (~20M, lightest)</option>
+                <option value="PekingU/rtdetr_r50vd">RT-DETR R50 (~42M)</option>
+                <option value="PekingU/rtdetr_r101vd">RT-DETR R101 (~76M, largest)</option>
               </optgroup>
-              <optgroup label="DETR (Apache 2.0)">
-                <option value="facebook/detr-resnet-50">DETR ResNet-50</option>
-                <option value="facebook/detr-resnet-101">DETR ResNet-101</option>
+              <optgroup label="── DETR (Apache 2.0)">
+                <option value="facebook/detr-resnet-50">DETR ResNet-50 (~41M)</option>
+                <option value="facebook/detr-resnet-101">DETR ResNet-101 (~60M)</option>
               </optgroup>
-              <optgroup label="Conditional DETR (Apache 2.0)">
-                <option value="microsoft/conditional-detr-resnet-50">Conditional DETR R50</option>
+              <optgroup label="── Advanced DETR variants (Apache 2.0)">
+                <option value="microsoft/conditional-detr-resnet-50">Conditional DETR R50 (10× faster convergence)</option>
+                <option value="SenseTime/deformable-detr">Deformable DETR (~40M, sparse attention)</option>
+                <option value="IDEA-Research/dab-detr-r50">DAB-DETR R50 (dynamic anchor boxes)</option>
+              </optgroup>
+              <optgroup label="── OWL-ViT — Zero-shot open-vocabulary (Apache 2.0)">
+                <option value="google/owlvit-base-patch32">OWL-ViT Base (~92M)</option>
+                <option value="google/owlvit-large-patch14">OWL-ViT Large (~307M)</option>
               </optgroup>
             </select>
           </div>
@@ -368,6 +374,7 @@
               <option value="slurm">SLURM (multi-node cluster)</option>
             </select>
           </div>
+          <div class="strategy-warning" id="strategy-gpu-warning"></div>
         </div>
 
         <!-- Multi-Dimensional Topology (shown only when strategy = hybrid) -->
@@ -472,10 +479,33 @@
         </div>
       </div>
 
+      <!-- W&B / Logging Section -->
+      <div class="form-section">
+        <h3><span class="icon" style="background:var(--orange-dim);color:var(--orange);">📊</span> Logging (W&amp;B) <span class="section-tooltip" data-tip="Weights &amp; Biases experiment tracking. Enable to log loss curves, metrics, and hyperparameters to wandb.ai.">?</span></h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>W&amp;B Logging <span class="tooltip" data-tip="Log metrics to Weights &amp; Biases during training">?</span></label>
+            <label><input type="checkbox" id="f-wandb-enabled" onchange="onWandbChange()"> Enable W&amp;B Logging</label>
+          </div>
+          <div class="form-group" id="fg-wandb-project" style="display:none;">
+            <label>W&amp;B Project <span class="required-star" aria-hidden="true">*</span></label>
+            <input type="text" id="f-wandb-project" placeholder="e.g. my-llm-training">
+          </div>
+          <div class="form-group" id="fg-wandb-entity" style="display:none;">
+            <label>W&amp;B Entity <span class="tooltip" data-tip="Your W&amp;B username or team name">?</span></label>
+            <input type="text" id="f-wandb-entity" placeholder="e.g. your-username">
+          </div>
+          <div class="form-group" id="fg-wandb-run" style="display:none;">
+            <label>Run Name <span class="tooltip" data-tip="Optional human-readable name for this run">?</span></label>
+            <input type="text" id="f-wandb-run" placeholder="e.g. llama-lora-run-1 (optional)">
+          </div>
+        </div>
+      </div>
+
       <!-- Action Bar -->
       <div class="form-action-bar">
         <button class="btn btn-secondary" onclick="validateConfig()">Validate</button>
-        <button class="btn btn-primary" id="btn-review-yaml" onclick="showEnvPage()">Next →</button>
+        <button class="btn btn-primary" id="btn-review-yaml" onclick="showEnvPage()" title="Ctrl+Enter">Next →</button>
       </div>
     </div>
   </div>
@@ -516,7 +546,10 @@
     <div class="training-live-panel">
       <div class="training-live-header">
         <span>Live Console Output</span>
-        <span id="training-log-meta">Waiting for logs...</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span id="training-log-meta">Waiting for logs...</span>
+          <button class="log-expand-btn" onclick="toggleLogExpand(this)" title="Expand/collapse log">⤢</button>
+        </span>
       </div>
       <div class="training-live-log" id="training-live-log"></div>
       <div class="training-live-hint" id="training-live-hint">Full output is also available in the Logs tab.</div>

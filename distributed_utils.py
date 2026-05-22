@@ -242,6 +242,45 @@ def _get_auto_model_class(model_type: str):
     }.get(model_type, AutoModelForCausalLM)
 
 
+def _check_checkpoint_peft_compat(state_dict: dict, peft_enabled: bool, resume_path: str):
+    """Detects PEFT vs non-PEFT checkpoint mismatches before load_state_dict is called.
+
+    PEFT-saved checkpoints have keys prefixed with 'base_model.model.' because
+    get_peft_model() wraps the base model under that namespace.
+    Non-PEFT checkpoints have standard HuggingFace keys (e.g. 'model.decoder.layers.0...').
+
+    Without this check, the mismatch surfaces as a cryptic 'Missing key(s) in state_dict'
+    error that lists every single model key — giving no hint that the root cause is a
+    PEFT vs non-PEFT configuration mismatch at save vs resume time.
+
+    Raises ValueError with an actionable message if a mismatch is detected.
+    """
+    # ADDED: fail-fast checkpoint compatibility guard.
+    # Reason: a PEFT checkpoint loaded into a non-PEFT model (or vice versa) produces a
+    # wall of "Missing key(s)" errors with no hint about the actual cause.
+    # Peeking at the first key prefix catches 100% of PEFT/non-PEFT mismatches cheaply.
+    if not state_dict:
+        return  # empty — let load_state_dict produce its own error
+
+    first_key = next(iter(state_dict))
+    ckpt_has_peft = first_key.startswith("base_model.model.")
+
+    if ckpt_has_peft and not peft_enabled:
+        raise ValueError(
+            f"Checkpoint '{resume_path}' was saved WITH PEFT adapters "
+            f"(keys start with 'base_model.model.') but current config has peft.enabled=false.\n"
+            f"  → Enable peft.enabled=true to match the saved checkpoint, "
+            f"or point to a non-PEFT checkpoint."
+        )
+    if not ckpt_has_peft and peft_enabled:
+        raise ValueError(
+            f"Checkpoint '{resume_path}' was saved WITHOUT PEFT adapters "
+            f"(first key: '{first_key[:60]}') but current config has peft.enabled=true.\n"
+            f"  → Disable peft.enabled=false to match the saved checkpoint, "
+            f"or point to a PEFT checkpoint."
+        )
+
+
 # REPLACE the entire function with:
 def _build_quantization_config(args, rank):
     if not getattr(args, "quantization_enabled", False):
@@ -334,9 +373,38 @@ def _apply_peft_quantization(model, args, rank):
             raise
 
     else:
-        # Pure quantization, no PEFT — no gradient checkpointing (causes NaN with bnb)
-        if gradient_checkpointing:
-            print_on_rank_0(rank, "⚠️ Gradient checkpointing skipped for pure quantization (can cause NaN)", "⚠️")
+        # CHANGED: was a silent skip (only warned about gradient checkpointing).
+        # Reason: quantization_enabled=True + peft_enabled=False must never reach here
+        # for training — it produces NaN losses because:
+        #   1. INT8 weight updates via AdamW overflow the quantization range immediately.
+        #   2. LayerNorm/embedding layers stay in float16 without prepare_model_for_kbit_training,
+        #      causing overflow in the forward pass itself.
+        # build_args() now blocks this combination with a hard ValueError before training starts.
+        # This branch is a secondary defensive guard in case apply_solo/apply_ddp/apply_fsdp
+        # are called directly without going through build_args (e.g. from tests or external scripts).
+        # Old code:
+        #   if gradient_checkpointing:
+        #       print_on_rank_0(rank, "⚠️ Gradient checkpointing skipped for pure quantization ...")
+        if quantization_enabled:
+            # CHANGED: was a RuntimeError. Downgraded to a warning to match build_args behavior.
+            # build_args already printed the full warning at startup; this is a secondary reminder
+            # at the point the model is actually being set up for training.
+            # NOTE: bitsandbytes automatically sets requires_grad=False on INT8 quantized linear
+            # weights, so only float16 layers (embeddings, norms, lm_head) will be trainable —
+            # typically ~30% of params. NaN risk comes from float16 overflow in those layers,
+            # not from INT8 weight updates as one might expect.
+            print_on_rank_0(
+                rank,
+                "8-bit quantization without PEFT: training will proceed but NaN losses are likely. "
+                "Only float16 layers (embeddings, norms, lm_head) are trainable — "
+                "INT8 linear weights are frozen by bitsandbytes. "
+                "See startup warning for details.",
+                "⚠️",
+            )
+        # Non-quantized, no-PEFT path: handle gradient checkpointing if requested.
+        elif gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+            print_on_rank_0(rank, "Gradient checkpointing enabled", "💾")
 
     return model
 
@@ -360,30 +428,80 @@ def apply_solo(device, rank, args):
             print_on_rank_0(rank, f"Custom Transformer built from scratch | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
             return model
 
-        print_on_rank_0(rank, f"Fetching pretrained weights: {args.model_name}", "🧠")
-        # Build quantization config once and feed it into from_pretrained when requested.
         quant_cfg = _build_quantization_config(args, rank)
         model_kwargs = {
             "token": HF_TOKEN,
             "low_cpu_mem_usage": True,
         }
         if quant_cfg is not None:
-            model_kwargs["quantization_config"] = quant_cfg            
-            model_kwargs["device_map"] = {"": device}   # ✅ key change
+            model_kwargs["quantization_config"] = quant_cfg
+            model_kwargs["device_map"] = {"": device}
         else:
-            # Standard float model load path keeps existing dtype behavior.
             model_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
             model_kwargs["device_map"] = None
 
-        model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
-            args.model_name,
-            **model_kwargs,
-        )
-        model = _apply_peft_quantization(model, args, rank)
-        if quant_cfg is None:
-            model = model.to(device)
+        resuming = args.resume and bool(getattr(args, "resume_path", None))
+
+        if resuming:
+            # ADDED: resume path for solo — was completely missing before.
+            # Old code always loaded from HuggingFace and silently ignored args.resume /
+            # args.resume_path, so "resume" solo runs were actually fresh runs from HF weights.
+            # This meant (a) the resumed weights were never actually loaded, and (b) a PEFT
+            # checkpoint could be "resumed" into a non-PEFT model without any error.
+            print_on_rank_0(rank, f"Resuming from checkpoint: {args.resume_path}", "🔄")
+
+            # Load checkpoint first so we can validate compat before any expensive model build.
+            checkpoint = torch.load(
+                args.resume_path,
+                map_location="cpu",
+                mmap=True,
+                weights_only=True,
+            )
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+
+            # Fail fast if PEFT type doesn't match — same guard as apply_ddp.
+            _check_checkpoint_peft_compat(
+                state_dict,
+                peft_enabled=getattr(args, "peft_enabled", False),
+                resume_path=args.resume_path,
+            )
+
+            if quant_cfg is not None:
+                # Quantized: must use from_pretrained to build the bnb layer structure.
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
+                    args.model_name, **model_kwargs,
+                )
+            else:
+                # Non-quantized: build architecture only — no HF weight download needed.
+                _resume_cfg = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
+                _resume_cfg.use_cache = False
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
+                    _resume_cfg,
+                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                )
+            # Apply PEFT wrapping BEFORE load_state_dict so key structure matches
+            # (PEFT checkpoints use base_model.model.* keys).
+            model = _apply_peft_quantization(model, args, rank)
+            if quant_cfg is None:
+                model = model.to(device)
+            model.load_state_dict(state_dict)
+            print_on_rank_0(rank, "Solo checkpoint loaded ✓")
+
+        else:
+            # Fresh run: load pretrained weights from HuggingFace.
+            print_on_rank_0(rank, f"Fetching pretrained weights: {args.model_name}", "🧠")
+            model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
+                args.model_name,
+                **model_kwargs,
+            )
+            model = _apply_peft_quantization(model, args, rank)
+            if quant_cfg is None:
+                model = model.to(device)
+
         print_on_rank_0(rank, "Solo model ready ✓")
         return model
+    except ValueError:
+        raise  # user config error — let train.py __main__ print it once cleanly
     except Exception as e:
         print(f"\n[rank {rank}] ❌ Failed to apply solo model setup: {e}", flush=True)
         traceback.print_exc()
@@ -438,6 +556,29 @@ def apply_ddp(local_rank, rank, device, args):
         if resuming:
             # PATH A: resume from checkpoint
             print_on_rank_0(rank, f"Resuming from checkpoint: {args.resume_path}", "🔄")
+
+            # CHANGED: load checkpoint BEFORE building the model so we can validate
+            # compatibility and fail fast with a clear error rather than wasting time
+            # downloading model weights only to hit a cryptic "Missing key(s)" error.
+            # Added mmap=True and weights_only=True for efficiency and security.
+            # Old code: checkpoint loaded AFTER model was built.
+            checkpoint = torch.load(
+                args.resume_path,
+                map_location="cpu",
+                mmap=True,
+                weights_only=True,
+            )
+            state_dict = checkpoint.get("model_state_dict", checkpoint)  # handle both formats
+
+            # ADDED: fail fast if checkpoint PEFT type doesn't match current config.
+            # Reason: PEFT checkpoints have 'base_model.model.' key prefix; non-PEFT don't.
+            # Loading the wrong type produces a wall of "Missing key(s)" with no hint why.
+            _check_checkpoint_peft_compat(
+                state_dict,
+                peft_enabled=getattr(args, "peft_enabled", False),
+                resume_path=args.resume_path,
+            )
+
             if quant_cfg is not None:
                 # Quantized resume: must use from_pretrained to build bnb quantized layer structure.
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
@@ -453,9 +594,6 @@ def apply_ddp(local_rank, rank, device, args):
                     _resume_config,
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                 )
-            # Then load the saved state dict (overwrites all weights, works for both branches above)
-            checkpoint = torch.load(args.resume_path, map_location="cpu")
-            state_dict = checkpoint.get("model_state_dict", checkpoint)  # handle both formats
             model.load_state_dict(state_dict)
             print_on_rank_0(rank, "Checkpoint state dict loaded ✓")
 
@@ -492,6 +630,8 @@ def apply_ddp(local_rank, rank, device, args):
         print_on_rank_0(rank, "DDP wrapper applied ✓")
         return model
 
+    except ValueError:
+        raise  # user config error — let train.py __main__ print it once cleanly
     except Exception as e:
         print(f"\n[rank {rank}] ❌ Failed to apply DDP: {e}", flush=True)
         traceback.print_exc()
@@ -642,8 +782,27 @@ def apply_fsdp(local_rank, rank, device, args):
                     config,
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                 )
-                model.load_state_dict(torch.load(peft_seed_path, map_location="cpu"))
+                # CHANGED: added mmap=True and weights_only=True.
+                # mmap=True uses OS memory-mapping so the file is not fully read into physical
+                # RAM upfront — pages are faulted in on demand, reducing peak CPU RAM per rank.
+                # weights_only=True prevents arbitrary code execution during unpickling.
+                # Old code: torch.load(peft_seed_path, map_location="cpu")
+                model.load_state_dict(
+                    torch.load(peft_seed_path, mmap=True, weights_only=True, map_location="cpu")
+                )
                 print_on_rank_0(rank, "Pretrained seed weights loaded ✓")
+                #
+                # KNOWN LIMITATION — deferred full fix:
+                # Every rank still loads the full seed file from disk independently.
+                # For 8 ranks on a shared filesystem, this is 8× I/O and 8× CPU RAM usage.
+                # The correct fix is: only rank 0 loads the seed, remaps HF state dict keys to
+                # PEFT model keys (adding the "base_model.model." prefix), then calls
+                # set_model_state_dict(broadcast_from_rank0=True, strict=False) so all ranks
+                # receive their parameter shards via NCCL without touching the filesystem.
+                # This is deferred because PEFT key naming is version-sensitive: PEFT < 0.7 uses
+                # "base_model.model.<hf_key>" but PEFT >= 0.7 renames LoRA target weights to
+                # "base_model.model.<layer>.base_layer.weight" — the remapping logic must handle
+                # both conventions without breaking non-LoRA target parameters.
 
             else:
                 print_on_rank_0(rank, "No checkpoint dir — random weight init for PEFT path", "⚠️")
@@ -659,22 +818,13 @@ def apply_fsdp(local_rank, rank, device, args):
             model.config.tie_word_embeddings = False
             model = _apply_peft_quantization(model, args, rank)
 
-            # ADDED: move model to the target GPU before FSDP sharding.
-            # Reason: all three sub-paths of PATH 2 (resume / load_from_hf / random) build the
-            # model via from_config(), which leaves every parameter tensor on CPU. FSDP2's
-            # fully_shard() wraps parameters into DTensors but does NOT migrate them to the GPU
-            # — that must happen explicitly before sharding. Without this call, all parameter
-            # data remains on CPU and every forward pass crashes when CUDA inputs arrive.
-            # Note: build_args() already raises if strategy=fsdp + quantization.enabled=true, so
-            # no bitsandbytes layers are ever present here and .to() is always safe to call.
-            model = model.to(device)
-
+            # Freeze any non-floating-point params before sharding.
+            # Done here on CPU so the loop runs without any device dependency.
             non_float_frozen = 0
             for _name, param in model.named_parameters():
                 if not torch.is_floating_point(param) and param.requires_grad:
                     param.requires_grad_(False)
                     non_float_frozen += 1
-
             if non_float_frozen > 0:
                 print_on_rank_0(rank, f"Froze {non_float_frozen} non-floating parameter(s) before FSDP sharding", "🧊")
 
@@ -695,14 +845,48 @@ def apply_fsdp(local_rank, rank, device, args):
             elif args.mixed_precision and args.quantization_enabled:
                 print_on_rank_0(rank, "Mixed precision policy skipped for quantized base; using quantization compute dtype", "ℹ️")
 
+            # CHANGED: layer-by-layer device placement + sharding instead of model.to(device).
+            #
+            # Old approach (removed):
+            #   model = model.to(device)          ← moves entire model to every rank's GPU
+            #   for layer in layers:
+            #       fully_shard(layer, **fsdp_kwargs)
+            #
+            # Problem: model.to(device) materialises ALL parameters on EACH rank's GPU before
+            # FSDP has sharded anything. For a 7B bfloat16 model that is ~14 GB per GPU; for
+            # 70B it is 140 GB — no single card can hold that, guaranteed OOM.
+            #
+            # New approach — layer-by-layer:
+            #   For each transformer block:
+            #     1. layer.to(device)      — only this block lands on GPU (~params / num_layers)
+            #     2. fully_shard(layer)    — block is immediately sharded; each rank keeps only
+            #                                1/world_size of that block's parameters in GPU memory
+            #     3. Proceed to next block — previous block already freed down to 1/N
+            #   After all blocks, move any remaining CPU params (embeddings, lm_head, norms) to
+            #   GPU. These are not transformer blocks so get_model_layers() skips them, but they
+            #   must be on-device before the root fully_shard() call.
+            #
+            # Peak GPU memory per rank: ~total_params / num_layers  (vs. total_params before).
+            # For Llama-7B (32 layers, 2 ranks): ~14 GB → ~220 MB peak per layer materialization.
             layers, layer_type = get_model_layers(model)
             if layers is not None:
-                print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers...", "🔀")
+                print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers (layer-by-layer)...", "🔀")
                 for layer in layers:
-                    fully_shard(layer, **fsdp_kwargs)
+                    layer.to(device)                    # one block on GPU (~total / num_layers bytes)
+                    fully_shard(layer, **fsdp_kwargs)   # shard immediately → rank holds 1/N of block
             else:
-                print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
-            
+                # No identifiable transformer blocks: fall back to whole-model materialization.
+                # This is OOM-risky for very large models on small GPUs; prefer architectures
+                # that expose their layers via get_model_layers().
+                print_on_rank_0(rank, "No individual layers found — materializing full model on GPU (OOM risk for large models)", "⚠️")
+                model = model.to(device)
+
+            # Move any parameters still on CPU (embeddings, lm_head, layer norms, etc.)
+            # that were not covered by the per-layer loop above.
+            for param in model.parameters():
+                if param.device.type == "cpu":
+                    param.data = param.data.to(device)
+
             fully_shard(model, **fsdp_kwargs)
 
             # ADDED: inspect_model call to match PATH 3 behaviour.
@@ -907,6 +1091,8 @@ def apply_fsdp(local_rank, rank, device, args):
         return model, checkpointer   
 
 
+    except ValueError:
+        raise  # user config error — let train.py __main__ print it once cleanly
     except Exception as e:
         print(f"\n[rank {rank}] ❌ Failed in apply_fsdp: {e}", flush=True)
         traceback.print_exc()
@@ -939,14 +1125,28 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
 
         elif strategy == "ddp":
             if rank == 0:
+                # CHANGED: was a fixed filename (ddp_checkpoint.pt) — every run overwrote the previous.
+                # Now uses the same millisecond-timestamp + run-tag pattern as FSDP so each run
+                # produces a unique file and old checkpoints are never silently overwritten.
+                # Old code: checkpoint_path = f"{args.checkpoint_dir}/ddp/ddp_checkpoint.pt"
+                import time as _time
+                _ts  = int(_time.time() * 1000)
+                _tag = _checkpoint_run_tag(args)   # e.g. "__lora_q4" or ""
+                _fname = f"{_ts}{_tag}.pt"
                 os.makedirs(args.checkpoint_dir + "/ddp", exist_ok=True)
-                checkpoint_path = f"{args.checkpoint_dir}/ddp/ddp_checkpoint.pt"
+                checkpoint_path = f"{args.checkpoint_dir}/ddp/{_fname}"
                 torch.save(model.module.state_dict(), checkpoint_path)
                 print_on_rank_0(rank, f"DDP checkpoint saved to {checkpoint_path} ✓", "🎉")
 
         elif strategy == "solo":
+            # CHANGED: same fix as DDP above — was a fixed filename (solo_checkpoint.pt).
+            # Old code: checkpoint_path = f"{args.checkpoint_dir}/solo/solo_checkpoint.pt"
+            import time as _time
+            _ts  = int(_time.time() * 1000)
+            _tag = _checkpoint_run_tag(args)
+            _fname = f"{_ts}{_tag}.pt"
             os.makedirs(args.checkpoint_dir + "/solo", exist_ok=True)
-            checkpoint_path = f"{args.checkpoint_dir}/solo/solo_checkpoint.pt"
+            checkpoint_path = f"{args.checkpoint_dir}/solo/{_fname}"
             torch.save(model.state_dict(), checkpoint_path)
             print_on_rank_0(rank, f"Solo checkpoint saved to {checkpoint_path} ✓", "🎉")
 

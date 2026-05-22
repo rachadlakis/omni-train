@@ -100,9 +100,16 @@ else:
 
 warnings.filterwarnings("ignore", message=".*_get_pg_default_device.*")
 warnings.filterwarnings("ignore", message="Materializing param")
-warnings.filterwarnings("ignore", message="Materializing param", category=UserWarning)   
-
+warnings.filterwarnings("ignore", message="Materializing param", category=UserWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
+# ADDED: suppress bitsandbytes MatMul8bitLt dtype cast notice.
+# Reason: this warning fires on every single forward pass when using 8-bit quantization
+# without PEFT, printing inside the \r progress bar loop and breaking the overwrite display.
+# The cast from float32 → float16 is expected behaviour for 8-bit matmul — it is already
+# described in our startup warning to the user, so repeating it per-step adds no value.
+warnings.filterwarnings("ignore", message=".*MatMul8bitLt.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*inputs will be cast.*", category=UserWarning)
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
@@ -334,9 +341,17 @@ def main(args):
                         bar_len = 30
                         filled = int(bar_len * pct / 100)
                         bar = "█" * filled + "░" * (bar_len - filled)
-                        print(f"\r   Epoch {epoch+1}/{args.epochs} [{bar}] {pct:5.1f}% | "
-                              f"step {step+1}/{num_batches} | batch_loss: {loss.item():.4f} | "
-                              f"avg: {avg_loss:.4f}", end="", flush=True)
+                        # CHANGED: "batch_loss:" → "loss:" (saves 6 chars, prevents terminal truncation).
+                        # ADDED: \033[K (erase to end of line) so leftover chars from a previously
+                        # longer line (e.g. step 9 → step 10 adds one digit) are cleared cleanly.
+                        # Old code: f"... | batch_loss: {loss.item():.4f} | avg: {avg_loss:.4f}"
+                        step_w = len(str(num_batches))  # fixed-width step counter, e.g. " 1/14"
+                        line = (
+                            f"   Epoch {epoch+1}/{args.epochs} [{bar}] {pct:5.1f}% | "
+                            f"step {step+1:>{step_w}}/{num_batches} | "
+                            f"loss: {loss.item():.4f} | avg: {avg_loss:.4f}"
+                        )
+                        print(f"\r{line}\033[K", end="", flush=True)
                         
                 except Exception as e:
                     print_on_rank_0(rank, f"❌ Failed in training step {step+1}: {e}", "❌")
@@ -384,6 +399,16 @@ def main(args):
         if args.wandb_log_with_train and rank == 0: 
             run.finish() #type: ignore
 
+    except ValueError as e:
+        # ADDED: separate handler for user config errors (checkpoint compat, bad args, etc.)
+        # These are not unexpected crashes — print once cleanly without a traceback, then
+        # re-raise so __main__ can convert to sys.exit(1).
+        # Old code: all exceptions fell into one handler that always printed a full traceback.
+        _rank = dist.get_rank() if dist.is_initialized() else 0
+        if _rank == 0:
+            print(f"\n❌  {e}\n", flush=True)
+        cleanup()
+        raise
     except Exception as e:
         _rank = dist.get_rank() if dist.is_initialized() else 0
         print(f"\n[rank {_rank}] ❌ Training failed: {e}", flush=True)
@@ -409,4 +434,11 @@ if __name__ == "__main__":
     except ValueError as e:
         rank = 0
         print_on_rank_0(rank, f"Could not parse RANK env variable, defaulting to 0 for config print. Error: {e}", "⚠️")
-    main(args)
+
+    # ADDED: catch ValueError from main() (checkpoint compat errors, bad resume configs, etc.)
+    # main() already prints the message once cleanly and re-raises — we just convert to sys.exit(1).
+    # Old code: ValueError from main() was unhandled here, printing a raw Python traceback.
+    try:
+        main(args)
+    except ValueError:
+        sys.exit(1)

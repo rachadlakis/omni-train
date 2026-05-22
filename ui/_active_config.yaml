@@ -1,18 +1,22 @@
-checkpoint_dir: checkpoints/bert_lora_triplet
+MLFlow:
+  mlflow_experiment_name: dist-train-experiment
+  mlflow_log_with_train: false
+  mlflow_tracking_uri: http://localhost:5000
+checkpoint_dir: checkpoints
 dataset:
-  name: sentence-transformers/all-nli
+  name: wikitext
   split: train[:1%]
-  subset: triplet
+  subset: wikitext-2-raw-v1
 dist_parameters:
   cast_forward_inputs: false
   dcp_api: true
   distribute_api: dcp_api
   dtensor_api: false
-  mixed_precision: false
+  mixed_precision: true
   output_dtype: bfloat16
   param_dtype: bfloat16
   reduce_dtype: float32
-model_name: bert-base-uncased
+model_name: facebook/opt-350m
 model_type: llm
 multi_dimensional_parallelism:
   device_mesh_shape:
@@ -32,7 +36,7 @@ peft:
   alpha: 32
   bias: none
   dropout: 0.05
-  enabled: true
+  enabled: false
   r: 16
   target_modules: all-linear
   type: lora
@@ -51,17 +55,17 @@ save_load:
   load_model_from_hf: true
   resume: false
   resume_path: ''
-strategy: solo
+strategy: fsdp
 training:
   batch_size: 32
-  epochs: 5
+  epochs: 4
   grad_clip: 1
   gradient_checkpointing: true
-  learning_rate: 0.0001
-  max_length: 256
+  learning_rate: 1.0e-05
+  max_length: 128
   warmup_steps: 100
   weight_decay: 0.01
 wandb:
   wandb_entity: dist-train-project
-  wandb_log_with_train: false
+  wandb_log_with_train: true
   wandb_project: dist-train-project
