@@ -8,7 +8,6 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
     get_optimizer_state_dict,
-    set_model_state_dict,
     set_optimizer_state_dict,
     _init_optim_state,
 )
@@ -65,57 +64,43 @@ class Checkpointer:
             f"{self.folder}/fsdp/{'dcp_api' if self.dcp_api else 'dtensor_api'}"
             f"/{self.last_training_time}/{MODEL_CHECKPOINT}"
         )
-        if self.dcp_api:
-            # CHANGED: only rank 0 loads the file from disk; all other ranks pass an empty dict.
-            #
-            # Reason: set_model_state_dict with broadcast_from_rank0=True ignores the state
-            # dict from every rank except rank 0 — it is discarded before any data is used.
-            # The old code loaded the full checkpoint on ALL ranks simultaneously:
-            #
-            #   full_state_dict = torch.load(last_model_checkpoint, mmap=True, ...)  ← all ranks
-            #   set_model_state_dict(..., broadcast_from_rank0=True)
-            #
-            # For a 70B model (140 GB checkpoint) with 8 ranks on 4 nodes, that was
-            # 8 × 140 GB = 1.1 TB of pointless CPU RAM and network I/O per checkpoint load.
-            # Now rank 0 is the single reader; all ranks receive their shard via NCCL broadcast.
-            #
-            # DTensor API does NOT use broadcast_from_rank0 — each rank calls distribute_tensor
-            # on the full tensor locally, so all ranks must still load there (see below).
-            import torch.distributed as _dist
-            _rank = _dist.get_rank() if _dist.is_initialized() else 0
-            if _rank == 0:
-                full_state_dict = torch.load(
-                    last_model_checkpoint,
-                    mmap=True,
-                    weights_only=True,
-                    map_location="cpu",
-                )
-            else:
-                full_state_dict = {}   # broadcast_from_rank0=True ignores this
-            set_model_state_dict(
-                model=model, # type: ignore
-                model_state_dict=full_state_dict,
-                options=StateDictOptions(
-                    full_state_dict=True,
-                    broadcast_from_rank0=True,
-                ),
-            )
-            return
 
-        # DTensor API path: each rank calls distribute_tensor() locally which requires the
-        # full source tensor to be present — there is no broadcast protocol here, so all
-        # ranks must load the checkpoint. mmap=True reduces physical RAM pressure via OS
-        # page mapping but does not eliminate the per-rank file read.
+        # Both DCP and DTensor paths use the same loading strategy:
+        #   1. All ranks load the full checkpoint from disk independently (mmap keeps RAM low).
+        #   2. Each rank calls distribute_tensor() to compute its own local shard — no NCCL.
+        #   3. model.load_state_dict(assign=True) replaces meta-device DTensor references
+        #      with real CUDA tensors without trying to copy_ into meta storage.
+        #
+        # WHY we moved the DCP path away from set_model_state_dict + broadcast_from_rank0:
+        #
+        #   set_model_state_dict with broadcast_from_rank0=True broadcasts weights from
+        #   rank 0 to all other ranks via NCCL, then tries to write the received shard into
+        #   the local parameter with copy_(). When the FSDP2 model is on the meta device
+        #   (no real CUDA storage allocated yet), copy_() into a meta tensor is impossible
+        #   and the NCCL operation deadlocks silently — the training process hangs forever
+        #   after "Seed weights saved ✓ | releasing barrier" with no error message.
+        #
+        #   The distribute_tensor approach sidesteps NCCL entirely: each rank already holds
+        #   the full CPU tensor (from disk) and just slices out its shard locally, so there
+        #   is no inter-rank communication during loading. assign=True then swaps the meta
+        #   DTensor reference for a real CUDA DTensor, which is exactly what FSDP2 needs.
+        #
+        # Both DCP and DTensor API checkpoints are saved as plain torch.save() files
+        # containing the full model state dict, so the loading logic is identical.
+        # The only difference between the two APIs is in how they GATHER the full state
+        # dict during saving (get_model_state_dict vs full_tensor()), not in the file format.
         full_state_dict = torch.load(
             last_model_checkpoint,
             mmap=True,
             weights_only=True,
-            map_location="cpu"
+            map_location="cpu",
         )
         meta_sharded_state_dict = model.state_dict() # type: ignore
         sharded_state_dict = {}
         for param_name, full_tensor in full_state_dict.items():
             sharded_meta_param = meta_sharded_state_dict.get(param_name)
+            if sharded_meta_param is None:
+                continue
             sharded_tensor = distribute_tensor(
                 full_tensor,
                 sharded_meta_param.device_mesh,
@@ -123,7 +108,7 @@ class Checkpointer:
             )
             sharded_state_dict[param_name] = nn.Parameter(sharded_tensor)
 
-        ## Choose `assign=True` since we cannot call `copy_` on meta tensor
+        # assign=True: replace meta-device DTensor references rather than copy_() into them.
         model.load_state_dict(sharded_state_dict, strict=False, assign=True) # type: ignore
 
     def load_optim(self, model: FSDPModule, opt: torch.optim.Optimizer):
