@@ -23,13 +23,12 @@ regex==2026.4.4
 fastapi==0.136.0
 pydantic==2.13.4
 uvicorn==0.46.0
-starlette==0.48.0
 
 # =========================
 # Hugging Face ecosystem
 # =========================
 transformers==5.8.1
-tokenizers==0.22.1
+tokenizers==0.22.2
 datasets==4.8.5
 accelerate==1.11.0
 huggingface_hub==1.13.0
@@ -38,9 +37,10 @@ safetensors==0.6.2
 # =========================
 # PEFT / Quantization
 # =========================
-peft==0.14.0
-optimum==1.27.0
-optimum-quanto==0.2.7
+peft==0.18.0
+# optimum==1.27.0
+# optimum-quanto==0.2.7
+bitsandbytes==0.47.0
 
 # =========================
 # Logging

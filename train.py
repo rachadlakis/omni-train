@@ -193,8 +193,15 @@ def main(args):
             raise RuntimeError("No trainable parameters were found. Check PEFT/quantization configuration.")
 
         ## Create the optimizer (AdamW) for trainable model parameters.
+        # CHANGED: pass trainable_params instead of model.parameters() to AdamW.
+        # Reason: for PEFT/QLoRA runs, most base weights are frozen (requires_grad=False).
+        # Passing model.parameters() caused AdamW to allocate exp_avg and exp_avg_sq optimizer
+        # states for every frozen parameter — potentially GBs of wasted GPU memory. trainable_params
+        # was already computed above for the empty-check; reusing it here limits optimizer state
+        # to only the parameters that will actually receive gradients during training.
+        # Old code: optimizer = torch.optim.AdamW(model.parameters(), ...)
         optimizer = torch.optim.AdamW(
-            model.parameters(), 
+            trainable_params,
             lr=args.learning_rate,
             weight_decay=args.weight_decay,
         )

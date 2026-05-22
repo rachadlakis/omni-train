@@ -92,7 +92,7 @@ prefetch:
   backward: 2     ## number of backward passes to prefetch
 
 peft: ## Parameter Efficient Fine Tuning
-  enabled: true     ## whether to apply PEFT 
+  enabled: false     ## whether to apply PEFT 
   type: lora        ## LoRA or QLoRA
   r: 8              ## rank for LoRA, often set to a small value like 4, 8, 16, 64 etc.
   alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4
@@ -101,11 +101,11 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA, options: "none", "all", "lora_only"
 
 quantization:
-  enabled: true           ## whether to apply quantization (uses quanto backend)
+  enabled: true           ## whether to apply quantization (uses bitsandbytes backend)
   bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8)
-  quant_type: nf4         ## unused with quanto (was bitsandbytes-specific)
-  compute_dtype: bfloat16 ## unused with quanto (was bitsandbytes-specific)
-  double_quant: true      ## unused with quanto (was bitsandbytes-specific)
+  quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4)
+  compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32)
+  double_quant: true      ## whether to use double quantization for 4-bit quantization (only applicable if bits=4)
   
 wandb:
   wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases

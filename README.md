@@ -4,9 +4,11 @@ A modular framework for training LLMs, vision models, and embedding models acros
 
 Supports:
 
-* **FSDP** (Fully Sharded Data Parallel)
+* **Solo** (single-GPU, no process group)
 * **DDP** (Distributed Data Parallel)
+* **FSDP** (Fully Sharded Data Parallel)
 * **LoRA / QLoRA**
+* **4-bit / 8-bit Quantization** (bitsandbytes)
 * **Mixed Precision**
 * **Distributed Checkpointing**
 * **SLURM multi-node training**

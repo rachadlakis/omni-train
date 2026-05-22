@@ -16,7 +16,7 @@ from transformers import (
     AutoModelForImageTextToText, 
     AutoModel, 
     AutoConfig,
-    QuantoConfig
+    BitsAndBytesConfig,
 )
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard, MixedPrecisionPolicy
 from checkpoint import Checkpointer
@@ -62,19 +62,10 @@ else:
     BACKEND = "gloo"
 
 def print_on_rank_0(rank, msg, emoji=""):
-    # ------------------------------------------------------------------ #
-    # Conditional Print
-    # Print the provided message to standard output only if we are on the main rank 0.
-    # ------------------------------------------------------------------ #
     if rank == 0:
         print(f"\n{emoji}  {msg}" if emoji else f"   {msg}", flush=True)
-        time.sleep(0.5)
 
 def print_banner_on_rank_0(rank, title):
-    # ------------------------------------------------------------------ #
-    # Conditional Banner Printadd
-    # Encapsulate the title in a banner format and print it uniquely from rank 0.
-    # ------------------------------------------------------------------ #
     if rank == 0:
         print(f"\n{'='*60}",flush=True)
         print(f"  {title}", flush=True)
@@ -90,7 +81,7 @@ def print_on_all_ranks(rank, msg, emoji="", local_rank=None, device=None):
         prefix_parts.append(f"device={device}")
     prefix = " | ".join(prefix_parts)
     print(f"\n{emoji}  [{prefix}] {msg}" if emoji else f"\n[{prefix}] {msg}", flush=True)
-
+    
 def gather_rank_debug(rank, world_size, title, message):
     """Utility to gather debug messages from all ranks and print them together on rank 0."""
     if not dist.is_available() or not dist.is_initialized():
@@ -126,7 +117,7 @@ def setup_dist_process_group():
 
             torch_version = tuple(int(x) for x in torch.__version__.split(".")[:2])
             if torch_version >= (2, 3):
-                dist.init_process_group(backend=BACKEND, device_id=device)
+                dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"))
             else:
                 dist.init_process_group(backend=BACKEND)
         else:
@@ -200,32 +191,20 @@ def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
         raise
     
 def get_model_layers(model):
+
     """Returns (layers, layer_type_name) or (None, None) if not found.""" 
-    # Unwrap PeftModel if present
+    # Unwrap PeftModel safely if present
     if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
         model = model.base_model.model
-    if hasattr(model, 'model') and hasattr(model.model, 'decoder'):
-        return model.model.decoder.layers, 'decoder'    
-    if hasattr(model, 'model') and hasattr(model.model, 'encoder'):
-        return model.model.encoder.layers, 'encoder'
-    if hasattr(model, 'model') and hasattr(model.model, 'layers'):
-        return model.model.layers, 'decoder'  # generic decoder-only
-    if hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
-        return model.transformer.h, 'transformer'  # GPT-2 style
-    if hasattr(model, 'layers'):
-        return model.layers, 'generic'
-    
-    # ViT / Swin / DeiT / BEiT style: model.vit.encoder.layer (or .layers)
-    for backbone_attr in ('vit', 'swin', 'deit', 'beit', 'data2vec_vision'):
-        backbone = getattr(model, backbone_attr, None)
-        if backbone is None:
-            continue
-        encoder = getattr(backbone, 'encoder', None)
-        if encoder is None:
-            continue
-        layers = getattr(encoder, 'layer', None) or getattr(encoder, 'layers', None)
-        if layers is not None:
-            return layers, backbone_attr
+        
+    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
+        return model.model.decoder.layers, type(model.model.decoder.layers[0]).__name__
+    elif hasattr(model, 'model') and hasattr(model.model, 'encoder') and hasattr(model.model.encoder, 'layers'):
+        return model.model.encoder.layers, type(model.model.encoder.layers[0]).__name__
+    elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+        return model.transformer.h, type(model.transformer.h[0]).__name__
+    elif hasattr(model, 'layers'):
+        return model.layers, type(model.layers[0]).__name__
     
     return None, None
 
@@ -263,15 +242,28 @@ def _get_auto_model_class(model_type: str):
     }.get(model_type, AutoModelForCausalLM)
 
 
+# REPLACE the entire function with:
 def _build_quantization_config(args, rank):
-    # Keep the non-quantized path untouched by returning None unless explicitly enabled.
     if not getattr(args, "quantization_enabled", False):
         return None
 
     bits = int(getattr(args, "quantization_bits", 4))
-    weights = "int4" if bits == 4 else "int8"
-    print_on_rank_0(rank, f"Using quanto {bits}-bit quantization", "🧮")
-    return QuantoConfig(weights=weights)
+    compute_dtype = DTYPE_MAP.get(
+        getattr(args, "quantization_compute_dtype", "bfloat16"), torch.bfloat16
+    )
+    double_quant = bool(getattr(args, "quantization_double_quant", True))
+
+    if bits == 4:
+        print_on_rank_0(rank, f"Using bitsandbytes NF4 4-bit quantization (double_quant={double_quant})", "🧮")
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type=getattr(args, "quantization_type", "nf4"),
+            bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_use_double_quant=double_quant,
+        )
+    else:  # 8-bit
+        print_on_rank_0(rank, "Using bitsandbytes LLM.int8() 8-bit quantization", "🧮")
+        return BitsAndBytesConfig(load_in_8bit=True)
 
 
 def _normalize_target_modules(target_modules):
@@ -292,15 +284,22 @@ def _apply_peft_quantization(model, args, rank):
     quantization_enabled = getattr(args, "quantization_enabled", False)
 
     gradient_checkpointing = bool(getattr(args, "gradient_checkpointing", True))
-    if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
-        if peft_enabled or not quantization_enabled:
-            model.gradient_checkpointing_enable()
-            print_on_rank_0(rank, "Gradient Checkpointing enabled", "💾")
-        else:
-            print_on_rank_0(rank, "⚠️ Gradient checkpointing disabled for pure quantization (can cause NaN)", "⚠️")
 
     if peft_enabled:
-        from peft import LoraConfig, TaskType, get_peft_model # type: ignore
+        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training  # type: ignore
+
+        # If quantized, prepare the model first (handles gradient checkpointing internally)
+        if quantization_enabled:
+            model = prepare_model_for_kbit_training(
+                model,
+                use_gradient_checkpointing=gradient_checkpointing,
+            )
+            print_on_rank_0(rank, "Model prepared for k-bit training (prepare_model_for_kbit_training) ✓", "🔧")
+        else:
+            # Non-quantized path: handle gradient checkpointing manually
+            if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
+                print_on_rank_0(rank, "Gradient checkpointing enabled", "💾")
 
         _peft_task_type_map = {
             "llm":     TaskType.CAUSAL_LM,
@@ -321,8 +320,6 @@ def _apply_peft_quantization(model, args, rank):
                 task_type=_task_type,
             )
             model = get_peft_model(model, peft_cfg)
-            ## LoRA adapter weights default to float32; cast all floating params to param_dtype
-            ## so FSDP sees a uniform dtype across base weights and adapter weights.
             if not quantization_enabled:
                 target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
                 for param in model.parameters():
@@ -330,11 +327,16 @@ def _apply_peft_quantization(model, args, rank):
                         param.data = param.data.to(target_dtype)
             if rank == 0 and hasattr(model, "print_trainable_parameters"):
                 model.print_trainable_parameters()
-            print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')})", "🧩")
+            print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')}) ✓", "🧩")
         except Exception as e:
-            print_on_rank_0(rank, f"Failed to apply PEFT configuration in Solo mode: {e}", "❌")
+            print_on_rank_0(rank, f"Failed to apply PEFT: {e}", "❌")
             traceback.print_exc()
             raise
+
+    else:
+        # Pure quantization, no PEFT — no gradient checkpointing (causes NaN with bnb)
+        if gradient_checkpointing:
+            print_on_rank_0(rank, "⚠️ Gradient checkpointing skipped for pure quantization (can cause NaN)", "⚠️")
 
     return model
 
@@ -436,11 +438,22 @@ def apply_ddp(local_rank, rank, device, args):
         if resuming:
             # PATH A: resume from checkpoint
             print_on_rank_0(rank, f"Resuming from checkpoint: {args.resume_path}", "🔄")
-            model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
-                args.model_name,
-                **_pretrained_kwargs(),
-            )
-            # Then load the saved state dict
+            if quant_cfg is not None:
+                # Quantized resume: must use from_pretrained to build bnb quantized layer structure.
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
+                    args.model_name,
+                    **_pretrained_kwargs(),
+                )
+            else:
+                # Non-quantized resume: build architecture only — no HF weight download needed.
+                _resume_config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
+                _resume_config.use_cache = False
+                _resume_config.tie_word_embeddings = False
+                model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
+                    _resume_config,
+                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                )
+            # Then load the saved state dict (overwrites all weights, works for both branches above)
             checkpoint = torch.load(args.resume_path, map_location="cpu")
             state_dict = checkpoint.get("model_state_dict", checkpoint)  # handle both formats
             model.load_state_dict(state_dict)
@@ -453,9 +466,6 @@ def apply_ddp(local_rank, rank, device, args):
                 args.model_name,
                 **_pretrained_kwargs(),
             )
-            if rank == 0 and os.path.exists(args.checkpoint_dir + "/seed.pt"):
-                os.remove(args.checkpoint_dir + "/seed.pt")
-            dist_barrier(rank)  # ensure all ranks have finished loading before rank 0 saves the seed checkpoint
 
         else:
             # PATH C: random init — for experimentation and debugging only
@@ -475,7 +485,8 @@ def apply_ddp(local_rank, rank, device, args):
                         m.reset_parameters()  # type: ignore
 
         model = _apply_peft_quantization(model, args, rank)
-        model = model.to(device)  # type: ignore
+        if quant_cfg is None:
+            model = model.to(device)  # type: ignore
         model = DDP(model, device_ids=[local_rank] if device.type == "cuda" else None,
                     find_unused_parameters=False)
         print_on_rank_0(rank, "DDP wrapper applied ✓")
@@ -548,6 +559,10 @@ def apply_fsdp(local_rank, rank, device, args):
             for i, layer in enumerate(model.layers):
                 model.layers[i] = fully_shard(layer) # type: ignore
             model = fully_shard(model)
+
+            # ADDED: inspect_model to verify sharding on the custom transformer path as well,
+            # consistent with PATH 2 and PATH 3.
+            inspect_model(model) # type: ignore
             print_on_rank_0(rank, f"Custom Transformer (FSDP) built | layers={args.custom_n_layers} dim={args.custom_dim} heads={args.custom_n_heads} vocab={args.custom_vocab_size} ✓")
             return model, None
         
@@ -619,7 +634,7 @@ def apply_fsdp(local_rank, rank, device, args):
                     torch.save(seed_model.state_dict(), peft_seed_path)
                     del seed_model
 
-                dist_barrier(rank)
+                dist_barrier(local_rank)  # ensure rank 0 has saved the seed checkpoint before others try to load
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
                 # config.use_cache = False
                 # config.tie_word_embeddings = False
@@ -643,6 +658,16 @@ def apply_fsdp(local_rank, rank, device, args):
             model.config.use_cache = False
             model.config.tie_word_embeddings = False
             model = _apply_peft_quantization(model, args, rank)
+
+            # ADDED: move model to the target GPU before FSDP sharding.
+            # Reason: all three sub-paths of PATH 2 (resume / load_from_hf / random) build the
+            # model via from_config(), which leaves every parameter tensor on CPU. FSDP2's
+            # fully_shard() wraps parameters into DTensors but does NOT migrate them to the GPU
+            # — that must happen explicitly before sharding. Without this call, all parameter
+            # data remains on CPU and every forward pass crashes when CUDA inputs arrive.
+            # Note: build_args() already raises if strategy=fsdp + quantization.enabled=true, so
+            # no bitsandbytes layers are ever present here and .to() is always safe to call.
+            model = model.to(device)
 
             non_float_frozen = 0
             for _name, param in model.named_parameters():
@@ -677,10 +702,16 @@ def apply_fsdp(local_rank, rank, device, args):
                     fully_shard(layer, **fsdp_kwargs)
             else:
                 print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
-
+            
             fully_shard(model, **fsdp_kwargs)
 
-            print_on_rank_0(rank, "FSDP sharding applied ✓", "✅")
+            # ADDED: inspect_model call to match PATH 3 behaviour.
+            # Reason: PATH 3 already calls inspect_model() right after fully_shard() to verify
+            # DTensor placement strategies and confirm the sharding counts. PATH 2 skipped this,
+            # making it much harder to diagnose whether LoRA adapter parameters are correctly
+            # sharded across ranks. Adding it here gives the same observability for PEFT + FSDP runs.
+            inspect_model(model)
+            print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
             if args.explicit_prefetching and layers is not None:
                 print_on_rank_0(rank, f"Setting up explicit prefetching: forward={args.forward_prefetch}, backward={args.backward_prefetch}", "🔄")
@@ -701,7 +732,7 @@ def apply_fsdp(local_rank, rank, device, args):
                 print_on_rank_0(rank, "Checkpoint loaded into PEFT model from saved ✓")
             else:
                 checkpointer = Checkpointer(folder=args.checkpoint_dir, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
-                print_on_rank_0(rank, "Checkpoint loaded into PEFT model ✓")
+                print_on_rank_0(rank, "Checkpointer initialized for new run ✓")
 
             print(f"[Rank {rank}] num params: {sum(p.numel() for p in model.parameters())}")
             
@@ -757,6 +788,7 @@ def apply_fsdp(local_rank, rank, device, args):
             print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
 
         fully_shard(model, **fsdp_kwargs)
+
         inspect_model(model)
         print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
