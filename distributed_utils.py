@@ -22,6 +22,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard
 from checkpoint import Checkpointer
 from dotenv import load_dotenv
 from utils import dist_barrier, inspect_model
+from datetime import timedelta
 
 
 load_dotenv()
@@ -32,23 +33,6 @@ DTYPE_MAP = {
     "float32": torch.float32, 
     "float16": torch.float16
 }
-
-
-
-
-# rank = int(os.environ["LOCAL_RANK"])
-# if torch.accelerator.is_available():
-#     device_type = torch.accelerator.current_accelerator()
-#     device = torch.device(f"{device_type}:{rank}")
-#     torch.accelerator.device_index(rank)
-#     print(f"Running on rank {rank} on device {device}")
-# else:
-#     device = torch.device("cpu")
-#     print(f"Running on device {device}")
-
-# BACKEND = torch.distributed.get_default_backend_for_device(device)
-# torch.distributed.init_process_group(backend=BACKEND, device_id=device)
-
 
 if torch.cuda.is_available():
     if not sys.platform.startswith("linux"):
@@ -117,7 +101,7 @@ def setup_dist_process_group():
 
             torch_version = tuple(int(x) for x in torch.__version__.split(".")[:2])
             if torch_version >= (2, 3):
-                dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"))
+                dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"),timeout=timedelta(minutes=60))
             else:
                 dist.init_process_group(backend=BACKEND)
         else:
@@ -243,22 +227,6 @@ def _get_auto_model_class(model_type: str):
 
 
 def _check_checkpoint_peft_compat(state_dict: dict, peft_enabled: bool, resume_path: str):
-    """Detects PEFT vs non-PEFT checkpoint mismatches before load_state_dict is called.
-
-    PEFT-saved checkpoints have keys prefixed with 'base_model.model.' because
-    get_peft_model() wraps the base model under that namespace.
-    Non-PEFT checkpoints have standard HuggingFace keys (e.g. 'model.decoder.layers.0...').
-
-    Without this check, the mismatch surfaces as a cryptic 'Missing key(s) in state_dict'
-    error that lists every single model key — giving no hint that the root cause is a
-    PEFT vs non-PEFT configuration mismatch at save vs resume time.
-
-    Raises ValueError with an actionable message if a mismatch is detected.
-    """
-    # ADDED: fail-fast checkpoint compatibility guard.
-    # Reason: a PEFT checkpoint loaded into a non-PEFT model (or vice versa) produces a
-    # wall of "Missing key(s)" errors with no hint about the actual cause.
-    # Peeking at the first key prefix catches 100% of PEFT/non-PEFT mismatches cheaply.
     if not state_dict:
         return  # empty — let load_state_dict produce its own error
 
@@ -373,26 +341,7 @@ def _apply_peft_quantization(model, args, rank):
             raise
 
     else:
-        # CHANGED: was a silent skip (only warned about gradient checkpointing).
-        # Reason: quantization_enabled=True + peft_enabled=False must never reach here
-        # for training — it produces NaN losses because:
-        #   1. INT8 weight updates via AdamW overflow the quantization range immediately.
-        #   2. LayerNorm/embedding layers stay in float16 without prepare_model_for_kbit_training,
-        #      causing overflow in the forward pass itself.
-        # build_args() now blocks this combination with a hard ValueError before training starts.
-        # This branch is a secondary defensive guard in case apply_solo/apply_ddp/apply_fsdp
-        # are called directly without going through build_args (e.g. from tests or external scripts).
-        # Old code:
-        #   if gradient_checkpointing:
-        #       print_on_rank_0(rank, "⚠️ Gradient checkpointing skipped for pure quantization ...")
         if quantization_enabled:
-            # CHANGED: was a RuntimeError. Downgraded to a warning to match build_args behavior.
-            # build_args already printed the full warning at startup; this is a secondary reminder
-            # at the point the model is actually being set up for training.
-            # NOTE: bitsandbytes automatically sets requires_grad=False on INT8 quantized linear
-            # weights, so only float16 layers (embeddings, norms, lm_head) will be trainable —
-            # typically ~30% of params. NaN risk comes from float16 overflow in those layers,
-            # not from INT8 weight updates as one might expect.
             print_on_rank_0(
                 rank,
                 "8-bit quantization without PEFT: training will proceed but NaN losses are likely. "
@@ -556,23 +505,13 @@ def apply_ddp(local_rank, rank, device, args):
         if resuming:
             # PATH A: resume from checkpoint
             print_on_rank_0(rank, f"Resuming from checkpoint: {args.resume_path}", "🔄")
-
-            # CHANGED: load checkpoint BEFORE building the model so we can validate
-            # compatibility and fail fast with a clear error rather than wasting time
-            # downloading model weights only to hit a cryptic "Missing key(s)" error.
-            # Added mmap=True and weights_only=True for efficiency and security.
-            # Old code: checkpoint loaded AFTER model was built.
             checkpoint = torch.load(
                 args.resume_path,
                 map_location="cpu",
                 mmap=True,
                 weights_only=True,
             )
-            state_dict = checkpoint.get("model_state_dict", checkpoint)  # handle both formats
-
-            # ADDED: fail fast if checkpoint PEFT type doesn't match current config.
-            # Reason: PEFT checkpoints have 'base_model.model.' key prefix; non-PEFT don't.
-            # Loading the wrong type produces a wall of "Missing key(s)" with no hint why.
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
             _check_checkpoint_peft_compat(
                 state_dict,
                 peft_enabled=getattr(args, "peft_enabled", False),
@@ -594,16 +533,20 @@ def apply_ddp(local_rank, rank, device, args):
                     _resume_config,
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                 )
-            model.load_state_dict(state_dict)
-            print_on_rank_0(rank, "Checkpoint state dict loaded ✓")
-
         elif load_model_from_hf:
-            # PATH B: every rank loads its own copy from HuggingFace
-            print_on_rank_0(rank, f"Loading pretrained weights from HuggingFace: {args.model_name}", "🧠")
+            ## rank-0-first download, then all ranks load from cache
+            if rank == 0:
+                print_on_rank_0(rank, f"Rank 0 fetching weights to cache: {args.model_name}", "🧠")
+                _ = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
+                    args.model_name, 
+                    **_pretrained_kwargs())
+                del _
+            dist_barrier(local_rank)  # everyone waits until rank 0's cache write is done
             model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
-                args.model_name,
-                **_pretrained_kwargs(),
-            )
+                args.model_name, 
+                **_pretrained_kwargs())
+
+
 
         else:
             # PATH C: random init — for experimentation and debugging only
@@ -625,6 +568,13 @@ def apply_ddp(local_rank, rank, device, args):
         model = _apply_peft_quantization(model, args, rank)
         if quant_cfg is None:
             model = model.to(device)  # type: ignore
+        # Load checkpoint AFTER PEFT wrapping — PEFT checkpoints use 'base_model.model.*' keys
+        # which only exist once get_peft_model() has been applied. Loading before wrapping causes
+        # a guaranteed key-mismatch crash ("Missing keys: base_model.model.*").
+        # Matches the apply_solo pattern (lines 450-453).
+        if resuming:
+            model.load_state_dict(state_dict) # type: ignore
+            print_on_rank_0(rank, "Checkpoint state dict loaded ✓")
         model = DDP(model, device_ids=[local_rank] if device.type == "cuda" else None,
                     find_unused_parameters=False)
         print_on_rank_0(rank, "DDP wrapper applied ✓")
@@ -654,17 +604,18 @@ def apply_fsdp(local_rank, rank, device, args):
         using the same formula the model uses at init time.
         """
         for name, buf in model.named_buffers():
-            if buf.device.type != "meta":
-                continue
-
             *path, attr = name.split(".")
             parent = model
             for part in path:
                 parent = getattr(parent, part)
 
             if attr == "inv_freq":
-                # Recompute RoPE inv_freq: 1 / (base ** (2i / dim))
-                # buf.shape[0] == dim // 2
+                # Always recompute inv_freq regardless of device — it is registered
+                # with persistent=False so it is NEVER in state_dict and therefore
+                # NEVER restored by load_model(). Two cases both land here:
+                #   (a) still on meta after load  → must materialize
+                #   (b) garbage CUDA value after model.to_empty(device) → must recompute
+                # Zeroing would silently corrupt all positional encodings.
                 half_dim = buf.shape[0]
                 dim = half_dim * 2
                 base = getattr(parent, "base", 10000)
@@ -673,11 +624,12 @@ def apply_fsdp(local_rank, rank, device, args):
                 )
                 setattr(parent, attr, inv_freq)
                 print_on_rank_0(rank, f"Recomputed RoPE inv_freq for '{name}' on {device}", "🔧")
-            else:
-                # For any other meta buffer: materialize as zeros with correct shape/dtype
-                # This is a safe fallback; add specific cases above if needed
+            elif buf.device.type == "meta":
+                # Other non-persistent meta buffers: materialize as zeros.
+                # Add a named case above (like inv_freq) if zeros would be wrong.
                 setattr(parent, attr, torch.zeros(buf.shape, dtype=buf.dtype, device=device))
                 print_on_rank_0(rank, f"Materialized meta buffer '{name}' as zeros on {device}", "🔧")
+            # else: buffer already on the right device — nothing to do
 
     try:
         # =================================================================================== #
@@ -759,8 +711,11 @@ def apply_fsdp(local_rank, rank, device, args):
                     seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                         args.model_name, **pretrained_kwargs
                     )
-                    # seed_model.config.use_cache = False
-                    # seed_model.config.tie_word_embeddings = False
+                    try:
+                        seed_model.config.use_cache = False
+                        seed_model.config.tie_word_embeddings = False
+                    except:
+                        raise
 
                     # Fix truncated weight-tying cloning logic
                     if hasattr(seed_model, "lm_head") and hasattr(seed_model, "model") and hasattr(seed_model.model, "embed_tokens"):
@@ -776,33 +731,21 @@ def apply_fsdp(local_rank, rank, device, args):
 
                 dist_barrier(local_rank)  # ensure rank 0 has saved the seed checkpoint before others try to load
                 config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
-                # config.use_cache = False
-                # config.tie_word_embeddings = False
+                
+                try:
+                    config.use_cache = False
+                    config.tie_word_embeddings = False
+                except:
+                    raise
+
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                     config,
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                 )
-                # CHANGED: added mmap=True and weights_only=True.
-                # mmap=True uses OS memory-mapping so the file is not fully read into physical
-                # RAM upfront — pages are faulted in on demand, reducing peak CPU RAM per rank.
-                # weights_only=True prevents arbitrary code execution during unpickling.
-                # Old code: torch.load(peft_seed_path, map_location="cpu")
                 model.load_state_dict(
                     torch.load(peft_seed_path, mmap=True, weights_only=True, map_location="cpu")
                 )
                 print_on_rank_0(rank, "Pretrained seed weights loaded ✓")
-                #
-                # KNOWN LIMITATION — deferred full fix:
-                # Every rank still loads the full seed file from disk independently.
-                # For 8 ranks on a shared filesystem, this is 8× I/O and 8× CPU RAM usage.
-                # The correct fix is: only rank 0 loads the seed, remaps HF state dict keys to
-                # PEFT model keys (adding the "base_model.model." prefix), then calls
-                # set_model_state_dict(broadcast_from_rank0=True, strict=False) so all ranks
-                # receive their parameter shards via NCCL without touching the filesystem.
-                # This is deferred because PEFT key naming is version-sensitive: PEFT < 0.7 uses
-                # "base_model.model.<hf_key>" but PEFT >= 0.7 renames LoRA target weights to
-                # "base_model.model.<layer>.base_layer.weight" — the remapping logic must handle
-                # both conventions without breaking non-LoRA target parameters.
 
             else:
                 print_on_rank_0(rank, "No checkpoint dir — random weight init for PEFT path", "⚠️")
@@ -814,8 +757,12 @@ def apply_fsdp(local_rank, rank, device, args):
                     dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                 )
 
-            model.config.use_cache = False
-            model.config.tie_word_embeddings = False
+            try:
+                model.config.use_cache = False
+                model.config.tie_word_embeddings = False
+            except:
+                raise
+            
             model = _apply_peft_quantization(model, args, rank)
 
             # Freeze any non-floating-point params before sharding.
@@ -845,29 +792,6 @@ def apply_fsdp(local_rank, rank, device, args):
             elif args.mixed_precision and args.quantization_enabled:
                 print_on_rank_0(rank, "Mixed precision policy skipped for quantized base; using quantization compute dtype", "ℹ️")
 
-            # CHANGED: layer-by-layer device placement + sharding instead of model.to(device).
-            #
-            # Old approach (removed):
-            #   model = model.to(device)          ← moves entire model to every rank's GPU
-            #   for layer in layers:
-            #       fully_shard(layer, **fsdp_kwargs)
-            #
-            # Problem: model.to(device) materialises ALL parameters on EACH rank's GPU before
-            # FSDP has sharded anything. For a 7B bfloat16 model that is ~14 GB per GPU; for
-            # 70B it is 140 GB — no single card can hold that, guaranteed OOM.
-            #
-            # New approach — layer-by-layer:
-            #   For each transformer block:
-            #     1. layer.to(device)      — only this block lands on GPU (~params / num_layers)
-            #     2. fully_shard(layer)    — block is immediately sharded; each rank keeps only
-            #                                1/world_size of that block's parameters in GPU memory
-            #     3. Proceed to next block — previous block already freed down to 1/N
-            #   After all blocks, move any remaining CPU params (embeddings, lm_head, norms) to
-            #   GPU. These are not transformer blocks so get_model_layers() skips them, but they
-            #   must be on-device before the root fully_shard() call.
-            #
-            # Peak GPU memory per rank: ~total_params / num_layers  (vs. total_params before).
-            # For Llama-7B (32 layers, 2 ranks): ~14 GB → ~220 MB peak per layer materialization.
             layers, layer_type = get_model_layers(model)
             if layers is not None:
                 print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers (layer-by-layer)...", "🔀")
@@ -875,9 +799,6 @@ def apply_fsdp(local_rank, rank, device, args):
                     layer.to(device)                    # one block on GPU (~total / num_layers bytes)
                     fully_shard(layer, **fsdp_kwargs)   # shard immediately → rank holds 1/N of block
             else:
-                # No identifiable transformer blocks: fall back to whole-model materialization.
-                # This is OOM-risky for very large models on small GPUs; prefer architectures
-                # that expose their layers via get_model_layers().
                 print_on_rank_0(rank, "No individual layers found — materializing full model on GPU (OOM risk for large models)", "⚠️")
                 model = model.to(device)
 
@@ -889,11 +810,6 @@ def apply_fsdp(local_rank, rank, device, args):
 
             fully_shard(model, **fsdp_kwargs)
 
-            # ADDED: inspect_model call to match PATH 3 behaviour.
-            # Reason: PATH 3 already calls inspect_model() right after fully_shard() to verify
-            # DTensor placement strategies and confirm the sharding counts. PATH 2 skipped this,
-            # making it much harder to diagnose whether LoRA adapter parameters are correctly
-            # sharded across ranks. Adding it here gives the same observability for PEFT + FSDP runs.
             inspect_model(model)
             print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
@@ -1005,15 +921,11 @@ def apply_fsdp(local_rank, rank, device, args):
                     print_on_rank_0(rank, f"Warning: resume_path API {api_dir} does not match dcp_api={args.dcp_api}. Attempting to load anyway.", "⚠️")
                 checkpointer = Checkpointer(folder=base, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
                 checkpointer.last_training_time = timestamp
+                # Materialize meta-device DTensors to real (empty) CUDA storage so
+                # set_model_state_dict can copy_() weights via NCCL into each rank's shard.
+                # Without this, copy_() into a meta tensor deadlocks silently.
+                model.to_empty(device=device)
                 checkpointer.load_model(model)
-
-                # ------------------------------------------------------------------ #
-                # FIX: materialize any buffers still on meta after checkpoint load.
-                # Non-persistent buffers (e.g. RoPE inv_freq in Llama) are excluded
-                # from state_dict() and therefore not restored by load_model().
-                # They must be recomputed rather than zeroed — zeros would silently
-                # corrupt positional encodings for the entire training run.
-                # ------------------------------------------------------------------ #
                 _materialize_meta_buffers(model, device)
 
         elif load_model_from_hf:
@@ -1061,17 +973,13 @@ def apply_fsdp(local_rank, rank, device, args):
                     torch.cuda.empty_cache()
                     
             dist_barrier(local_rank)
+            # Materialize meta-device DTensors to real (empty) CUDA storage — same
+            # reason as the resume path above. Each rank allocates only its 1/N shard.
+            model.to_empty(device=device)
             seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
             seed_checkpointer.load_model(model)
             print_on_rank_0(rank, "Pretrained weights loaded and sharded ✓")
 
-            # ------------------------------------------------------------------ #
-            # FIX: materialize any buffers still on meta after weight loading.
-            # Non-persistent buffers (e.g. RoPE inv_freq in Llama) are excluded
-            # from state_dict() and therefore not restored by load_model().
-            # They must be recomputed rather than zeroed — zeros would silently
-            # corrupt positional encodings for the entire training run.
-            # ------------------------------------------------------------------ #
             _materialize_meta_buffers(model, device)
 
             checkpointer = Checkpointer(folder=args.checkpoint_dir, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
@@ -1125,10 +1033,6 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
 
         elif strategy == "ddp":
             if rank == 0:
-                # CHANGED: was a fixed filename (ddp_checkpoint.pt) — every run overwrote the previous.
-                # Now uses the same millisecond-timestamp + run-tag pattern as FSDP so each run
-                # produces a unique file and old checkpoints are never silently overwritten.
-                # Old code: checkpoint_path = f"{args.checkpoint_dir}/ddp/ddp_checkpoint.pt"
                 import time as _time
                 _ts  = int(_time.time() * 1000)
                 _tag = _checkpoint_run_tag(args)   # e.g. "__lora_q4" or ""
@@ -1139,8 +1043,6 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
                 print_on_rank_0(rank, f"DDP checkpoint saved to {checkpoint_path} ✓", "🎉")
 
         elif strategy == "solo":
-            # CHANGED: same fix as DDP above — was a fixed filename (solo_checkpoint.pt).
-            # Old code: checkpoint_path = f"{args.checkpoint_dir}/solo/solo_checkpoint.pt"
             import time as _time
             _ts  = int(_time.time() * 1000)
             _tag = _checkpoint_run_tag(args)

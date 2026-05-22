@@ -284,7 +284,7 @@ def main(args):
         model.train()
         losses = []
         if dist.is_initialized():
-            dist_barrier(rank) 
+            dist_barrier(local_rank)
 
         for epoch in range(args.epochs):
             print_on_rank_0(rank, f"Starting Epoch {epoch+1}/{args.epochs}", "🔁")
