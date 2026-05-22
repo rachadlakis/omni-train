@@ -68,8 +68,8 @@ training:
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: solo              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+strategy: ddp              ## choose from {ddp, fsdp, solo}
+num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints
 save: true                  ## whether to save checkpoints
 
@@ -82,8 +82,8 @@ dist_parameters:
   distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
 
 save_load:
-  resume: true              ## whether to resume from a checkpoint
-  resume_path: "checkpoints/solo/1779437305946__lora.pt"            ## path to checkpoint to resume from
+  resume: false              ## whether to resume from a checkpoint
+  resume_path: ""            ## path to checkpoint to resume from
   load_model_from_hf: true   ## whether to load  from Hugging Face
 
 prefetch:
@@ -92,7 +92,7 @@ prefetch:
   backward: 2     ## number of backward passes to prefetch
 
 peft: ## Parameter Efficient Fine Tuning
-  enabled: true     ## whether to apply PEFT 
+  enabled: false     ## whether to apply PEFT 
   type: lora        ## LoRA or QLoRA
   r: 8              ## rank for LoRA, often set to a small value like 4, 8, 16, 64 etc.
   alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4
