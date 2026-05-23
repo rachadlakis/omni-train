@@ -96,6 +96,31 @@ import torch
 import torch.distributed as dist
 
 
+def _detect_nvlink() -> bool:
+    """Return True if NVML reports at least one active NVLink between local GPUs.
+    Returns False on any error so the safe SHM fallback is used.
+    """
+    if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+        return False
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        try:
+            for i in range(pynvml.nvmlDeviceGetCount()):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                for link in range(pynvml.NVML_NVLINK_MAX_LINKS):
+                    try:
+                        if pynvml.nvmlDeviceGetNvLinkState(handle, link) == pynvml.NVML_FEATURE_ENABLED:
+                            return True
+                    except pynvml.NVMLError:
+                        break
+            return False
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:
+        return False
+
+
 def setup_dist_process_group():
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -105,11 +130,18 @@ def setup_dist_process_group():
 
         if torch.cuda.is_available():
             torch.cuda.set_device(local_rank)
-            # RTX A4000 (PCIe, no NVLink) and similar: NCCL's PCIe P2P topology probe hangs
-            # indefinitely on these cards.  Forcing SHM (shared-memory) transport instead is
-            # fast and reliable for single-node training.
-            # Users with NVLink GPUs (A100/H100) can override: NCCL_P2P_DISABLE=0 in .env
-            os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+            # On PCIe-only GPUs (e.g. RTX A4000) NCCL's P2P topology probe hangs
+            # indefinitely; SHM (shared-memory) transport is fast and reliable instead.
+            # On NVLink-equipped GPUs (A100/H100/V100) P2P is much faster than SHM, so
+            # we leave it enabled. `setdefault` lets the user override either way via .env.
+            p2p_default = "0" if _detect_nvlink() else "1"
+            os.environ.setdefault("NCCL_P2P_DISABLE", p2p_default)
+            print_on_rank_0(
+                rank,
+                f"NCCL_P2P_DISABLE={os.environ['NCCL_P2P_DISABLE']} "
+                f"(NVLink {'detected' if p2p_default == '0' else 'not detected'})",
+                "🔌",
+            )
 
         # Do NOT pass device_id= here: it triggers an eager NCCL communicator that conflicts
         # with the device_ids=[local_rank] in barrier() calls, deadlocking on NCCL 2.21.5.
