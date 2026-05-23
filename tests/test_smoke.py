@@ -89,6 +89,11 @@ BASE_SMOKE_CFG = {
         "wandb_project": "smoke-test",
         "wandb_run_name": "smoke",
     },
+    "MLFlow": {
+        "mlflow_log_with_train": False,
+        "mlflow_tracking_uri": "http://localhost:5000",
+        "mlflow_experiment_name": "smoke-experiment",
+    },
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

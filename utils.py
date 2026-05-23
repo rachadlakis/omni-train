@@ -103,7 +103,8 @@ def print_config(args):
         "Quantization":    ["quantization_enabled", "quantization_bits", "quantization_type", "quantization_compute_dtype", "quantization_double_quant"],
         "Checkpoint":      ["distribute_api", "resume", "resume_path", "load_model_from_hf"],
         "Prefetch":        ["explicit_prefetching", "forward_prefetch", "backward_prefetch"],
-        "Wandb":           ["wandb_log_with_train", "wandb_entity", "wandb_project", "wandb_run_name"]
+        "Wandb":           ["wandb_log_with_train", "wandb_entity", "wandb_project", "wandb_run_name"],
+        "MLflow":          ["mlflow_log_with_train", "mlflow_tracking_uri", "mlflow_experiment_name"],
     }
 
     cfg = vars(args)
@@ -275,7 +276,11 @@ class Args:
         self.wandb_log_with_train: bool
         self.wandb_entity: str
         self.wandb_project: str
-        self.wandb_run_name: str 
+        self.wandb_run_name: str
+
+        self.mlflow_log_with_train: bool
+        self.mlflow_tracking_uri: str
+        self.mlflow_experiment_name: str
 
 def to_bool(x):
     if isinstance(x, bool):
@@ -479,8 +484,16 @@ def build_args(cfg):
     wb = cfg["wandb"]
     args.wandb_log_with_train = to_bool(wb.get("wandb_log_with_train", True))
     args.wandb_entity = wb.get("wandb_entity", "dist-train-project")
-    args.wandb_project = wb.get("wandb_project", "dist-train-project") 
+    args.wandb_project = wb.get("wandb_project", "dist-train-project")
     args.wandb_run_name = wb.get("wandb_run_name", "")
+
+    # --------------------------------------------------
+    # MLFLOW
+    # --------------------------------------------------
+    mf = cfg.get("MLFlow", cfg.get("mlflow", {})) or {}
+    args.mlflow_log_with_train  = to_bool(mf.get("mlflow_log_with_train", False))
+    args.mlflow_tracking_uri    = mf.get("mlflow_tracking_uri", "http://localhost:5000")
+    args.mlflow_experiment_name = mf.get("mlflow_experiment_name", "dist-train-experiment")
 
     return args
 

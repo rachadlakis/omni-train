@@ -837,6 +837,12 @@ function onWandbChange() {
   toggle('fg-wandb-run', !!enabled);
 }
 
+function onMlflowChange() {
+  const enabled = document.getElementById('f-mlflow-enabled')?.checked;
+  toggle('fg-mlflow-uri', !!enabled);
+  toggle('fg-mlflow-experiment', !!enabled);
+}
+
 // =========================================================================
 // Strategy / GPU compatibility warning
 // =========================================================================
@@ -1602,6 +1608,14 @@ function applyConfigToForm(cfg) {
   setVal('f-wandb-entity', wandb.wandb_entity || '');
   setVal('f-wandb-run', wandb.wandb_run_name || '');
   onWandbChange();
+
+  // MLflow settings
+  const mlflow = cfg.mlflow || {};
+  const mlflowEl = document.getElementById('f-mlflow-enabled');
+  if (mlflowEl) mlflowEl.checked = !!(mlflow.mlflow_log_with_train);
+  setVal('f-mlflow-uri', mlflow.mlflow_tracking_uri || '');
+  setVal('f-mlflow-experiment', mlflow.mlflow_experiment_name || '');
+  onMlflowChange();
 }
 
 function buildConfigFromForm() {
@@ -1769,6 +1783,14 @@ function buildConfigFromForm() {
     wandb_project: getVal('f-wandb-project') || 'dist-train-project',
     wandb_entity: getVal('f-wandb-entity') || '',
     wandb_run_name: getVal('f-wandb-run') || '',
+  };
+
+  // MLflow logging
+  const mlflowEnabled = document.getElementById('f-mlflow-enabled')?.checked || false;
+  cfg.mlflow = {
+    mlflow_log_with_train: mlflowEnabled,
+    mlflow_tracking_uri: getVal('f-mlflow-uri') || 'http://localhost:5000',
+    mlflow_experiment_name: getVal('f-mlflow-experiment') || 'dist-train-experiment',
   };
 
   return cfg;
@@ -2306,6 +2328,12 @@ wandb:
   wandb_log_with_train: false        # Enable Weights & Biases logging
   wandb_entity: "dist-train-project"  # W&B entity (user or team)
   wandb_project: "dist-train-project" # W&B project name
+
+# ===================== LOGGING (MLflow) =====================
+MLFlow:
+  mlflow_log_with_train: false                       # Enable MLflow logging
+  mlflow_tracking_uri: "http://localhost:5000"       # MLflow tracking server URI
+  mlflow_experiment_name: "dist-train-experiment"    # MLflow experiment name
 `;
 }
 
@@ -2368,6 +2396,10 @@ function configToYaml(cfg) {
   const wandbLog = cfg.wandb?.wandb_log_with_train ?? false;
   const wandbEntity = cfg.wandb?.wandb_entity || 'dist-train-project';
   const wandbProject = cfg.wandb?.wandb_project || 'dist-train-project';
+
+  const mlflowLog = cfg.mlflow?.mlflow_log_with_train ?? false;
+  const mlflowUri = cfg.mlflow?.mlflow_tracking_uri || 'http://localhost:5000';
+  const mlflowExperiment = cfg.mlflow?.mlflow_experiment_name || 'dist-train-experiment';
 
   const datasetNameLine = dataSource === 'local'
     ? `  path: ${dataPath}  # local image folder`
@@ -2465,6 +2497,11 @@ wandb:
   wandb_log_with_train: ${wandbLog}  ## whether to log training metrics to Weights & Biases
   wandb_entity: "${wandbEntity}"   ## your W&B entity (username or team)
   wandb_project: "${wandbProject}"  ## your W&B project name
+
+MLFlow:
+  mlflow_log_with_train: ${mlflowLog}  ## whether to log training metrics to MLflow
+  mlflow_tracking_uri: "${mlflowUri}"  ## MLflow tracking server URI
+  mlflow_experiment_name: "${mlflowExperiment}"  ## MLflow experiment name
 `;
 }
 
