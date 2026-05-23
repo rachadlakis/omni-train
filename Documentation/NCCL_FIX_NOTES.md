@@ -124,8 +124,8 @@ Passing `device_ids=[local_rank]` gives NCCL the mapping it needs.
 | GPU / Interconnect              | Expected Behaviour                                                                                                                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **RTX 4090 / 3090 / A4000** (PCIe, no NVLink) | ✓ P2P probe hangs on many PCIe-only setups. `NCCL_P2P_DISABLE=1` is the correct default. Throughput unchanged for typical training. |
-| **A100 / H100** (NVLink)        | ✓ NCCL prefers NVLink over P2P; the P2P disable has no effect on NVLink bandwidth. Training is at full speed. Override with `NCCL_P2P_DISABLE=0` in `.env` to force P2P for benchmarking. |
-| **Any GPU with NVSwitch**       | ✓ Same as NVLink case above.                                                                                                                      |
+| **A100 / H100** (NVLink)        | ⚠ Trains correctly, but at reduced intra-node bandwidth. `NCCL_P2P_DISABLE=1` disables **all** P2P transports, including NVLink — NCCL falls back to SHM (CPU staging), which is ~10× slower than NVLink. **Set `NCCL_P2P_DISABLE=0` in `.env`** for full NVLink speed. |
+| **Any GPU with NVSwitch** (DGX) | ⚠ Same as NVLink case above — override to `NCCL_P2P_DISABLE=0` to use NVSwitch.                                                                   |
 | **CPU-only / gloo backend**     | ✓ The `os.environ.setdefault` line is inside the `if torch.cuda.is_available()` block, so it is never set on CPU-only machines. gloo barrier is used unchanged. |
 | **PyTorch 2.3+**                | ✓ `device_id=` removed from `init_process_group`, so no version-dependent branch is needed.                                                       |
 | **PyTorch < 2.3**               | ✓ `init_process_group()` simply has no `device_id=` argument; the call is identical.                                                              |
