@@ -711,9 +711,10 @@ def estimate_training_time(
 
 
 def dist_barrier(local_rank: int) -> None:
-    TORCH_VERSION = tuple(int(x) for x in torch.__version__.split(".")[:2])
-
-    if dist.get_backend() == "nccl" and TORCH_VERSION >= (2, 0):
+    # Must pass device_ids=[local_rank] for NCCL so it knows which GPU each rank owns.
+    # Do NOT use device_id= in init_process_group — that creates a conflicting communicator
+    # on NCCL 2.21.5 + RTX A4000 and causes deadlocks.  device_ids here is sufficient.
+    if dist.get_backend() == "nccl":
         dist.barrier(device_ids=[local_rank])
     else:
         dist.barrier()

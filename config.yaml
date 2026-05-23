@@ -20,61 +20,61 @@ dataset:
   split: train[:1%]         ## which split and how much to use for trai. Ex. train[:2%]+validation[:3%]"
 
 training:
-  epochs: 4                     ## Number of epochs to train
-  batch_size: 16                ## Batch size for training 
-  max_length: 64                ## Not used for vision models
+  epochs: 4                     ## Number of epochs to train. Options: 1, 2, 3, 4, 5, 10, etc.
+  batch_size: 16                ## Batch size for training. Options: 1, 2, 4, 8, 16, 32, etc. 
+  max_length: 64                ## Not used for vision models. 
   learning_rate: 2e-5           ## Learning rate for training
   gradient_checkpointing: false ## whether to use gradient checkpointing (activation checkpointing)
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: fsdp              ## choose from {ddp, fsdp, solo}
+strategy: ddp              ## choose from {ddp, fsdp, solo}
 num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
-checkpoint_dir: checkpoints ## directory to save checkpoints
-save: true                  ## whether to save checkpoints
+checkpoint_dir: checkpoints ## directory to save checkpoints. 
+save: true                  ## whether to save checkpoints. Options: true, false
 
 dist_parameters:
   mixed_precision: true       ## Use Mixed Precision? 
-  param_dtype: bfloat16       ## what dtype to use for parameters?  
-  reduce_dtype: float32       ## what dtype to use for reduction?  
-  output_dtype: bfloat16      ## what dtype to use for output? 
+  param_dtype: bfloat16       ## what dtype to use for parameters? options: bfloat16, float16, float32
+  reduce_dtype: float32       ## what dtype to use for reduction?  options: bfloat16, float16, float32 
+  output_dtype: bfloat16      ## what dtype to use for output? options: bfloat16, float16, float32
   cast_forward_inputs: false  ## whether to cast forward inputs to the dtype of the wrapped module
   distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
 
 save_load:
-  resume: false              ## whether to resume from a checkpoint
-  resume_path: ""            ## path to checkpoint to resume from
-  load_model_from_hf: true   ## whether to load  from Hugging Face
+  resume: false              ## whether to resume from a checkpoint. Options: true, false
+  resume_path: ""            ## path to checkpoint to resume from. Options: "checkpoints/epoch_2.pt", etc.
+  load_model_from_hf: true   ## whether to load  from Hugging Face. Options: true, false
 
 prefetch:
-  explicit: true  ## explicit prefetching?
-  forward: 2      ## number of forward passes to prefetch
-  backward: 2     ## number of backward passes to prefetch
+  explicit: true  ## explicit prefetching? Options: true, false (if false, will rely on the built-in prefetching of the training loop)
+  forward: 2      ## number of forward passes to prefetch. Options: 0 (no prefetching), 1, 2, etc.
+  backward: 2     ## number of backward passes to prefetch. Options: 0 (no prefetching), 1, 2, etc.
 
 peft: ## Parameter Efficient Fine Tuning
-  enabled: false     ## whether to apply PEFT 
-  type: lora        ## LoRA or QLoRA
-  r: 8              ## rank for LoRA, often set to a small value like 4, 8, 16, 64 etc.
-  alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4
-  dropout: 0.05     ## dropout rate for LoRA layers
+  enabled: true     ## whether to apply PEFT. Options: true, false
+  type: lora        ## LoRA or QLoRA. Only one type can be chosen. Options: lora, qlora
+  r: 8              ## rank for LoRA. Options: 4, 8, 16, etc. (only relevant if type=lora)
+  alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4. Options: 8, 16, 32, etc. (only relevant if type=lora)
+  dropout: 0.05     ## dropout rate for LoRA layers. Options: 0.0, 0.05, 0.1, etc. (only relevant if type=lora)
   target_modules: all-linear  ## "all-linear" for all, or specific modules ex: ["q_proj", "k_proj", "v_proj", "o_proj"]
-  bias: none                  ## whether to include bias in LoRA, options: "none", "all", "lora_only"
+  bias: none                  ## whether to include bias in LoRA. Options: "none", "all", "lora_only"
 
 quantization:
-  enabled: false           ## whether to apply quantization (uses bitsandbytes backend)
-  bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8)
-  quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4)
-  compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32)
-  double_quant: true      ## whether to use double quantization for 4-bit quantization (only applicable if bits=4)
+  enabled: false           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
+  bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8). Options: 4, 8
+  quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4). Options: nf4, fp4, int4 (only relevant if bits=4)
+  compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32). Options: bfloat16, float16, float32 (only relevant if quantization is enabled)
+  double_quant: true      ## whether to use double quantization for 4-bit quantization (only applicable if bits=4). Options: true, false (only relevant if bits=4)
   
 wandb:
-  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases
-  wandb_entity: "dist-train"          ## your W&B entity (username or team)
+  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases. Options: true, false
+  wandb_entity: "dist-train"          ## your W&B entity (username or team). 
   wandb_project: "dist-train-project" ## your W&B project name
 
 ## To Add MLFLOW integration (https://www.mlflow.org/docs/latest/tracking.html)
 MLFlow:
-  mlflow_log_with_train: false         ## whether to log training metrics to MLFlow
+  mlflow_log_with_train: false         ## whether to log training metrics to MLFlow. Options: true, false
   mlflow_tracking_uri: "http://localhost:5000" ## your MLFlow tracking URI
   mlflow_experiment_name: "dist-train-experiment" ## your MLFlow experiment name 
   

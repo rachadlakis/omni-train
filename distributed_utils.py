@@ -88,31 +88,49 @@ def gpu_memory_snapshot(device):
     reserved = torch.cuda.memory_reserved(device) / (1024 ** 3)
     return f"allocated={allocated:.2f} GB | reserved={reserved:.2f} GB"
 
+
+
+import os
+from datetime import timedelta
+import torch
+import torch.distributed as dist
+
+
 def setup_dist_process_group():
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    
+
     try:
         print_on_rank_0(rank, f"Initializing process group with backend: {BACKEND}", "⚙️")
 
         if torch.cuda.is_available():
-            device = torch.device(f"cuda:{local_rank}")
-            torch.cuda.set_device(device)
+            torch.cuda.set_device(local_rank)
+            # RTX A4000 (PCIe, no NVLink) and similar: NCCL's PCIe P2P topology probe hangs
+            # indefinitely on these cards.  Forcing SHM (shared-memory) transport instead is
+            # fast and reliable for single-node training.
+            # Users with NVLink GPUs (A100/H100) can override: NCCL_P2P_DISABLE=0 in .env
+            os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 
-            torch_version = tuple(int(x) for x in torch.__version__.split(".")[:2])
-            if torch_version >= (2, 3):
-                dist.init_process_group(backend=BACKEND, device_id=torch.device(f"cuda:{local_rank}"),timeout=timedelta(minutes=60))
-            else:
-                dist.init_process_group(backend=BACKEND)
-        else:
-            dist.init_process_group(backend=BACKEND)
+        # Do NOT pass device_id= here: it triggers an eager NCCL communicator that conflicts
+        # with the device_ids=[local_rank] in barrier() calls, deadlocking on NCCL 2.21.5.
+        dist.init_process_group(backend=BACKEND, timeout=timedelta(minutes=10))
 
         print_on_rank_0(rank, f"Process group initialized ✓ | rank: {rank} | local_rank: {local_rank}", "✅")
+
+        # NCCL warm-up: absorb the first-collective cold-start here, where both ranks are
+        # already synchronised, rather than silently mid-training.
+        if BACKEND == "nccl":
+            print_on_rank_0(rank, "NCCL warm-up barrier…", "🔥")
+            dist.barrier(device_ids=[local_rank])
+            print_on_rank_0(rank, "NCCL ready ✓", "🔥")
+
         return local_rank
 
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to initialize process group: {e}", "❌")
         raise
+
+
 
 def cleanup():
     try:
@@ -120,6 +138,8 @@ def cleanup():
             dist.destroy_process_group()
     except Exception as e:
         print(f"⚠️ Warning: Failed to clean up process group: {e}")
+
+
 
 def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
     """Configures the model layers to prefetch activations for the next N layers during the forward pass."""
@@ -536,17 +556,23 @@ def apply_ddp(local_rank, rank, device, args):
         elif load_model_from_hf:
             ## rank-0-first download, then all ranks load from cache
             if rank == 0:
+                import transformers as _transformers
                 print_on_rank_0(rank, f"Rank 0 fetching weights to cache: {args.model_name}", "🧠")
+                print_on_rank_0(rank, "If not cached, weights will be downloaded now — progress shown below:", "⏳")
+                _transformers.logging.enable_progress_bar()   # restore bars for the download
                 _ = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
-                    args.model_name, 
+                    args.model_name,
                     **_pretrained_kwargs())
+                _transformers.logging.disable_progress_bar()  # re-suppress for the rest of training
                 del _
+                print_on_rank_0(rank, "Weights cached ✓ — releasing barrier for all ranks", "✅")
+                
+            print(f"\n[rank {rank}] Waiting at barrier for rank 0 to cache weights...", flush=True)
             dist_barrier(local_rank)  # everyone waits until rank 0's cache write is done
+            print_on_rank_0(rank, "All ranks loading model from cache...", "📦")
             model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
-                args.model_name, 
+                args.model_name,
                 **_pretrained_kwargs())
-
-
 
         else:
             # PATH C: random init — for experimentation and debugging only
@@ -567,16 +593,17 @@ def apply_ddp(local_rank, rank, device, args):
 
         model = _apply_peft_quantization(model, args, rank)
         if quant_cfg is None:
-            model = model.to(device)  # type: ignore
-        # Load checkpoint AFTER PEFT wrapping — PEFT checkpoints use 'base_model.model.*' keys
-        # which only exist once get_peft_model() has been applied. Loading before wrapping causes
-        # a guaranteed key-mismatch crash ("Missing keys: base_model.model.*").
-        # Matches the apply_solo pattern (lines 450-453).
+            model = model.to(device) 
+
         if resuming:
             model.load_state_dict(state_dict) # type: ignore
             print_on_rank_0(rank, "Checkpoint state dict loaded ✓")
-        model = DDP(model, device_ids=[local_rank] if device.type == "cuda" else None,
-                    find_unused_parameters=False)
+
+        model = DDP(
+            model,
+            device_ids=[local_rank] if device.type == "cuda" else None,
+            find_unused_parameters=False
+            )
         print_on_rank_0(rank, "DDP wrapper applied ✓")
         return model
 
@@ -708,9 +735,13 @@ def apply_fsdp(local_rank, rank, device, args):
                     pretrained_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
 
                 if rank == 0:
+                    import transformers as _transformers
+                    print_on_rank_0(rank, "Downloading PEFT seed weights — progress shown below:", "⏳")
+                    _transformers.logging.enable_progress_bar()
                     seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                         args.model_name, **pretrained_kwargs
                     )
+                    _transformers.logging.disable_progress_bar()
                     try:
                         seed_model.config.use_cache = False
                         seed_model.config.tie_word_embeddings = False
@@ -942,7 +973,9 @@ def apply_fsdp(local_rank, rank, device, args):
                 if os.path.exists(pretrained_seed_path):
                     print_on_rank_0(rank, "Model already downloaded", "💾")
                 else:
-                    print_on_rank_0(rank, "Downloading model from HuggingFace", "💾")
+                    import transformers as _transformers
+                    print_on_rank_0(rank, "Downloading model from HuggingFace — progress shown below:", "💾")
+                    _transformers.logging.enable_progress_bar()   # restore bars for the download
                     seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                         args.model_name,
                         token=HF_TOKEN,
@@ -950,6 +983,7 @@ def apply_fsdp(local_rank, rank, device, args):
                         low_cpu_mem_usage=True,
                         tie_word_embeddings=False,
                     )
+                    _transformers.logging.disable_progress_bar()  # re-suppress for the rest of training
                     seed_model.config.tie_word_embeddings = False
                     print_on_rank_0(rank, "Pretrained model loaded on rank 0 ✓", "🧠")
 
