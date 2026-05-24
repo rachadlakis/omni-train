@@ -146,16 +146,6 @@ def main(args):
                 tensorboard=True
         )
 
-        ## MLflow setup - same rank-0 gating as wandb
-        if args.mlflow_log_with_train and rank == 0:
-            import mlflow  # lazy import so wandb-only users don't need mlflow installed
-            mlflow.set_tracking_uri(args.mlflow_tracking_uri)
-            mlflow.set_experiment(args.mlflow_experiment_name)
-            mlflow.start_run()
-            # mlflow.log_params rejects nested dicts and values >500 chars; stringify+truncate
-            mlflow.log_params({k: str(v)[:500] for k, v in vars(args).items()})
-            print_on_rank_0(rank, f"MLflow logging enabled | experiment={args.mlflow_experiment_name} | uri={args.mlflow_tracking_uri}", "📊")
-
 
         ## Print environment info for debugging and verification
         print_on_all_ranks(rank, f"Process joined | world_size={world_size} | pid={os.getpid()}", "🚀",
@@ -377,10 +367,6 @@ def main(args):
             if args.wandb_log_with_train and rank == 0:
                 run.log({"epoch": epoch+1, "loss": epoch_loss}) # type: ignore
 
-            if args.mlflow_log_with_train and rank == 0:
-                import mlflow
-                mlflow.log_metrics({"loss": epoch_loss}, step=epoch + 1)
-
         def in_terminal():
             return sys.stdout.isatty()
         
@@ -413,10 +399,6 @@ def main(args):
         
         if args.wandb_log_with_train and rank == 0:
             run.finish() #type: ignore
-
-        if args.mlflow_log_with_train and rank == 0:
-            import mlflow
-            mlflow.end_run()
 
     except ValueError as e:
         # ADDED: separate handler for user config errors (checkpoint compat, bad args, etc.)

@@ -68,11 +68,6 @@ def base_cfg():
             "wandb_project": "test",
             "wandb_run_name": "test-run",
         },
-        "MLFlow": {
-            "mlflow_log_with_train": False,
-            "mlflow_tracking_uri": "http://localhost:5000",
-            "mlflow_experiment_name": "test-experiment",
-        },
     }
 
 

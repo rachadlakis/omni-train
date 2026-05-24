@@ -2,10 +2,6 @@
 
 set -euo pipefail ## safer bash scripting
 
-# Resolve the script's own directory and cd to the repo root so relative paths
-# (config.yaml, train.py, etc.) work regardless of the caller's CWD. Without
-# this, launching from VS Code (which may start in a different directory than
-# a plain terminal) breaks every relative path in the run.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 

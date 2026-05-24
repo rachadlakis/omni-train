@@ -72,11 +72,6 @@ def _default_config(project_root: Path) -> dict[str, Any]:
             "wandb_project": "dist-train-project",
             "wandb_run_name": "",
         },
-        "mlflow": {
-            "mlflow_log_with_train": False,
-            "mlflow_tracking_uri": "http://localhost:5000",
-            "mlflow_experiment_name": "dist-train-experiment",
-        },
     }
 
 
@@ -95,7 +90,6 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     distributed = raw.get("distributed", {}) if isinstance(raw.get("distributed"), dict) else {}
     training = raw.get("training", {}) if isinstance(raw.get("training"), dict) else {}
     wandb = raw.get("wandb", {}) if isinstance(raw.get("wandb"), dict) else {}
-    mlflow = raw.get("mlflow", {}) if isinstance(raw.get("mlflow"), dict) else {}
 
     strategy = str(distributed.get("strategy", "solo")).lower()
     if strategy == "none":
@@ -187,11 +181,6 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
             "wandb_entity": wandb.get("wandb_entity", base["wandb"].get("wandb_entity", "dist-train-project")),
             "wandb_project": wandb.get("wandb_project", base["wandb"].get("wandb_project", "dist-train-project")),
             "wandb_run_name": wandb.get("wandb_run_name", base["wandb"].get("wandb_run_name", "")),
-        },
-        "MLFlow": {
-            "mlflow_log_with_train": mlflow.get("mlflow_log_with_train", base["mlflow"]["mlflow_log_with_train"]),
-            "mlflow_tracking_uri": mlflow.get("mlflow_tracking_uri", base["mlflow"]["mlflow_tracking_uri"]),
-            "mlflow_experiment_name": mlflow.get("mlflow_experiment_name", base["mlflow"]["mlflow_experiment_name"]),
         },
     }
 
