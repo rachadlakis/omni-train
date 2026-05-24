@@ -98,12 +98,31 @@ import torch.distributed as dist
 
 def _detect_nvlink() -> bool:
     """Return True if NVML reports at least one active NVLink between local GPUs.
-    Returns False on any error so the safe SHM fallback is used.
+
+    Failure modes are deliberately split:
+      - pynvml not installed         → RuntimeError. We have no way to know whether
+                                       NVLink is present, so silently falling back
+                                       to SHM would lie to the user on NVLink boxes.
+                                       The dependency is pinned in requirements.txt
+                                       (nvidia-ml-py); the user must install it.
+      - pynvml present but NVML errs → return False. The probe was attempted, NVML
+                                       just couldn't give us an answer (unsupported
+                                       driver, transient error). SHM fallback is safe.
     """
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         return False
     try:
-        import pynvml
+        import pynvml  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "Cannot determine NVLink presence: 'pynvml' (nvidia-ml-py) is not installed.\n"
+            "   Refusing to silently assume PCIe-only — that would force SHM transport\n"
+            "   on NVLink-equipped machines and hide a real performance regression.\n"
+            "   Install it with:\n\n"
+            "       pip install -r requirements.txt\n\n"
+            "   (or `pip install nvidia-ml-py==12.560.30`) and re-run."
+        ) from e
+    try:
         pynvml.nvmlInit()
         try:
             for i in range(pynvml.nvmlDeviceGetCount()):

@@ -254,8 +254,9 @@ SMOKE_GRID = {
     ("dataset",):         [{"name": "wikitext", "subset": "wikitext-2-raw-v1", "split": "train[:1%]"}],  # same tiny dataset
     "save":            [False, True],
     # "wandb":          [{"wandb_log_with_train": False}, {"wandb_log_with_train": True}],
-    "quantization":   [False, True],
-    "quantization":   [False],  # keep quantization disabled for all cases to limit runtime and avoid FSDP incompatibility
+    # Quantization is exercised via the named SMOKE_EXTRA_CASES (ddp_peft_qlora_quant)
+    # so we don't combinatorially explode here, and we keep base dict structure intact.
+    ("quantization", "enabled"): [False],
     "dist_parameters": [{"distribute_api": "dcp_api"}, {"distribute_api": "dtensor_api"}],
     "peft":          [{"type": "lora"}, {"type": "qlora"}],
     ("peft", "r"):                                 [4, 8, 16],
@@ -304,6 +305,25 @@ SMOKE_EXTRA_CASES = [
             {"strategy": "fsdp", "save": True},
             {"strategy": "fsdp", ("save_load", "resume"): True},
         ],
+    },
+    # DDP + QLoRA (4-bit bitsandbytes quantization). Exercises the PEFT+quant
+    # path through apply_ddp + _build_quantization_config + prepare_model_for_kbit_training.
+    # build_args enforces: peft.type=qlora ⇒ quantization.enabled=True, bits=4.
+    {
+        "id": "ddp_peft_qlora_quant",
+        "strategy": "ddp",
+        ("peft", "enabled"): True,
+        ("peft", "type"): "qlora",
+        ("quantization", "enabled"): True,
+        ("quantization", "bits"): 4,
+    },
+    # FSDP + LoRA (no quantization — bnb is incompatible with FSDP sharding).
+    # Exercises PATH 2 in apply_fsdp: materialize-before-shard + PEFT wrapping.
+    {
+        "id": "fsdp_peft_lora",
+        "strategy": "fsdp",
+        ("peft", "enabled"): True,
+        ("peft", "type"): "lora",
     },
 ]
 

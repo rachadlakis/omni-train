@@ -63,15 +63,12 @@ wandb:
   wandb_entity: "dist-train"          ## your W&B entity (username or team). 
   wandb_project: "dist-train-project" ## your W&B project name
 
-## Placeholder for future MLFlow integration (https://www.mlflow.org/docs/latest/tracking.html)
-## MLflow support has been removed for now — only wandb is wired up. To re-enable later,
-## uncomment the keys below and restore the setup/log/end_run code in train.py.
-# MLFlow:
-#   mlflow_log_with_train: false
-#   mlflow_tracking_uri: ""
-#   mlflow_experiment_name: ""
-
-## ------------------------------------------------------ In progress  ------------------------------------------------------ ##
+MLFlow:
+  mlflow_log_with_train: true         ## whether to log training metrics to MLFlow. Options: true, false
+  mlflow_tracking_uri: "http://localhost:5000" ## your MLFlow tracking URI
+  mlflow_experiment_name: "dist-train-experiment" ## your MLFlow experiment name 
+  
+## ------------------------------------ In progress  ------------------------------------ ##
 ## To add multi-dimensional parallelism (data parallelism, tensor parallelism and/or pipeline parallelism)
 multi_dimensional_parallelism:  
   enabled: false                   ## whether to use multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
