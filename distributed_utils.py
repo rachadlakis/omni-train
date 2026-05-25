@@ -226,12 +226,9 @@ def get_model_layers(model):
       3. Largest ModuleList by parameter count — last-resort heuristic for
          truly unknown architectures.
     """
-    original_type = type(model).__name__
-    unwrapped = False
     # Unwrap PeftModel safely if present
     if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
         model = model.base_model.model
-        unwrapped = True
 
     # 1) HF _no_split_modules
     no_split = set(getattr(model, "_no_split_modules", None) or [])
@@ -266,32 +263,7 @@ def get_model_layers(model):
             params = sum(p.numel() for p in m.parameters())
             if params > best_params:
                 best, best_params = m, params
-    if best is not None:
-        return [(best, type(best[0]).__name__)]
-
-    # Detection failed — emit a one-shot diagnostic on rank 0 so the user can see
-    # what was actually inspected. Surveys every ModuleList in the (unwrapped) tree.
-    try:
-        _rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
-    except Exception:
-        _rank = 0
-    if _rank == 0:
-        seen = [
-            (name, len(m), type(m[0]).__name__ if len(m) else "<empty>")
-            for name, m in model.named_modules()
-            if isinstance(m, torch.nn.ModuleList)
-        ]
-        print(
-            f"\n🔎  get_model_layers DIAGNOSTIC — returning [] (no stacks detected)"
-            f"\n     input type:        {original_type}"
-            f"\n     unwrapped PEFT:    {unwrapped} → now {type(model).__name__}"
-            f"\n     _no_split_modules: {sorted(no_split) if no_split else '<empty>'}"
-            f"\n     ModuleLists seen ({len(seen)}):",
-            flush=True,
-        )
-        for name, n, kind in seen:
-            print(f"       {name or '<root>'}  ({n} x {kind})", flush=True)
-    return []
+    return [(best, type(best[0]).__name__)] if best is not None else []
 
 
 
@@ -842,10 +814,17 @@ def apply_fsdp(local_rank, rank, device, args):
                 peft_seed_subfolder = f"{peft_seed_folder}/fsdp/{'dcp_api' if args.dcp_api else 'dtensor_api'}/{peft_seed_timestamp}"
                 peft_seed_path = f"{peft_seed_subfolder}/model_state_dict.pt"
 
+                # Do NOT pass tie_word_embeddings=False to from_pretrained.
+                # Llama-style checkpoints only contain embed_tokens.weight and rely on
+                # the tying to populate lm_head.weight. If we untie at construction
+                # time, lm_head.weight has nothing to load and stays at random init
+                # (you'll see "lm_head.weight | MISSING" in the load report and the
+                # model can never learn — loss stuck at ln(vocab_size)).
+                # We load tied, then clone+untie below so the saved seed has both
+                # weights populated and FSDP can shard them independently.
                 pretrained_kwargs = {
                     "token": HF_TOKEN,
                     "low_cpu_mem_usage": True,
-                    "tie_word_embeddings": False,
                 }
                 if quant_cfg is not None:
                     pretrained_kwargs["quantization_config"] = quant_cfg
@@ -1101,12 +1080,14 @@ def apply_fsdp(local_rank, rank, device, args):
                     import transformers as _transformers
                     print_on_rank_0(rank, "Downloading model from HuggingFace — progress shown below:", "💾")
                     _transformers.logging.enable_progress_bar()   # restore bars for the download
+                    # See PATH 2 comment: do NOT pass tie_word_embeddings=False to
+                    # from_pretrained — it leaves lm_head.weight at random init for
+                    # tied-weight checkpoints (Llama-style). Load tied, clone+untie below.
                     seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                         args.model_name,
                         token=HF_TOKEN,
                         dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
                         low_cpu_mem_usage=True,
-                        tie_word_embeddings=False,
                     )
                     _transformers.logging.disable_progress_bar()  # re-suppress for the rest of training
                     seed_model.config.tie_word_embeddings = False
