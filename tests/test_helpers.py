@@ -91,38 +91,109 @@ def test_checkpoint_run_tag_quant_only_8bit():
 
 # ------------------------------------------------------------------
 # get_model_layers — duck-typed model mocks
+#
+# Returns list[(ModuleList, layer_type_name)] — one entry per stack.
+# Multi-tower models (T5, BART, CLIP, VLM) return multiple stacks.
 # ------------------------------------------------------------------
 
-def _make_layers(n=4):
-    return [MagicMock() for _ in range(n)]
+def _make_module_list(n=4):
+    return torch.nn.ModuleList([torch.nn.Linear(2, 2) for _ in range(n)])
 
 
 def test_get_model_layers_decoder_style():
-    model = MagicMock()
-    del model.base_model  # ensure no PeftModel unwrap
-    model.model.decoder.layers = _make_layers(4)
-    layers, kind = get_model_layers(model)
-    assert len(layers) == 4  # type: ignore
-    # CHANGED: was assert kind == "decoder".
-    # Reason: get_model_layers returns type(layers[0]).__name__ — the actual class name
-    # of the first layer object. For MagicMock layers that is "MagicMock", not a
-    # hardcoded category string. On a real model it would be e.g. "OPTDecoderLayer".
-    # Old code: assert kind == "decoder"
-    assert kind == type(model.model.decoder.layers[0]).__name__
+    """A model exposing model.decoder.layers (OPT-style) should be detected via the
+    known-attribute-paths fallback."""
+    class Decoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = _make_module_list(4)
+    class Inner(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.decoder = Decoder()
+    class Outer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = Inner()
+    stacks = get_model_layers(Outer())
+    assert len(stacks) == 1
+    layers, kind = stacks[0]
+    assert len(layers) == 4
+    assert kind == "Linear"
 
 
 def test_get_model_layers_generic_layers():
-    model = MagicMock(spec=[])  # no attributes at all
-    model.layers = _make_layers(3)
-    layers, kind = get_model_layers(model)
-    assert len(layers) == 3  # type: ignore
-    # CHANGED: was assert kind == "generic" — same reason as above.
-    # Old code: assert kind == "generic"
-    assert kind == type(model.layers[0]).__name__
+    """A flat .layers attribute should still be picked up by the known-paths fallback."""
+    class Flat(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = _make_module_list(3)
+    stacks = get_model_layers(Flat())
+    assert len(stacks) == 1
+    layers, kind = stacks[0]
+    assert len(layers) == 3
+    assert kind == "Linear"
 
 
-def test_get_model_layers_returns_none_when_unknown():
-    model = MagicMock(spec=[])  # no matching attrs
-    layers, kind = get_model_layers(model)
-    assert layers is None
-    assert kind is None
+def test_get_model_layers_returns_empty_when_unknown():
+    """Model with no ModuleList anywhere returns an empty list."""
+    class Empty(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = torch.nn.Linear(2, 2)
+    assert get_model_layers(Empty()) == []
+
+
+def test_get_model_layers_no_split_modules_hint():
+    """When _no_split_modules is populated, the function must walk the tree and
+    collect every ModuleList whose elements match. This unlocks Llama-style
+    `model.model.layers` that the old implementation missed."""
+    class Block(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(2, 2)
+    class Backbone(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = torch.nn.ModuleList([Block() for _ in range(5)])
+    class Wrapper(torch.nn.Module):
+        _no_split_modules = ["Block"]
+        def __init__(self):
+            super().__init__()
+            self.model = Backbone()
+    stacks = get_model_layers(Wrapper())
+    assert len(stacks) == 1
+    layers, kind = stacks[0]
+    assert len(layers) == 5
+    assert kind == "Block"
+
+
+def test_get_model_layers_multi_tower():
+    """Multi-tower models (T5/BART/CLIP/VLM) should return one stack per tower."""
+    class EncBlock(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(2, 2)
+    class DecBlock(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(2, 2)
+    class Encoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.block = torch.nn.ModuleList([EncBlock() for _ in range(3)])
+    class Decoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.block = torch.nn.ModuleList([DecBlock() for _ in range(2)])
+    class TwoTower(torch.nn.Module):
+        _no_split_modules = ["EncBlock", "DecBlock"]
+        def __init__(self):
+            super().__init__()
+            self.encoder = Encoder()
+            self.decoder = Decoder()
+    stacks = get_model_layers(TwoTower())
+    kinds = sorted(k for _, k in stacks)
+    assert kinds == ["DecBlock", "EncBlock"]
+    sizes = {k: len(layers) for layers, k in stacks}
+    assert sizes == {"EncBlock": 3, "DecBlock": 2}

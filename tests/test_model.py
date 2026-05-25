@@ -59,8 +59,9 @@ def test_transformer_forward_shorter_sequence():
 
 def test_get_model_layers_finds_transformer_layers():
     model = Transformer(TINY)
-    layers, kind = get_model_layers(model)
-    assert layers is not None
+    stacks = get_model_layers(model)
+    assert len(stacks) == 1
+    layers, _ = stacks[0]
     assert len(layers) == TINY.n_layers
 
 

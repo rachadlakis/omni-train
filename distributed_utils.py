@@ -192,76 +192,144 @@ def cleanup():
 
 
 
-def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
-    """Configures the model layers to prefetch activations for the next N layers during the forward pass."""
-    try:
-        layers = None
-        if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
-            layers = model.model.decoder.layers
-        elif hasattr(model, 'model') and hasattr(model.model, 'encoder') and hasattr(model.model.encoder, 'layers'):
-            layers = model.model.encoder.layers
-        elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
-            layers = model.transformer.h
-        elif hasattr(model, 'layers'):
-            layers = model.layers
 
-        if layers is None:
+1# Known nested attribute paths that hold a ModuleList of transformer blocks.
+# Used as the second-tier fallback in get_model_layers() when the HF
+# _no_split_modules hint is empty (e.g. YOLOS).
+_KNOWN_LAYER_PATHS = (
+    "model.decoder.layers",          # OPT, BART decoder
+    "model.encoder.layers",          # BART encoder
+    "model.layers",                  # Llama / Mistral / Qwen / Gemma / DeepSeek / Phi
+    "decoder.layers",
+    "encoder.layers",
+    "encoder.layer",                 # BERT (singular)
+    "transformer.h",                 # GPT-2
+    "vit.encoder.layer",             # ViT, YOLOS
+    "bert.encoder.layer",            # BERT (when wrapped)
+    "language_model.model.layers",   # LLaVA (language tower)
+    "layers",                        # custom transformers
+)
+
+
+def get_model_layers(model):
+    """Detect transformer-block stacks for per-layer FSDP sharding.
+
+    Returns list[(ModuleList, layer_type_name)] — one entry per stack.
+    Multi-tower models (T5, BART, CLIP, VLMs) return multiple stacks.
+    Returns [] when no shardable stack can be detected.
+
+    Detection order:
+      1. HF '_no_split_modules' hint — reliable across all HF model families;
+         naturally supports multi-tower architectures.
+      2. Known attribute paths — covers models with empty _no_split_modules
+         (notably YOLOS) and the patterns the previous implementation used.
+      3. Largest ModuleList by parameter count — last-resort heuristic for
+         truly unknown architectures.
+    """
+    original_type = type(model).__name__
+    unwrapped = False
+    # Unwrap PeftModel safely if present
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        model = model.base_model.model
+        unwrapped = True
+
+    # 1) HF _no_split_modules
+    no_split = set(getattr(model, "_no_split_modules", None) or [])
+    if no_split:
+        stacks = []
+        for module in model.modules():
+            if (
+                isinstance(module, torch.nn.ModuleList)
+                and len(module) > 0
+                and type(module[0]).__name__ in no_split
+            ):
+                stacks.append((module, type(module[0]).__name__))
+        if stacks:
+            return stacks
+
+    # 2) Known attribute paths
+    for path in _KNOWN_LAYER_PATHS:
+        target = model
+        ok = True
+        for part in path.split("."):
+            if not hasattr(target, part):
+                ok = False
+                break
+            target = getattr(target, part)
+        if ok and isinstance(target, torch.nn.ModuleList) and len(target) > 0:
+            return [(target, type(target[0]).__name__)]
+
+    # 3) Heuristic: largest ModuleList by parameter count
+    best, best_params = None, 0
+    for m in model.modules():
+        if isinstance(m, torch.nn.ModuleList) and len(m) > 1:
+            params = sum(p.numel() for p in m.parameters())
+            if params > best_params:
+                best, best_params = m, params
+    if best is not None:
+        return [(best, type(best[0]).__name__)]
+
+    # Detection failed — emit a one-shot diagnostic on rank 0 so the user can see
+    # what was actually inspected. Surveys every ModuleList in the (unwrapped) tree.
+    try:
+        _rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+    except Exception:
+        _rank = 0
+    if _rank == 0:
+        seen = [
+            (name, len(m), type(m[0]).__name__ if len(m) else "<empty>")
+            for name, m in model.named_modules()
+            if isinstance(m, torch.nn.ModuleList)
+        ]
+        print(
+            f"\n🔎  get_model_layers DIAGNOSTIC — returning [] (no stacks detected)"
+            f"\n     input type:        {original_type}"
+            f"\n     unwrapped PEFT:    {unwrapped} → now {type(model).__name__}"
+            f"\n     _no_split_modules: {sorted(no_split) if no_split else '<empty>'}"
+            f"\n     ModuleLists seen ({len(seen)}):",
+            flush=True,
+        )
+        for name, n, kind in seen:
+            print(f"       {name or '<root>'}  ({n} x {kind})", flush=True)
+    return []
+
+
+
+def set_modules_to_forward_prefetch(model, num_to_forward_prefetch):
+    """Configures each transformer stack to prefetch the next N layers in forward."""
+    try:
+        stacks = get_model_layers(model)
+        if not stacks:
             print("Warning: Could not find layers for prefetching")
             return
-        for i, layer in enumerate(layers):
-            if i >= len(layers) - num_to_forward_prefetch:
-                break
-            layers_to_prefetch = [layers[i + j] for j in range(1, num_to_forward_prefetch + 1)]
-            if hasattr(layer, 'set_modules_to_forward_prefetch'):
-                layer.set_modules_to_forward_prefetch(layers_to_prefetch)
+        for layers, _ in stacks:
+            for i, layer in enumerate(layers):
+                if i >= len(layers) - num_to_forward_prefetch:
+                    break
+                layers_to_prefetch = [layers[i + j] for j in range(1, num_to_forward_prefetch + 1)]
+                if hasattr(layer, 'set_modules_to_forward_prefetch'):
+                    layer.set_modules_to_forward_prefetch(layers_to_prefetch) #type: ignore
     except Exception as e:
         print(f"❌ Failed to set forward prefetch: {e}")
         raise
 
 def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
-    """Configures the model layers to prefetch activations for the previous N layers during the backward pass."""
+    """Configures each transformer stack to prefetch the previous N layers in backward."""
     try:
-        layers = None
-        if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
-            layers = model.model.decoder.layers
-        elif hasattr(model, 'model') and hasattr(model.model, 'encoder') and hasattr(model.model.encoder, 'layers'):
-            layers = model.model.encoder.layers
-        elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
-            layers = model.transformer.h
-        elif hasattr(model, 'layers'):
-            layers = model.layers
-
-        if layers is None:
+        stacks = get_model_layers(model)
+        if not stacks:
             print("Warning: Could not find layers for prefetching")
             return
-
-        for i, layer in enumerate(layers):
-            if i < num_to_backward_prefetch:
-                continue
-            layers_to_prefetch = [layers[i - j] for j in range(1, num_to_backward_prefetch + 1)]
-            if hasattr(layer, 'set_modules_to_backward_prefetch'):
-                layer.set_modules_to_backward_prefetch(layers_to_prefetch)
+        for layers, _ in stacks:
+            for i, layer in enumerate(layers):
+                if i < num_to_backward_prefetch:
+                    continue
+                layers_to_prefetch = [layers[i - j] for j in range(1, num_to_backward_prefetch + 1)]
+                if hasattr(layer, 'set_modules_to_backward_prefetch'):
+                    layer.set_modules_to_backward_prefetch(layers_to_prefetch) #type: ignore
     except Exception as e:
         print(f"❌ Failed to set backward prefetch: {e}")
         raise
-    
-def get_model_layers(model):
-
-    """Returns (layers, layer_type_name) or (None, None) if not found.""" 
-    # Unwrap PeftModel safely if present
-    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-        model = model.base_model.model
-        
-    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
-        return model.model.decoder.layers, type(model.model.decoder.layers[0]).__name__
-    elif hasattr(model, 'model') and hasattr(model.model, 'encoder') and hasattr(model.model.encoder, 'layers'):
-        return model.model.encoder.layers, type(model.model.encoder.layers[0]).__name__
-    elif hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
-        return model.transformer.h, type(model.transformer.h[0]).__name__
-    elif hasattr(model, 'layers'):
-        return model.layers, type(model.layers[0]).__name__
-    
-    return None, None
 
 
 def _dtype_from_name(dtype_name: str):
@@ -874,12 +942,15 @@ def apply_fsdp(local_rank, rank, device, args):
             elif args.mixed_precision and args.quantization_enabled:
                 print_on_rank_0(rank, "Mixed precision policy skipped for quantized base; using quantization compute dtype", "ℹ️")
 
-            layers, layer_type = get_model_layers(model)
-            if layers is not None:
-                print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers (layer-by-layer)...", "🔀")
-                for layer in layers:
-                    layer.to(device)                    # one block on GPU (~total / num_layers bytes)
-                    fully_shard(layer, **fsdp_kwargs)   # shard immediately → rank holds 1/N of block
+            stacks = get_model_layers(model)
+            if stacks:
+                total_layers = sum(len(layers) for layers, _ in stacks)
+                summary = ", ".join(f"{len(layers)}x{ltype}" for layers, ltype in stacks)
+                print_on_rank_0(rank, f"Sharding {total_layers} layer(s) across {len(stacks)} stack(s) (layer-by-layer): {summary}", "🔀")
+                for layers, _ in stacks:
+                    for layer in layers:
+                        layer.to(device)                    # one block on GPU (~total / num_layers bytes)
+                        fully_shard(layer, **fsdp_kwargs)   # shard immediately → rank holds 1/N of block
             else:
                 print_on_rank_0(rank, "No individual layers found — materializing full model on GPU (OOM risk for large models)", "⚠️")
                 model = model.to(device)
@@ -895,7 +966,7 @@ def apply_fsdp(local_rank, rank, device, args):
             inspect_model(model)
             print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
-            if args.explicit_prefetching and layers is not None:
+            if args.explicit_prefetching and stacks:
                 print_on_rank_0(rank, f"Setting up explicit prefetching: forward={args.forward_prefetch}, backward={args.backward_prefetch}", "🔄")
                 set_modules_to_forward_prefetch(model, args.forward_prefetch)
                 set_modules_to_backward_prefetch(model, args.backward_prefetch)
@@ -961,11 +1032,14 @@ def apply_fsdp(local_rank, rank, device, args):
 
         # fsdp_kwargs["mesh"] = DeviceMesh("cuda", mesh_shape=(dist.get_world_size(),), mesh_dim_names=["data_parallel"]) if torch.cuda.is_available() else None
         
-        layers, layer_type = get_model_layers(model)
-        if layers is not None:
-            print_on_rank_0(rank, f"Sharding {len(layers)} {layer_type} layers...", "🔀")
-            for layer in layers:
-                fully_shard(layer, **fsdp_kwargs)
+        stacks = get_model_layers(model)
+        if stacks:
+            total_layers = sum(len(layers) for layers, _ in stacks)
+            summary = ", ".join(f"{len(layers)}x{ltype}" for layers, ltype in stacks)
+            print_on_rank_0(rank, f"Sharding {total_layers} layer(s) across {len(stacks)} stack(s): {summary}", "🔀")
+            for layers, _ in stacks:
+                for layer in layers:
+                    fully_shard(layer, **fsdp_kwargs)
         else:
             print_on_rank_0(rank, "No individual layers found, sharding root model only", "⚠️")
 
@@ -974,7 +1048,7 @@ def apply_fsdp(local_rank, rank, device, args):
         inspect_model(model)
         print_on_rank_0(rank, "FSDP sharding applied ✓. Model inspected ✓", "✅")
 
-        if args.explicit_prefetching and layers is not None:
+        if args.explicit_prefetching and stacks:
             print_on_rank_0(rank, f"Setting up explicit prefetching: forward={args.forward_prefetch}, backward={args.backward_prefetch}", "🔄")
             set_modules_to_forward_prefetch(model, args.forward_prefetch)
             set_modules_to_backward_prefetch(model, args.backward_prefetch)
