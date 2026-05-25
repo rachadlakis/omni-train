@@ -211,5 +211,5 @@ Pre-built configs cover common scenarios. Use them as starting points:
 
 - Rank 0 prints all progress banners and per-step loss bars
 - Other ranks print only via `print_on_all_ranks()` (with `[host|rank|local_rank|device]` prefix)
-- W&B logging is off by default; enable with `wandb.wandb_log_with_train: true` (MLflow support was removed; see commented placeholder in `config.yaml`)
+- W&B logging is off by default; enable with `wandb.wandb_log_with_train: true`
 - After training completes in a terminal (not UI), a loss curve is plotted inline using `plotext`

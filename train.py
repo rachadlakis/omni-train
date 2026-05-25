@@ -247,6 +247,7 @@ def main(args):
             max_length=args.max_length, 
             model_type=args.model_type,
             vocab_size=getattr(args, "custom_vocab_size", None),
+            custom_max_seq_len=getattr(args, "custom_max_seq_len", None),
         )
 
         if hasattr(dataloader, "__len__"):

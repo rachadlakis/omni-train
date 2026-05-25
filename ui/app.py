@@ -510,6 +510,117 @@ def _load_mini_utils_module(project_root: Path):
 
 
 
+@app.get("/api/checkpoints")
+async def list_checkpoints(dir: str = "checkpoints"):
+    """List checkpoints under the configured checkpoint directory.
+
+    Layout (per save_checkpoint in distributed_utils.py):
+      <dir>/solo/<ts>[<tag>].pt                            (file)
+      <dir>/ddp/<ts>[<tag>].pt                             (file)
+      <dir>/fsdp/dcp_api/<ts>[<tag>]/                      (dir)
+      <dir>/fsdp/dtensor_api/<ts>[<tag>]/                  (dir)
+    """
+    from datetime import datetime
+    import re
+
+    # Resolve relative paths against PROJECT_ROOT; refuse to escape it.
+    raw = Path(dir)
+    ckpt_root = (raw if raw.is_absolute() else (PROJECT_ROOT / raw)).resolve()
+    try:
+        ckpt_root.relative_to(PROJECT_ROOT)
+    except ValueError:
+        raise HTTPException(400, f"checkpoint_dir must be under project root: {dir}")
+
+    def _dir_size_bytes(p: Path) -> int:
+        return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+    def _parse_ts_tag(stem: str):
+        m = re.match(r"^(\d+)(__.+)?$", stem)
+        if not m:
+            return None, ""
+        return int(m.group(1)), (m.group(2) or "")
+
+    entries: list[dict] = []
+    scan_specs = [
+        ("solo",         ckpt_root / "solo",              "file"),
+        ("ddp",          ckpt_root / "ddp",               "file"),
+        ("fsdp-dcp",     ckpt_root / "fsdp" / "dcp_api",  "dir"),
+        ("fsdp-dtensor", ckpt_root / "fsdp" / "dtensor_api", "dir"),
+    ]
+    for strategy, sub, kind in scan_specs:
+        if not sub.exists():
+            continue
+        for child in sub.iterdir():
+            if kind == "file" and child.is_file() and child.suffix == ".pt":
+                ts, tag = _parse_ts_tag(child.stem)
+                size = child.stat().st_size
+            elif kind == "dir" and child.is_dir():
+                ts, tag = _parse_ts_tag(child.name)
+                size = _dir_size_bytes(child)
+            else:
+                continue
+            mtime = child.stat().st_mtime
+            entries.append({
+                "strategy": strategy,
+                "path": str(child.relative_to(PROJECT_ROOT)),
+                "abs_path": str(child),
+                "is_dir": child.is_dir(),
+                "size_bytes": size,
+                "timestamp_ms": ts,
+                "tag": tag,
+                "mtime": mtime,
+                "mtime_iso": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
+            })
+
+    entries.sort(key=lambda e: e["mtime"], reverse=True)
+    return {
+        "base_dir": str(ckpt_root),
+        "base_dir_relative": str(ckpt_root.relative_to(PROJECT_ROOT)) if ckpt_root != PROJECT_ROOT else ".",
+        "exists": ckpt_root.exists(),
+        "count": len(entries),
+        "checkpoints": entries,
+    }
+
+
+@app.get("/api/browse")
+async def browse_dir(path: str = "."):
+    """List subdirectories at `path` for an in-UI folder picker. Restricted to PROJECT_ROOT."""
+    raw = Path(path)
+    target = (raw if raw.is_absolute() else (PROJECT_ROOT / raw)).resolve()
+    try:
+        target.relative_to(PROJECT_ROOT)
+    except ValueError:
+        raise HTTPException(400, f"path must be under project root: {path}")
+    if not target.exists():
+        raise HTTPException(404, f"path does not exist: {target}")
+    if not target.is_dir():
+        raise HTTPException(400, f"not a directory: {target}")
+
+    dirs = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+            if child.is_dir() and not child.name.startswith("."):
+                dirs.append({
+                    "name": child.name,
+                    "path": str(child.relative_to(PROJECT_ROOT)),
+                })
+    except PermissionError:
+        raise HTTPException(403, f"permission denied: {target}")
+
+    parent_rel = None
+    if target != PROJECT_ROOT:
+        parent_rel = str(target.parent.relative_to(PROJECT_ROOT)) or "."
+
+    rel = str(target.relative_to(PROJECT_ROOT)) or "."
+    return {
+        "path": rel,
+        "abs_path": str(target),
+        "parent": parent_rel,
+        "is_root": target == PROJECT_ROOT,
+        "dirs": dirs,
+    }
+
+
 @app.post("/api/estimate-time")
 async def api_estimate_training_time(payload: ConfigPayload):
     """
@@ -654,7 +765,7 @@ async def api_estimate_training_time(payload: ConfigPayload):
 
 @app.post("/api/fsdp-check")
 async def fsdp_check(payload: ConfigPayload):
-    """Check if FSDP is needed based on estimated VRAM vs available GPU memory."""
+    """Check if distributed training (FSDP / 3D parallelism) is needed based on estimated VRAM vs available GPU memory."""
     config = payload.config
     model_cfg = config.get("model", {})
     training_cfg = config.get("training", {})
@@ -755,28 +866,28 @@ async def fsdp_check(payload: ConfigPayload):
         reason = "No GPU detected. Cannot compare VRAM requirements."
     elif total_vram_needed <= gpu_memory_gb:
         fsdp_needed = False
-        verdict = "FSDP not needed"
+        verdict = "Distributed training not needed"
         reason = (
             f"Estimated VRAM ({total_vram_needed:.1f} GB) fits within a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}). DDP or Solo is sufficient."
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}). Solo or DDP is sufficient."
         )
     elif fsdp_per_gpu_gb <= gpu_memory_gb:
         fsdp_needed = True
-        verdict = "FSDP recommended"
+        verdict = "Distributed training recommended"
         reason = (
             f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}), but FSDP across {num_gpus} GPU(s) "
-            f"reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}), but sharding across {num_gpus} GPU(s) "
+            f"(FSDP or 3D parallelism) reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
         )
     else:
         fsdp_needed = True
         gpus_needed = math.ceil(shardable_gb / (gpu_memory_gb - vram["activations_gb"])) if gpu_memory_gb > vram["activations_gb"] else None
         gpus_hint = f" Try increasing GPU count to ~{gpus_needed}." if gpus_needed else ""
-        verdict = "FSDP needed — more GPUs required"
+        verdict = "Distributed training needed — more GPUs required"
         reason = (
             f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}), and FSDP across {num_gpus} GPU(s) "
-            f"still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
+            f"({gpu_memory_gb:.1f} GB on {gpu_name}), and sharding across {num_gpus} GPU(s) "
+            f"(FSDP or 3D parallelism) still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
         )
 
     return {

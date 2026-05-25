@@ -14,7 +14,11 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
         # ---------------------------------------------------------------
         if model_type == "custom_transformer":
             vocab_size = int(kwargs.get("vocab_size") or 8)
-            seq_len    = max(2, int(max_length))
+            # Toy model has no tokenizer; couple seq_len to the model's own
+            # max_seq_len so it can't exceed the positional embedding table.
+            custom_max_seq_len = kwargs.get("custom_max_seq_len")
+            seq_len_src = custom_max_seq_len if custom_max_seq_len else max_length
+            seq_len    = max(2, int(seq_len_src))
             n_samples  = 2000  # fixed pool of synthetic sequences
             print_on_rank_0(rank, f"Generating synthetic data | samples={n_samples} seq_len={seq_len} vocab_size={vocab_size}", "🎲")
             data = torch.randint(0, vocab_size, (n_samples, seq_len))

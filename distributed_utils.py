@@ -193,7 +193,7 @@ def cleanup():
 
 
 
-1# Known nested attribute paths that hold a ModuleList of transformer blocks.
+# Known nested attribute paths that hold a ModuleList of transformer blocks.
 # Used as the second-tier fallback in get_model_layers() when the HF
 # _no_split_modules hint is empty (e.g. YOLOS).
 _KNOWN_LAYER_PATHS = (
@@ -222,7 +222,7 @@ def get_model_layers(model):
       1. HF '_no_split_modules' hint — reliable across all HF model families;
          naturally supports multi-tower architectures.
       2. Known attribute paths — covers models with empty _no_split_modules
-         (notably YOLOS) and the patterns the previous implementation used.
+         (notably YOLOS)
       3. Largest ModuleList by parameter count — last-resort heuristic for
          truly unknown architectures.
     """

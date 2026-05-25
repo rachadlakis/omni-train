@@ -474,7 +474,10 @@
           </div>
           <div class="form-group full">
             <label>Checkpoint Dir <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Directory to save model checkpoints">?</span></label>
-            <input type="text" id="f-checkpoint-dir" placeholder="e.g., ./checkpoints or /path/to/save">
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="text" id="f-checkpoint-dir" placeholder="e.g., ./checkpoints or /path/to/save" style="flex:1;">
+              <button type="button" class="btn btn-secondary" onclick="openCheckpointsPage()" title="View saved checkpoints in this directory">💾 View Saved</button>
+            </div>
           </div>
         </div>
       </div>
@@ -498,25 +501,6 @@
           <div class="form-group" id="fg-wandb-run" style="display:none;">
             <label>Run Name <span class="tooltip" data-tip="Optional human-readable name for this run">?</span></label>
             <input type="text" id="f-wandb-run" placeholder="e.g. llama-lora-run-1 (optional)">
-          </div>
-        </div>
-      </div>
-
-      <!-- MLflow / Logging Section -->
-      <div class="form-section">
-        <h3><span class="icon" style="background:var(--orange-dim);color:var(--orange);">📊</span> Logging (MLflow) <span class="section-tooltip" data-tip="MLflow experiment tracking. Enable to log metrics and params to a self-hosted or remote MLflow tracking server.">?</span></h3>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>MLflow Logging <span class="tooltip" data-tip="Log metrics to MLflow during training">?</span></label>
-            <label><input type="checkbox" id="f-mlflow-enabled" onchange="onMlflowChange()"> Enable MLflow Logging</label>
-          </div>
-          <div class="form-group" id="fg-mlflow-uri" style="display:none;">
-            <label>Tracking URI <span class="required-star" aria-hidden="true">*</span></label>
-            <input type="text" id="f-mlflow-uri" placeholder="e.g. http://localhost:5000">
-          </div>
-          <div class="form-group" id="fg-mlflow-experiment" style="display:none;">
-            <label>Experiment Name <span class="tooltip" data-tip="MLflow experiment to log this run under">?</span></label>
-            <input type="text" id="f-mlflow-experiment" placeholder="e.g. dist-train-experiment">
           </div>
         </div>
       </div>

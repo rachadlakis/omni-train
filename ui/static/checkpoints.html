@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkpoints - OMNI-Train</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  .ckpt-page { padding: 0 24px 48px; max-width: 1200px; margin: 0 auto; }
+  .ckpt-toolbar { display: flex; align-items: center; gap: 12px; margin: 16px 0 12px; flex-wrap: wrap; }
+  .ckpt-dir-input { flex: 1; min-width: 260px; padding: 8px 12px; font-family: var(--mono, monospace); }
+  .ckpt-meta { color: var(--text-muted); font-size: 0.9rem; }
+  .ckpt-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.92rem; }
+  .ckpt-table th, .ckpt-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); }
+  .ckpt-table th { font-weight: 600; color: var(--text-muted); }
+  .ckpt-table td.path { font-family: var(--mono, monospace); word-break: break-all; }
+  .ckpt-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; }
+  .ckpt-pill.solo  { background: var(--green-dim, rgba(52,199,89,0.18));  color: var(--green, #34c759); }
+  .ckpt-pill.ddp   { background: var(--blue-dim, rgba(0,122,255,0.18));   color: var(--blue, #007aff); }
+  .ckpt-pill.fsdp  { background: var(--purple-dim, rgba(175,82,222,0.18));color: var(--purple, #af52de); }
+  .ckpt-empty { padding: 32px; text-align: center; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 10px; margin-top: 16px; }
+  .ckpt-tag { color: var(--orange, #ff9500); font-family: var(--mono, monospace); font-size: 0.85rem; }
+  .ckpt-close {
+    position: fixed; top: 16px; right: 20px; z-index: 100;
+    background: var(--surface2, rgba(0,0,0,0.4)); color: var(--text);
+    border: 1px solid var(--border, rgba(255,255,255,0.12));
+    width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+    font-size: 1.2rem; line-height: 1; display: flex; align-items: center; justify-content: center;
+  }
+  .ckpt-close:hover { background: var(--surface3, rgba(255,255,255,0.12)); }
+
+  /* Folder browser modal */
+  .browse-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200;
+    display: none; align-items: center; justify-content: center;
+  }
+  .browse-overlay.open { display: flex; }
+  .browse-modal {
+    background: var(--surface, #1a1a1f); border: 1px solid var(--border, rgba(255,255,255,0.12));
+    border-radius: 12px; width: min(640px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  }
+  .browse-header { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .browse-header h3 { margin: 0; font-size: 1.05rem; }
+  .browse-path { padding: 10px 18px; background: var(--surface2, rgba(255,255,255,0.04)); font-family: var(--mono, monospace); font-size: 0.88rem; word-break: break-all; color: var(--text-muted); }
+  .browse-list { flex: 1; overflow: auto; padding: 6px 8px; }
+  .browse-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; user-select: none; }
+  .browse-item:hover { background: var(--surface3, rgba(255,255,255,0.08)); }
+  .browse-item .icon { font-size: 1rem; opacity: 0.85; }
+  .browse-empty { padding: 18px; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
+  .browse-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<!-- Theme Toggle Button -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+  <span class="icon-moon">🌙</span>
+  <span class="icon-sun">☀️</span>
+  <span class="theme-label-dark">Dark</span>
+  <span class="theme-label-light">Light</span>
+</button>
+
+<!-- Close (×) — returns to config page -->
+<button class="ckpt-close" onclick="closeCheckpointsPage()" title="Close (back to Custom Setup)" aria-label="Close">&times;</button>
+
+<div class="env-page">
+  <div class="yaml-header">
+    <div class="yaml-header-left">
+      <a href="/static/config.html" class="btn-back">&larr; Back</a>
+      <h1><span>OMNI</span>-Train</h1>
+    </div>
+  </div>
+
+  <div class="ckpt-page">
+    <div class="form-section">
+      <h3><span class="icon" style="background: var(--purple-dim, rgba(175,82,222,0.18)); color: var(--purple, #af52de);">💾</span> Saved Checkpoints</h3>
+
+      <div class="ckpt-toolbar">
+        <label for="ckpt-dir-input" style="white-space:nowrap;">Checkpoint Dir:</label>
+        <input id="ckpt-dir-input" class="ckpt-dir-input" type="text" value="checkpoints" placeholder="checkpoints" onkeydown="if(event.key==='Enter'){loadCheckpoints();}">
+        <button class="btn btn-secondary" onclick="openBrowseModal()" title="Browse for a folder">📁 Browse…</button>
+        <button class="btn btn-secondary" onclick="loadCheckpoints()" title="Re-scan the directory">🔄 Refresh</button>
+      </div>
+
+      <div class="ckpt-meta" id="ckpt-meta">Loading…</div>
+
+      <div id="ckpt-list-wrap">
+        <table class="ckpt-table" id="ckpt-table" style="display:none;">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Path</th>
+              <th>Saved</th>
+              <th>Size</th>
+              <th>Tag</th>
+            </tr>
+          </thead>
+          <tbody id="ckpt-table-body"></tbody>
+        </table>
+        <div class="ckpt-empty" id="ckpt-empty" style="display:none;">
+          No checkpoints found under this directory.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Folder Browser Modal -->
+<div class="browse-overlay" id="browse-overlay" onclick="if(event.target===this) closeBrowseModal();">
+  <div class="browse-modal" role="dialog" aria-modal="true">
+    <div class="browse-header">
+      <h3>📁 Select a Folder</h3>
+      <button class="ckpt-close" style="position:static; width:28px; height:28px; font-size:1rem;" onclick="closeBrowseModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="browse-path" id="browse-path">/</div>
+    <div class="browse-list" id="browse-list"></div>
+    <div class="browse-footer">
+      <button class="btn btn-secondary" onclick="closeBrowseModal()">Cancel</button>
+      <button class="btn btn-primary" id="browse-select-btn" onclick="selectBrowsedFolder()">Use this folder</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' B';
+  const units = ['KB','MB','GB','TB'];
+  let v = n / 1024;
+  for (const u of units) {
+    if (v < 1024) return v.toFixed(v < 10 ? 2 : 1) + ' ' + u;
+    v /= 1024;
+  }
+  return v.toFixed(1) + ' PB';
+}
+
+function strategyPillClass(s) {
+  if (s === 'solo') return 'ckpt-pill solo';
+  if (s === 'ddp')  return 'ckpt-pill ddp';
+  return 'ckpt-pill fsdp';
+}
+
+async function loadCheckpoints() {
+  const dir = document.getElementById('ckpt-dir-input').value || 'checkpoints';
+  const meta = document.getElementById('ckpt-meta');
+  const table = document.getElementById('ckpt-table');
+  const tbody = document.getElementById('ckpt-table-body');
+  const empty = document.getElementById('ckpt-empty');
+
+  meta.textContent = 'Loading…';
+  table.style.display = 'none';
+  empty.style.display = 'none';
+  tbody.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/checkpoints?dir=' + encodeURIComponent(dir));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      meta.textContent = '❌ ' + (err.detail || ('Request failed: ' + res.status));
+      return;
+    }
+    const data = await res.json();
+    meta.innerHTML = `Scanning <code>${data.base_dir}</code> — found <strong>${data.count}</strong> checkpoint${data.count === 1 ? '' : 's'}` +
+      (data.exists ? '' : ' <span style="color:var(--orange);">(directory does not exist yet)</span>');
+
+    if (data.count === 0) {
+      empty.style.display = '';
+      return;
+    }
+
+    for (const c of data.checkpoints) {
+      const tr = document.createElement('tr');
+      const stratLabel = c.strategy === 'fsdp-dcp' ? 'FSDP (DCP)'
+                       : c.strategy === 'fsdp-dtensor' ? 'FSDP (DTensor)'
+                       : c.strategy.toUpperCase();
+      tr.innerHTML = `
+        <td><span class="${strategyPillClass(c.strategy.startsWith('fsdp') ? 'fsdp' : c.strategy)}">${stratLabel}</span></td>
+        <td class="path">${c.path}${c.is_dir ? '/' : ''}</td>
+        <td title="${c.mtime_iso}">${c.mtime_iso.replace('T', ' ')}</td>
+        <td>${fmtBytes(c.size_bytes)}</td>
+        <td>${c.tag ? `<span class="ckpt-tag">${c.tag}</span>` : '—'}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+    table.style.display = '';
+  } catch (e) {
+    meta.textContent = '❌ ' + (e.message || String(e));
+  }
+}
+
+// =========================================================================
+// In-UI folder browser
+// =========================================================================
+let browseCurrent = null;   // current relative path inside the modal
+
+async function openBrowseModal() {
+  const start = document.getElementById('ckpt-dir-input').value || '.';
+  document.getElementById('browse-overlay').classList.add('open');
+  await browseLoad(start);
+}
+
+function closeBrowseModal() {
+  document.getElementById('browse-overlay').classList.remove('open');
+}
+
+async function browseLoad(path) {
+  const pathEl = document.getElementById('browse-path');
+  const listEl = document.getElementById('browse-list');
+  pathEl.textContent = path + ' …';
+  listEl.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/browse?path=' + encodeURIComponent(path));
+    if (!res.ok) {
+      // If start path was invalid (e.g. doesn't exist), fall back to project root
+      if (path !== '.') return browseLoad('.');
+      const err = await res.json().catch(() => ({}));
+      pathEl.textContent = '❌ ' + (err.detail || res.status);
+      return;
+    }
+    const data = await res.json();
+    browseCurrent = data.path;
+    pathEl.innerHTML = '<span style="color:var(--text);">' + data.path + '</span><span style="color:var(--text-muted);"> &nbsp;·&nbsp; ' + data.abs_path + '</span>';
+
+    // Up entry (..) if not at root
+    if (!data.is_root && data.parent != null) {
+      const up = document.createElement('div');
+      up.className = 'browse-item';
+      up.innerHTML = '<span class="icon">⬆️</span><span>..</span>';
+      up.onclick = () => browseLoad(data.parent);
+      listEl.appendChild(up);
+    }
+
+    if (data.dirs.length === 0 && (data.is_root || !data.parent)) {
+      const empty = document.createElement('div');
+      empty.className = 'browse-empty';
+      empty.textContent = 'No subfolders here.';
+      listEl.appendChild(empty);
+    } else if (data.dirs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'browse-empty';
+      empty.textContent = 'No subfolders. Use "Use this folder" to select the current location.';
+      listEl.appendChild(empty);
+    }
+
+    for (const d of data.dirs) {
+      const item = document.createElement('div');
+      item.className = 'browse-item';
+      item.innerHTML = '<span class="icon">📁</span><span>' + d.name + '</span>';
+      item.onclick = () => browseLoad(d.path);
+      listEl.appendChild(item);
+    }
+  } catch (e) {
+    pathEl.textContent = '❌ ' + (e.message || String(e));
+  }
+}
+
+function selectBrowsedFolder() {
+  if (browseCurrent == null) return;
+  document.getElementById('ckpt-dir-input').value = browseCurrent;
+  closeBrowseModal();
+  loadCheckpoints();
+}
+
+function closeCheckpointsPage() {
+  // Prefer browser-history back so users return to wherever they came from;
+  // fall back to the config page if there's no history.
+  if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    window.location.href = '/static/config.html';
+  }
+}
+
+// Pre-fill from URL ?dir= if provided
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const dir = params.get('dir');
+  if (dir) document.getElementById('ckpt-dir-input').value = dir;
+  loadCheckpoints();
+})();
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

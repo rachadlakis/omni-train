@@ -63,11 +63,17 @@ wandb:
   wandb_entity: "dist-train"          ## your W&B entity (username or team). 
   wandb_project: "dist-train-project" ## your W&B project name
 
-MLFlow:
-  mlflow_log_with_train: true         ## whether to log training metrics to MLFlow. Options: true, false
-  mlflow_tracking_uri: "http://localhost:5000" ## your MLFlow tracking URI
-  mlflow_experiment_name: "dist-train-experiment" ## your MLFlow experiment name 
-  
+
+
+custom_transformer_args:
+  n_layers: null           ## number of transformer layers (required if model_type=custom_transformer)
+  vocab_size: null         ## vocabulary size (required if model_type=custom_transformer)
+  max_seq_len: null       ## maximum sequence length (required if model_type=custom_transformer)
+  dim: null               ## hidden dimension (required if model_type=custom_transformer)
+  n_heads: null           ## number of attention heads (required if model_type=custom_transformer)
+  dropout_p: null         ## dropout probability (required if model_type=custom_transformer)
+
+
 ## ------------------------------------ In progress  ------------------------------------ ##
 ## To add multi-dimensional parallelism (data parallelism, tensor parallelism and/or pipeline parallelism)
 multi_dimensional_parallelism:  

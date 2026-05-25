@@ -681,6 +681,13 @@ function closeGuidePage() {
   navigateTo('index.html');
 }
 
+function openCheckpointsPage() {
+  // Pass the currently-configured checkpoint dir so the page lists the right folder
+  const dir = (typeof getVal === 'function' ? getVal('f-checkpoint-dir') : '') || 'checkpoints';
+  const q = '?dir=' + encodeURIComponent(dir);
+  window.location.href = '/static/checkpoints.html' + q;
+}
+
 // =========================================================================
 // Form Logic (Config Page)
 // =========================================================================
@@ -835,12 +842,6 @@ function onWandbChange() {
   toggle('fg-wandb-project', !!enabled);
   toggle('fg-wandb-entity', !!enabled);
   toggle('fg-wandb-run', !!enabled);
-}
-
-function onMlflowChange() {
-  const enabled = document.getElementById('f-mlflow-enabled')?.checked;
-  toggle('fg-mlflow-uri', !!enabled);
-  toggle('fg-mlflow-experiment', !!enabled);
 }
 
 // =========================================================================
@@ -1608,14 +1609,6 @@ function applyConfigToForm(cfg) {
   setVal('f-wandb-entity', wandb.wandb_entity || '');
   setVal('f-wandb-run', wandb.wandb_run_name || '');
   onWandbChange();
-
-  // MLflow settings
-  const mlflow = cfg.mlflow || {};
-  const mlflowEl = document.getElementById('f-mlflow-enabled');
-  if (mlflowEl) mlflowEl.checked = !!(mlflow.mlflow_log_with_train);
-  setVal('f-mlflow-uri', mlflow.mlflow_tracking_uri || '');
-  setVal('f-mlflow-experiment', mlflow.mlflow_experiment_name || '');
-  onMlflowChange();
 }
 
 function buildConfigFromForm() {
@@ -1783,14 +1776,6 @@ function buildConfigFromForm() {
     wandb_project: getVal('f-wandb-project') || 'dist-train-project',
     wandb_entity: getVal('f-wandb-entity') || '',
     wandb_run_name: getVal('f-wandb-run') || '',
-  };
-
-  // MLflow logging
-  const mlflowEnabled = document.getElementById('f-mlflow-enabled')?.checked || false;
-  cfg.mlflow = {
-    mlflow_log_with_train: mlflowEnabled,
-    mlflow_tracking_uri: getVal('f-mlflow-uri') || 'http://localhost:5000',
-    mlflow_experiment_name: getVal('f-mlflow-experiment') || 'dist-train-experiment',
   };
 
   return cfg;
@@ -2030,7 +2015,7 @@ async function checkFsdpNeeded() {
     resultEl.style.display = 'block';
   } finally {
     btn.disabled = false;
-    btn.textContent = '🔍 Check if FSDP is needed';
+    btn.textContent = '🔍 Distributed Training needed?';
   }
 }
 
@@ -2328,12 +2313,6 @@ wandb:
   wandb_log_with_train: false        # Enable Weights & Biases logging
   wandb_entity: "dist-train-project"  # W&B entity (user or team)
   wandb_project: "dist-train-project" # W&B project name
-
-# ===================== LOGGING (MLflow) =====================
-MLFlow:
-  mlflow_log_with_train: false                       # Enable MLflow logging
-  mlflow_tracking_uri: "http://localhost:5000"       # MLflow tracking server URI
-  mlflow_experiment_name: "dist-train-experiment"    # MLflow experiment name
 `;
 }
 
@@ -2348,7 +2327,10 @@ function configToYaml(cfg) {
 
   const epochs = cfg.training?.epochs ?? 4;
   const batchSize = cfg.training?.batch_size ?? 32;
-  const maxLength = cfg.training?.max_length ?? cfg.data?.max_seq_len ?? 128;
+  // For custom_transformer, the toy model has no tokenizer — its positional embedding
+  // table caps seq_len at arch.max_seq_len, so the YAML's max_length must match it.
+  const customArch = (cfg.model?.type || '').toLowerCase() === 'custom_transformer' ? (cfg.model?.arch || {}) : null;
+  const maxLength = customArch?.max_seq_len ?? cfg.training?.max_length ?? cfg.data?.max_seq_len ?? 128;
   const learningRate = cfg.training?.learning_rate ?? cfg.training?.lr ?? '1e-5';
   const warmupSteps = cfg.training?.warmup_steps ?? 100;
   const weightDecay = cfg.training?.weight_decay ?? 0.01;
@@ -2397,10 +2379,6 @@ function configToYaml(cfg) {
   const wandbEntity = cfg.wandb?.wandb_entity || 'dist-train-project';
   const wandbProject = cfg.wandb?.wandb_project || 'dist-train-project';
 
-  const mlflowLog = cfg.mlflow?.mlflow_log_with_train ?? false;
-  const mlflowUri = cfg.mlflow?.mlflow_tracking_uri || 'http://localhost:5000';
-  const mlflowExperiment = cfg.mlflow?.mlflow_experiment_name || 'dist-train-experiment';
-
   const datasetNameLine = dataSource === 'local'
     ? `  path: ${dataPath}  # local image folder`
     : dataSource === 'url'
@@ -2437,8 +2415,10 @@ function configToYaml(cfg) {
     modelTypeExtras = `model_type: ${miniModelType}\n`;
   }
 
-  return `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl
-${modelTypeExtras}
+  const modelNameLine = customArch
+    ? ''
+    : `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl\n`;
+  return `${modelNameLine}${modelTypeExtras}
 dataset:
 ${datasetNameLine}
 ${datasetSubsetLine}  split: ${dataSplit}  ##
@@ -2497,12 +2477,15 @@ wandb:
   wandb_log_with_train: ${wandbLog}  ## whether to log training metrics to Weights & Biases
   wandb_entity: "${wandbEntity}"   ## your W&B entity (username or team)
   wandb_project: "${wandbProject}"  ## your W&B project name
-
-MLFlow:
-  mlflow_log_with_train: ${mlflowLog}  ## whether to log training metrics to MLflow
-  mlflow_tracking_uri: "${mlflowUri}"  ## MLflow tracking server URI
-  mlflow_experiment_name: "${mlflowExperiment}"  ## MLflow experiment name
-`;
+${customArch ? `
+custom_transformer_args:
+  n_layers: ${customArch.n_layers ?? 6}
+  vocab_size: ${customArch.vocab_size ?? 8192}
+  max_seq_len: ${customArch.max_seq_len ?? 512}
+  dim: ${customArch.dim ?? 512}
+  n_heads: ${customArch.n_heads ?? 8}
+  dropout_p: ${customArch.dropout_p ?? 0.1}
+` : ''}`;
 }
 
 function initYamlPage() {
@@ -3662,13 +3645,22 @@ function onLaunchModeChange() {
 }
 
 function onParallelismModeChange() {
+  const mode = getVal('f-parallelism-mode') || '2d';
+  const ppGroup = document.getElementById('fg-pp-size');
+  if (ppGroup) ppGroup.style.display = mode === '3d' ? '' : 'none';
+  // Force pp=1 in 2D mode so the mesh math and hint don't carry a stale value
+  if (mode !== '3d') {
+    const ppInput = document.getElementById('f-pp-size');
+    if (ppInput) ppInput.value = '1';
+  }
   onTopologyChange();
 }
 
 function onTopologyChange() {
+  const mode = getVal('f-parallelism-mode') || '2d';
   const dp = parseInt(getVal('f-dp-size')) || 1;
   const tp = parseInt(getVal('f-tp-size')) || 1;
-  const pp = parseInt(getVal('f-pp-size')) || 1;
+  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
   const total = dp * tp * pp;
 
   const gpuSelect = document.getElementById('f-gpu-count');
@@ -3683,9 +3675,10 @@ function onTopologyChange() {
 }
 
 function updateTopologyHint() {
+  const mode = getVal('f-parallelism-mode') || '2d';
   const dp = parseInt(getVal('f-dp-size')) || 1;
   const tp = parseInt(getVal('f-tp-size')) || 1;
-  const pp = parseInt(getVal('f-pp-size')) || 1;
+  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
   const total = dp * tp * pp;
   const selected = parseInt(getVal('f-gpu-count')) || 1;
 
@@ -3693,12 +3686,16 @@ function updateTopologyHint() {
   const hintText = document.getElementById('topology-hint-text');
   if (!hintEl || !hintText) return;
 
+  const meshStr = mode === '3d'
+    ? `${dp} DP × ${tp} TP × ${pp} PP`
+    : `${dp} DP × ${tp} TP`;
+
   hintEl.style.display = '';
   if (selected === total) {
-    hintText.textContent = `✓ Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs — matches GPU Count.`;
+    hintText.textContent = `✓ Mesh: ${meshStr} = ${total} GPUs — matches GPU Count.`;
     hintText.style.color = 'var(--green)';
   } else {
-    hintText.textContent = `⚠️ Mesh: ${dp} DP × ${tp} TP × ${pp} PP = ${total} GPUs, but GPU Count is set to ${selected}. Update one to match.`;
+    hintText.textContent = `⚠️ Mesh: ${meshStr} = ${total} GPUs, but GPU Count is set to ${selected}. Update one to match.`;
     hintText.style.color = 'var(--orange)';
   }
 }

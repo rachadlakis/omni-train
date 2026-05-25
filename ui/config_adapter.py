@@ -76,7 +76,10 @@ def _default_config(project_root: Path) -> dict[str, Any]:
 
 
 def is_mini_project_config(raw: dict[str, Any]) -> bool:
-    return "model_name" in raw and "strategy" in raw and "training" in raw
+    # custom_transformer omits model_name (model is built from scratch), so accept
+    # either model_name or model_type as the marker for the flat mini-project schema.
+    has_model_key = "model_name" in raw or "model_type" in raw
+    return has_model_key and "strategy" in raw and "training" in raw
 
 
 def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str, Any]:

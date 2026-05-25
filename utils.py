@@ -290,8 +290,8 @@ def build_args(cfg):
     # --------------------------------------------------
     # MODEL + DATASET
     # --------------------------------------------------
-    args.model_name = cfg["model_name"]
     args.model_type = str(cfg.get("model_type", "llm")).lower()
+    args.model_name = cfg.get("model_name") if args.model_type == "custom_transformer" else cfg["model_name"]
     if args.model_type not in {"llm", "seq2seq", "yolo", "vlm", "vision", "encoder", "custom_transformer"}:
         raise ValueError(f"Unsupported model_type={args.model_type}. Use one of: llm, seq2seq, yolo, vlm, vision, encoder, custom_transformer")
 
