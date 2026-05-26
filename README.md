@@ -330,7 +330,7 @@ python scripts/launch_slurm.py \
 * Tensor parallelism
 * Pipeline parallelism
 * Expert parallelism (MoE)
-* Auto-resume on SLURM preemption
+* SLURM
 
 ---
 

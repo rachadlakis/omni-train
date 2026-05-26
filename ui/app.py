@@ -858,7 +858,8 @@ async def fsdp_check(payload: ConfigPayload):
     # With FSDP, weights/gradients/optimizer are sharded across GPUs;
     # activations remain per-GPU
     shardable_gb = vram["weights_gb"] + vram["gradients_gb"] + vram["optimizer_gb"]
-    fsdp_per_gpu_gb = round(shardable_gb / max(1, num_gpus) + vram["activations_gb"], 2)
+    # Apply same 0.85 efficiency factor as used in estimate_training_vram
+    fsdp_per_gpu_gb = round((shardable_gb / max(1, num_gpus) + vram["activations_gb"]) * 0.85, 2)
 
     if gpu_memory_gb is None:
         fsdp_needed = None

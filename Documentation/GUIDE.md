@@ -132,27 +132,6 @@ Open the command palette (`Ctrl+Shift+P`) → "Python: Select Interpreter" → p
 
 ---
 
-### RunPod Setup
-
-```bash
-# 1. SSH in
-ssh root@<runpod-host> -p <port> -i ~/.ssh/id_ed25519
-
-# 2. Clone
-git clone https://github.com/rachadlakis/dist-train-project.git
-cd dist-train-project
-
-# 3. Install
-python3 -m venv .venv
-source .venv/bin/activate
-python scripts/setup_env.py
-
-# 4. Token
-echo "HF_TOKEN=hf_your_token_here" > .env
-```
-
----
-
 ## 4. Environment Variables
 
 Create a file called `.env` in the project folder:
@@ -208,10 +187,22 @@ training:
 source .venv/bin/activate
 
 # Run (reads config.yaml automatically)
-bash launch.sh
+bash scripts/launch.sh
 ```
 
 That's it. The launcher reads `strategy` and `num_gpus` from your config and starts the right command.
+
+
+Or lunch the UI with
+```bash
+# Make sure your env is activated
+source .venv/bin/activate
+
+# Run (reads config.yaml automatically)
+bash ui/launch_ui.sh
+```
+
+
 
 ### Other ways to launch
 
@@ -250,7 +241,7 @@ peft:
 ```
 
 ### QLoRA
-Compress the base model to 4-bit and run LoRA on top. Lets you train large models on small GPUs.
+Compress the base model to 4-bit/8-bit and run LoRA on top. Lets you train large models on small GPUs.
 
 ```yaml
 peft:

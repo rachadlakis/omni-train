@@ -573,7 +573,13 @@ def estimate_training_vram(
         act_bytes /= 2.0   # ~2× memory saving from recompute
 
     activations_gb = act_bytes / 1e9
-    total_gb = weights_gb + gradients_gb + optimizer_gb + activations_gb
+    total_gb_raw = weights_gb + gradients_gb + optimizer_gb + activations_gb
+
+    # Apply efficiency factor: PyTorch's memory management (lazy allocation,
+    # memory reuse, caching allocator) is typically ~15-20% more efficient
+    # than worst-case theoretical estimates.
+    efficiency_factor = 0.85
+    total_gb = total_gb_raw * efficiency_factor
 
     return {
         "weights_gb":     round(weights_gb, 2),

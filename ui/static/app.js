@@ -3124,6 +3124,24 @@ function showTrainingSuccess(logs = []) {
     max-width: 90vw;
   `;
 
+  // Get checkpoint directory from config
+  const checkpointDir = (typeof getVal === 'function' ? getVal('f-checkpoint-dir') : '') || 'checkpoints';
+  const strategy = (typeof getVal === 'function' ? getVal('f-strategy') : '') || 'none';
+  const strategyFolder = strategy === 'fsdp' ? 'fsdp/dcp_api' : (strategy === 'ddp' ? 'ddp' : 'solo');
+  const fullCheckpointPath = `${checkpointDir}/${strategyFolder}/`;
+
+  const checkpointSection = `
+    <div style="margin: 12px 0; padding: 12px 16px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; text-align: left;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+        <span style="font-size: 16px;">💾</span>
+        <span style="color: #a5b4fc; font-weight: 600; font-size: 13px;">Model saved to:</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <code id="checkpoint-path-text" style="flex: 1; background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #e0e7ff; word-break: break-all; font-family: 'JetBrains Mono', 'Fira Code', monospace;">${fullCheckpointPath}</code>
+        <button onclick="openCheckpointFolder()" style="padding: 8px 12px; background: rgba(99, 102, 241, 0.5); border: 1px solid rgba(99, 102, 241, 0.7); border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; font-weight: 500;" title="Open checkpoints">📂 Open</button>
+      </div>
+    </div>`;
+
   const wandbSection = wandbUrl ? `
     <div style="margin: 12px 0; padding: 10px 16px; background: rgba(255,149,0,0.08); border: 1px solid rgba(255,149,0,0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; justify-content: center;">
       <span style="font-size: 18px;">📊</span>
@@ -3141,6 +3159,7 @@ function showTrainingSuccess(logs = []) {
 
   successDiv.innerHTML = `
     <h3 style="color: #27ae60; margin: 0 0 8px 0; font-size: 18px;">✅ Training Completed Successfully!</h3>
+    ${checkpointSection}
     ${wandbSection}
     ${chartSection}
     <button onclick="closeTrainingError()" style="margin-top: 14px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
@@ -3169,6 +3188,15 @@ function closeTrainingError() {
   if (modal)   modal.remove();
   if (backdrop) backdrop.remove();
   hideTrainingOverlay();
+}
+
+function openCheckpointFolder() {
+  const pathEl = document.getElementById('checkpoint-path-text');
+  if (!pathEl) return;
+  const path = pathEl.textContent.replace(/\/+$/, ''); // Remove trailing slash
+  const dir = path.split('/')[0] || 'checkpoints'; // Get base checkpoint dir
+  closeTrainingError();
+  window.location.href = `/static/checkpoints.html?dir=${encodeURIComponent(dir)}`;
 }
 
 let _toastTimer = null;
@@ -3228,6 +3256,14 @@ function showTrainingOverlay(strategy, gpuCount = null) {
   const timerContainer = document.getElementById('training-timer');
 
   if (!overlay) return;
+
+  // Reset error state from previous run
+  const modal = document.querySelector('.training-modal');
+  if (modal) modal.classList.remove('training-modal--error');
+  if (title) title.style.color = '';
+  if (subtitle) { subtitle.style.color = ''; subtitle.style.fontFamily = ''; subtitle.style.fontSize = ''; }
+  const oldCloseBtn = document.getElementById('training-error-close-btn');
+  if (oldCloseBtn) oldCloseBtn.remove();
 
   // Reset to training mode (not queued)
   if (queueBox) queueBox.style.display = 'none';
