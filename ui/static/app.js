@@ -3349,16 +3349,11 @@ async function updateGpuAvailability() {
     const statusClass = available > 0 ? 'available' : 'busy';
     el.innerHTML = `<span class="gpu-status-text ${statusClass}">${available} of ${total} GPUs available</span>`;
 
-    // Update GPU count dropdown to show which options will queue
     const gpuSelect = document.getElementById('f-gpu-count');
     if (gpuSelect) {
       Array.from(gpuSelect.options).forEach(opt => {
         const count = parseInt(opt.value);
-        if (count > available) {
-          opt.text = `${count} GPU${count > 1 ? 's' : ''} (will queue)`;
-        } else {
-          opt.text = `${count} GPU${count > 1 ? 's' : ''}`;
-        }
+        opt.text = `${count} GPU${count > 1 ? 's' : ''}`;
       });
     }
   }
