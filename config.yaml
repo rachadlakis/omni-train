@@ -2,8 +2,8 @@
 ## Change the values as needed to test different configurations and features 
 ## of the training script.
   
-model_name: meta-llama/Llama-3.2-1B  #facebook/opt-125m 
-model_type: llm   ## Options: llm, seq2seq, vision, yolo, vlm, encoder
+model_name: facebook/opt-125m  ## (ignored when model_type=custom_transformer)
+model_type: llm  # llm   ## Options: llm, seq2seq, vision, yolo, vlm, encoder, custom_transformer
 
 dataset:
   name: wikitext            ## dataset name from Hugging Face datasets library
@@ -19,8 +19,8 @@ training:
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
+strategy: solo              ## choose from {ddp, fsdp, solo}
+num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 
@@ -43,7 +43,7 @@ prefetch:
   backward: 2     ## number of backward passes to prefetch. Options: 0 (no prefetching), 1, 2, etc.
 
 peft: ## Parameter Efficient Fine Tuning
-  enabled: true     ## whether to apply PEFT. Options: true, false
+  enabled: false     ## whether to apply PEFT. Options: true, false
   type: lora        ## LoRA or QLoRA. Only one type can be chosen. Options: lora, qlora
   r: 8              ## rank for LoRA. Options: 4, 8, 16, etc. (only relevant if type=lora)
   alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4. Options: 8, 16, 32, etc. (only relevant if type=lora)
@@ -52,7 +52,7 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA. Options: "none", "all", "lora_only"
 
 quantization:
-  enabled: false           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
+  enabled: true           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
   bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8). Options: 4, 8
   quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4). Options: nf4, fp4, int4 (only relevant if bits=4)
   compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32). Options: bfloat16, float16, float32 (only relevant if quantization is enabled)
@@ -63,15 +63,13 @@ wandb:
   wandb_entity: "dist-train"          ## your W&B entity (username or team). 
   wandb_project: "dist-train-project" ## your W&B project name
 
-
-
 custom_transformer_args:
-  n_layers: null           ## number of transformer layers (required if model_type=custom_transformer)
-  vocab_size: null         ## vocabulary size (required if model_type=custom_transformer)
-  max_seq_len: null       ## maximum sequence length (required if model_type=custom_transformer)
-  dim: null               ## hidden dimension (required if model_type=custom_transformer)
-  n_heads: null           ## number of attention heads (required if model_type=custom_transformer)
-  dropout_p: null         ## dropout probability (required if model_type=custom_transformer)
+  n_layers: 2           ## number of transformer layers (required if model_type=custom_transformer)
+  vocab_size: 1024         ## vocabulary size (required if model_type=custom_transformer)
+  max_seq_len: 1024       ## maximum sequence length (required if model_type=custom_transformer)
+  dim: 512               ## hidden dimension (required if model_type=custom_transformer)
+  n_heads: 4           ## number of attention heads (required if model_type=custom_transformer)
+  dropout_p: 0.1         ## dropout probability (required if model_type=custom_transformer)
 
 
 ## ------------------------------------ In progress  ------------------------------------ ##
