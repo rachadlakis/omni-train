@@ -10,7 +10,7 @@
 <body>
 
 <!-- Theme Toggle Button -->
-<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode" aria-label="Toggle dark and light mode">
   <span class="icon-moon">🌙</span>
   <span class="icon-sun">☀️</span>
   <span class="theme-label-dark">Dark</span>
@@ -36,7 +36,7 @@
     </div>
 
     <div class="landing-options">
-      <div class="landing-card" onclick="openCustomSetup()">
+      <div class="landing-card" onclick="openCustomSetup()" role="button" tabindex="0" aria-label="Custom Setup: configure your training from scratch with full control">
         <div class="card-glow"></div>
         <div class="landing-card-icon custom">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -53,7 +53,7 @@
         <div class="card-arrow">→</div>
       </div>
 
-      <div class="landing-card" onclick="openYamlEditor()">
+      <div class="landing-card" onclick="openYamlEditor()" role="button" tabindex="0" aria-label="Enter YAML Config: write or paste your configuration directly in YAML format">
         <div class="card-glow"></div>
         <div class="landing-card-icon yaml">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -71,7 +71,7 @@
     </div>
 
     <div class="landing-footer">
-      <a class="guide-link" onclick="openGuidePage()">
+      <a class="guide-link" onclick="openGuidePage()" role="button" tabindex="0">
         <span class="guide-icon">📚</span>
         <span class="guide-text">
           <strong>Getting Started Guide</strong>
@@ -85,10 +85,10 @@
 
 <!-- Template Modal -->
 <div class="modal-overlay" id="template-modal" onclick="closeTemplateModal(event)">
-  <div class="modal" onclick="event.stopPropagation()">
+  <div class="modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
     <div class="modal-header">
-      <h2>Choose a Template</h2>
-      <button class="modal-close" onclick="closeTemplateModal()">&times;</button>
+      <h2 id="template-modal-title">Choose a Template</h2>
+      <button class="modal-close" onclick="closeTemplateModal()" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <div class="template-filters">
@@ -106,11 +106,11 @@
 
 <!-- Message Modal -->
 <div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
-  <div class="message-modal" onclick="event.stopPropagation()">
+  <div class="message-modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
     <div class="message-modal-header">
-      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <span class="message-modal-icon" id="message-modal-icon" aria-hidden="true">i</span>
       <h3 id="message-modal-title">Message</h3>
-      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+      <button class="modal-close" onclick="closeMessageModal()" aria-label="Close">&times;</button>
     </div>
     <div class="message-modal-body">
       <p id="message-modal-text"></p>

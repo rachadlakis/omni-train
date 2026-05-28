@@ -10,7 +10,7 @@
 <body>
 
 <!-- Theme Toggle Button -->
-<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode" aria-label="Toggle dark and light mode">
   <span class="icon-moon">🌙</span>
   <span class="icon-sun">☀️</span>
   <span class="theme-label-dark">Dark</span>
@@ -24,11 +24,11 @@
       <h1><span>Omni</span>Train</h1>
     </div>
     <div class="header-right">
-      <div class="queue-indicator" id="queue-indicator" style="display:none;">
-        <span class="queue-icon">&#128203;</span>
+      <div class="queue-indicator" id="queue-indicator" style="display:none;" aria-live="polite">
+        <span class="queue-icon" aria-hidden="true">&#128203;</span>
         <span class="queue-text" id="queue-text">Queue: 0 pending</span>
       </div>
-      <span id="status-badge" class="status-badge status-idle">IDLE</span>
+      <span id="status-badge" class="status-badge status-idle" role="status" aria-live="polite">IDLE</span>
     </div>
   </div>
 
@@ -40,9 +40,9 @@
 
     <!-- Side Panel (Left) -->
     <div class="side-panel" id="side-panel">
-      <div class="side-tabs">
-        <div class="side-tab active" onclick="switchSideTab('templates')">Templates</div>
-        <div class="side-tab" onclick="switchSideTab('logs')">Logs</div>
+      <div class="side-tabs" role="tablist">
+        <div class="side-tab active" onclick="switchSideTab('templates')" role="button" tabindex="0">Templates</div>
+        <div class="side-tab" onclick="switchSideTab('logs')" role="button" tabindex="0">Logs</div>
       </div>
 
       <!-- Templates Content -->
@@ -521,7 +521,7 @@
     <div class="training-animation" id="training-animation">
       <div class="spinner"></div>
     </div>
-    <div class="training-status">
+    <div class="training-status" role="status" aria-live="polite">
       <h3 id="training-title">Starting Training...</h3>
       <p id="training-subtitle">Initializing model and data loaders</p>
     </div>
@@ -552,7 +552,7 @@
         <span>Live Console Output</span>
         <span style="display:flex;align-items:center;gap:8px;">
           <span id="training-log-meta">Waiting for logs...</span>
-          <button class="log-expand-btn" onclick="toggleLogExpand(this)" title="Expand/collapse log">⤢</button>
+          <button class="log-expand-btn" onclick="toggleLogExpand(this)" title="Expand/collapse log" aria-label="Expand or collapse log">⤢</button>
         </span>
       </div>
       <div class="training-live-log" id="training-live-log"></div>
@@ -565,11 +565,11 @@
 
 <!-- Message Modal -->
 <div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
-  <div class="message-modal" onclick="event.stopPropagation()">
+  <div class="message-modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
     <div class="message-modal-header">
-      <span class="message-modal-icon" id="message-modal-icon">i</span>
+      <span class="message-modal-icon" id="message-modal-icon" aria-hidden="true">i</span>
       <h3 id="message-modal-title">Message</h3>
-      <button class="modal-close" onclick="closeMessageModal()">&times;</button>
+      <button class="modal-close" onclick="closeMessageModal()" aria-label="Close">&times;</button>
     </div>
     <div class="message-modal-body">
       <p id="message-modal-text"></p>

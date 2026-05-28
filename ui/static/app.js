@@ -4073,9 +4073,31 @@ async function initConfigPage() {
   });
 }
 
+// Activate non-native clickable elements (role="button") via keyboard, and
+// let Escape dismiss any open lightweight modal. Runs on every page.
+function setupGlobalA11yKeys() {
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      const el = document.activeElement;
+      if (el && el.getAttribute('role') === 'button' && !el.disabled) {
+        e.preventDefault();
+        el.click();
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      // Close visible overlay modals (message/template). The training overlay
+      // uses a different class and is intentionally left untouched.
+      const open = document.querySelector('.modal-overlay.active');
+      if (open) open.classList.remove('active');
+    }
+  });
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
   loadTheme();
+  setupGlobalA11yKeys();
 
   // Reset FSDP check result when any config field that affects VRAM changes
   const fsdpResetIds = [

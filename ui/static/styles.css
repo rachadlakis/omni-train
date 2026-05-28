@@ -101,6 +101,20 @@ body {
   transform: scale(0.98);
 }
 
+/* On the config page the fixed toggle shares the row with the sticky header.
+   Center the 40px toggle within the ~58px header band (16px symmetric padding)
+   so it lines up vertically with the status badge ("Dark" level with "IDLE"). */
+body:has(.header) .theme-toggle {
+  top: 9px;
+}
+
+/* YAML editor / env pages use .yaml-header, which sits ~20px lower than the
+   config header (page padding) and is shorter (no 16px header padding), so the
+   toggle needs a slightly larger top to line up with the "YAML EDITOR" badge. */
+body:has(.yaml-header) .theme-toggle {
+  top: 13px;
+}
+
 .theme-toggle .icon-sun { display: none; }
 .theme-toggle .icon-moon { display: flex; }
 .theme-toggle .theme-label-dark { display: inline; }
@@ -3010,3 +3024,41 @@ body:has(.training-overlay.active) .theme-toggle {
 }
 .toast.toast--success { border-color: var(--green); color: var(--green); }
 .toast.toast--info    { border-color: var(--accent); color: var(--accent); }
+
+/* ==================== ACCESSIBILITY ==================== */
+/* Visible keyboard focus ring. Appended last so it overrides earlier
+   `outline: none` declarations on inputs/buttons. Uses :focus-visible so the
+   ring only appears for keyboard navigation, not mouse clicks. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Keyboard focus for the clickable cards/links that are not native buttons. */
+.landing-card:focus-visible,
+.guide-link:focus-visible,
+.side-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* Respect the OS "reduce motion" setting: neutralize the decorative landing
+   animations and looping spinners for users prone to motion sickness. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .bg-glow { animation: none !important; }
+}
