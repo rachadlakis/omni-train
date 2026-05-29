@@ -1,11 +1,11 @@
 checkpoint_dir: checkpoints/mini_style_fsdp
 custom_transformer_args:
-  dim: null
-  dropout_p: null
-  max_seq_len: null
-  n_heads: null
-  n_layers: null
-  vocab_size: null
+  dim: 512
+  dropout_p: 0.1
+  max_seq_len: 1024
+  n_heads: 4
+  n_layers: 2
+  vocab_size: 1024
 dataset:
   name: wikitext
   split: train[:1%]
@@ -58,10 +58,10 @@ save_load:
   load_model_from_hf: true
   resume: false
   resume_path: ''
-strategy: ddp
+strategy: fsdp
 training:
   batch_size: 16
-  epochs: 2
+  epochs: 1
   grad_clip: 1
   gradient_checkpointing: true
   learning_rate: 1.0e-05
@@ -70,5 +70,5 @@ training:
   weight_decay: 0.01
 wandb:
   wandb_entity: dist-train-project
-  wandb_log_with_train: true
+  wandb_log_with_train: false
   wandb_project: dist-train-project

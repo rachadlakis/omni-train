@@ -1,28 +1,37 @@
 /* OMNI-Train Styles */
 
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+
 :root {
-  --bg: #0a0b0f;
-  --surface: #12141a;
-  --surface2: #1a1d26;
-  --surface3: #22262f;
-  --border: #2a2f3a;
-  --text: #e8eaed;
-  --text-dim: #8b90a0;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-glow: rgba(99, 102, 241, 0.2);
-  --navy: #1e3a8a;
-  --navy-hover: #2563eb;
-  --green: #22c55e;
-  --green-dim: rgba(34, 197, 94, 0.15);
-  --red: #ef4444;
-  --red-dim: rgba(239, 68, 68, 0.15);
-  --orange: #f59e0b;
-  --orange-dim: rgba(245, 158, 11, 0.15);
-  --blue: #3b82f6;
-  --blue-dim: rgba(59, 130, 246, 0.15);
-  --radius: 12px;
-  --radius-sm: 8px;
+  /* Technical control-panel palette — near-black canvas, signal-lime accent */
+  --bg: #0b0c0e;
+  --surface: #121519;
+  --surface2: #181c21;
+  --surface3: #22272e;
+  --border: #2a313a;
+  --text: #e7ebee;
+  --text-dim: #7e8794;
+  --accent: #d7ff42;
+  --accent-hover: #e6ff7a;
+  --accent-glow: rgba(215, 255, 66, 0.14);
+  --on-accent: #0c0f06;            /* dark text/icons on the lime accent */
+  --grid-line: rgba(215, 255, 66, 0.035);
+  --navy: #1f6feb;
+  --navy-hover: #388bfd;
+  --green: #3fb950;
+  --green-dim: rgba(63, 185, 80, 0.15);
+  --red: #f85149;
+  --red-dim: rgba(248, 81, 73, 0.15);
+  --orange: #d29922;
+  --orange-dim: rgba(210, 153, 34, 0.15);
+  --blue: #58a6ff;
+  --blue-dim: rgba(88, 166, 255, 0.15);
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  /* Type families */
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
   /* Aliases for missing variable names used in queue/FSDP sections */
   --text-muted: var(--text-dim);
@@ -34,37 +43,40 @@
   --primary: var(--accent);
 }
 
-/* Light theme */
+/* Light theme — paper canvas; accent deepens to stay readable as text */
 .light {
-  --bg: #f5f7fa;
+  --bg: #eceee8;
   --surface: #ffffff;
-  --surface2: #f0f2f5;
-  --surface3: #e4e7ec;
-  --border: #d1d5db;
-  --text: #1f2937;
-  --text-dim: #6b7280;
-  --accent: #4f46e5;
-  --accent-hover: #6366f1;
-  --accent-glow: rgba(79, 70, 229, 0.15);
-  --navy: #1e3a8a;
+  --surface2: #f3f5ef;
+  --surface3: #e5e8df;
+  --border: #cfd4c8;
+  --text: #14171a;
+  --text-dim: #5a626b;
+  --accent: #4d7c0f;
+  --accent-hover: #3f6212;
+  --accent-glow: rgba(77, 124, 15, 0.12);
+  --on-accent: #ffffff;            /* light text on the deep-lime accent */
+  --grid-line: rgba(20, 23, 26, 0.04);
+  --navy: #1f6feb;
   --navy-hover: #1d4ed8;
-  --green: #16a34a;
-  --green-dim: rgba(22, 163, 74, 0.12);
-  --red: #dc2626;
-  --red-dim: rgba(220, 38, 38, 0.12);
-  --orange: #d97706;
-  --orange-dim: rgba(217, 119, 6, 0.12);
-  --blue: #2563eb;
-  --blue-dim: rgba(37, 99, 235, 0.12);
+  --green: #1a7f37;
+  --green-dim: rgba(26, 127, 55, 0.12);
+  --red: #cf222e;
+  --red-dim: rgba(207, 34, 46, 0.12);
+  --orange: #9a6700;
+  --orange-dim: rgba(154, 103, 0, 0.12);
+  --blue: #0969da;
+  --blue-dim: rgba(9, 105, 218, 0.12);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ==================== THEME TOGGLE ==================== */
@@ -960,7 +972,7 @@ body:has(.yaml-header) .theme-toggle {
 
 .tooltip:hover {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .tooltip::after {
@@ -1109,7 +1121,7 @@ body:has(.yaml-header) .theme-toggle {
 }
 
 .form-group select:focus {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23d7ff42' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 .form-group select option {
@@ -1129,7 +1141,7 @@ body:has(.yaml-header) .theme-toggle {
 
 .form-group select option:checked {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .light .form-group select,
@@ -1330,7 +1342,7 @@ body:has(.yaml-header) .theme-toggle {
 .side-filter-btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .templates-list {
@@ -1449,7 +1461,7 @@ body:has(.yaml-header) .theme-toggle {
   text-decoration: none;
 }
 
-.btn-primary { background: var(--accent); color: white; }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -3061,4 +3073,89 @@ textarea:focus-visible,
     scroll-behavior: auto !important;
   }
   .bg-glow { animation: none !important; }
+}
+
+/* ==================== TECHNICAL CONTROL-PANEL LAYER ==================== */
+/* Re-skin on top of the token swap: monospace structure, boxed readouts,
+   uppercase labels, a hairline grid, and a lime-slash wordmark. Sans (body)
+   is reserved for prose; mono carries everything structural. */
+
+/* Monospace for structural / data text */
+.header h1, .yaml-header h1, .guide-header h1, .landing-header h1,
+.form-section h3, .form-section-subtitle, .modal-header h2,
+.message-modal-header h3, .btn, .status-badge, .side-tab, .side-filter-btn,
+.filter-btn, .queue-indicator, .gpu-availability, .gpu-status-text,
+.fsdp-vram-pill, .fsdp-verdict, .progress-text, .timer-clock, .timer-label,
+#log-count, .logs-output, .training-live-log, .yaml-toolbar-title,
+.landing-card h3, .mini-tag, .template-tag, .theme-toggle, .ckpt-title {
+  font-family: var(--mono);
+}
+
+/* Wordmark — uppercase, tracked, lime "//" slashes */
+.header h1, .yaml-header h1 {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  font-size: 17px;
+}
+/* Guide bar carries a longer sentence title — lighter tracking, larger */
+.guide-header h1 {
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  font-size: 18px;
+}
+.landing-header h1 {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: clamp(2.4rem, 7vw, 3.6rem);
+}
+.header h1 span, .yaml-header h1 span,
+.guide-header h1 span, .landing-header h1 span {
+  background: none;
+  background-clip: border-box;
+  -webkit-background-clip: border-box;
+  -webkit-text-fill-color: var(--accent);
+  color: var(--accent);
+  animation: none;
+}
+
+/* Section headings + form labels + buttons — uppercase technical */
+.form-section h3 { text-transform: uppercase; letter-spacing: 0.08em; font-size: 14px; }
+.form-group label { font-family: var(--mono); letter-spacing: 0.06em; }
+.landing-card h3 { text-transform: uppercase; letter-spacing: 0.06em; }
+.btn { text-transform: uppercase; letter-spacing: 0.07em; font-size: 13px; font-weight: 600; }
+.btn-primary:hover { box-shadow: 0 0 0 1px var(--accent), 0 6px 18px var(--accent-glow); }
+
+/* Status badge → outlined mono readout with a glowing state dot */
+.status-badge {
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.status-badge::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* Hairline grid behind the app — shows in gutters around opaque panels.
+   The landing page draws its own animated background on top of this. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
 }
