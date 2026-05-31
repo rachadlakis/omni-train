@@ -19,8 +19,8 @@ training:
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: solo              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+strategy: fsdp              ## choose from {ddp, fsdp, solo}
+num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 
@@ -43,7 +43,7 @@ prefetch:
   backward: 2     ## number of backward passes to prefetch. Options: 0 (no prefetching), 1, 2, etc.
 
 peft: ## Parameter Efficient Fine Tuning
-  enabled: false     ## whether to apply PEFT. Options: true, false
+  enabled: true     ## whether to apply PEFT. Options: true, false
   type: lora        ## LoRA or QLoRA. Only one type can be chosen. Options: lora, qlora
   r: 8              ## rank for LoRA. Options: 4, 8, 16, etc. (only relevant if type=lora)
   alpha: 16         ## scaling factor for LoRA, often set to r*2 or r*4. Options: 8, 16, 32, etc. (only relevant if type=lora)
@@ -52,7 +52,7 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA. Options: "none", "all", "lora_only"
 
 quantization:
-  enabled: true           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
+  enabled: false           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
   bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8). Options: 4, 8
   quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4). Options: nf4, fp4, int4 (only relevant if bits=4)
   compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32). Options: bfloat16, float16, float32 (only relevant if quantization is enabled)
@@ -82,7 +82,7 @@ multi_dimensional_parallelism:
   dp_size: 0        ## number of data parallel shards (e.g. 2, 4, 8)
   tp_size: 0        ## number of tensor parallel shards (e.g. 2, 4, 8)
   pp_size: 0        ## number of pipeline stages (e.g. 2, 4)
-  device_mesh_shape: [2, 2]        ## shape of the device mesh for 3D parallelism (e.g. [dp, tp, pp] = [4, 2, 2])
+  device_mesh_shape: [2, 2, 2]        ## shape of the device mesh for 3D parallelism (e.g. [dp, tp, pp] = [4, 2, 2])
   n_microbatches: 4   ## number of micro-batches per global step (only relevant when pp_size > 1)
   pp_schedule: 1f1b   ## pipeline schedule: gpipe or 1f1b
 ## -----------------------------------------------------------------------------------####

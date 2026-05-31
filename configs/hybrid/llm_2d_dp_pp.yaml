@@ -1,0 +1,55 @@
+# 2D Parallelism: Data Parallel × Pipeline Parallel
+# Mesh: 2 (DP) × 1 (TP) × 2 (PP) = 4 GPUs
+
+model_name: meta-llama/Llama-3.2-1B
+model_type: llm
+
+dataset:
+  name: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+
+training:
+  epochs: 3
+  batch_size: 2
+  max_length: 512
+  learning_rate: 2.0e-5
+  warmup_steps: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gradient_checkpointing: true
+
+strategy: hybrid
+num_gpus: 4
+
+parallelism:
+  enabled: true
+
+  # 2D: DP × PP (no tensor parallelism)
+  data_parallel_size: 2
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 2
+
+  pipeline_parallel:
+    schedule: 1f1b
+    num_microbatches: 4
+
+  mesh_dim_names: ["dp", "tp", "pp"]
+  backend: nccl
+
+checkpoint_dir: checkpoints/hybrid
+save: true
+
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: float32
+
+save_load:
+  resume: false
+  load_model_from_hf: true
+
+wandb:
+  wandb_log_with_train: false
+  wandb_project: omni-train-2d

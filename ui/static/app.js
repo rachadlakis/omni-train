@@ -3131,14 +3131,14 @@ function showTrainingSuccess(logs = []) {
   const fullCheckpointPath = `${checkpointDir}/${strategyFolder}/`;
 
   const checkpointSection = `
-    <div style="margin: 12px 0; padding: 12px 16px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; text-align: left;">
+    <div style="margin: 12px 0; padding: 12px 16px; background: rgba(124, 108, 255, 0.10); border: 1px solid rgba(124, 108, 255, 0.30); border-radius: 8px; text-align: left;">
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
         <span style="font-size: 16px;">💾</span>
-        <span style="color: #a5b4fc; font-weight: 600; font-size: 13px;">Model saved to:</span>
+        <span style="color: #a78bfa; font-weight: 600; font-size: 13px;">Model saved to:</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <code id="checkpoint-path-text" style="flex: 1; background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #e0e7ff; word-break: break-all; font-family: 'JetBrains Mono', 'Fira Code', monospace;">${fullCheckpointPath}</code>
-        <button onclick="openCheckpointFolder()" style="padding: 8px 12px; background: rgba(99, 102, 241, 0.5); border: 1px solid rgba(99, 102, 241, 0.7); border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; font-weight: 500;" title="Open checkpoints">📂 Open</button>
+        <code id="checkpoint-path-text" style="flex: 1; background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #e2e6ff; word-break: break-all; font-family: 'JetBrains Mono', 'Fira Code', monospace;">${fullCheckpointPath}</code>
+        <button onclick="openCheckpointFolder()" style="padding: 8px 12px; background: rgba(124, 108, 255, 0.55); border: 1px solid rgba(124, 108, 255, 0.75); border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; font-weight: 500;" title="Open checkpoints">📂 Open</button>
       </div>
     </div>`;
 

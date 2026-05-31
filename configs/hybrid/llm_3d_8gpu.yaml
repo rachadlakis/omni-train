@@ -1,0 +1,72 @@
+# 3D Parallelism Configuration for 8 GPUs
+# Mesh: 2 (DP) × 2 (TP) × 2 (PP) = 8 GPUs
+
+model_name: meta-llama/Llama-3.2-1B
+model_type: llm
+
+dataset:
+  name: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: train
+
+training:
+  epochs: 3
+  batch_size: 2
+  max_length: 512
+  learning_rate: 2.0e-5
+  warmup_steps: 100
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gradient_checkpointing: true
+
+# Use hybrid strategy for 3D parallelism
+strategy: hybrid
+num_gpus: 8
+
+# 3D Parallelism Configuration
+parallelism:
+  enabled: true
+
+  # Mesh dimensions (product must equal num_gpus)
+  data_parallel_size: 2
+  tensor_parallel_size: 2
+  pipeline_parallel_size: 2
+
+  # Tensor Parallelism settings
+  tensor_parallel:
+    style: colwise_rowwise
+    sequence_parallel: false
+
+  # Pipeline Parallelism settings
+  pipeline_parallel:
+    schedule: 1f1b
+    num_microbatches: 8
+
+  # Device mesh naming
+  mesh_dim_names: ["dp", "tp", "pp"]
+  backend: nccl
+
+# Checkpoint settings
+checkpoint_dir: checkpoints/hybrid
+save: true
+
+# Mixed precision (applied within each parallelism dimension)
+dist_parameters:
+  mixed_precision: true
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: float32
+  cast_forward_inputs: true
+
+# Resume settings
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+# Logging
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: ""
+  wandb_project: omni-train-3d
+  wandb_run_name: llm_3d_8gpu
