@@ -111,11 +111,15 @@ def test_qlora_4bit_valid(cfg):
     assert args.quantization_bits == 4
 
 
-def test_qlora_8bit_raises(cfg):
+def test_qlora_8bit_valid(cfg):
+    """qlora also supports 8-bit (LLM.int8()) base weights, not just 4-bit NF4."""
+    cfg["strategy"] = "ddp"  # quant+fsdp is blocked; use ddp
     cfg["peft"]["type"] = "qlora"
     cfg["quantization"]["bits"] = 8
-    with pytest.raises(ValueError, match="QLoRA requires"):
-        build_args(cfg)
+    args = build_args(cfg)
+    assert args.peft_enabled is True
+    assert args.quantization_enabled is True
+    assert args.quantization_bits == 8
 
 
 # ======================================================================

@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OMNI//TRAIN — Distributed Training, From One File</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    /* ── Brand tokens (mirrored from ui/static/styles.css) ── */
+    --bg:        #08091a;
+    --surface:   #0c0e22;
+    --surface2:  #11142b;
+    --surface3:  #161a36;
+    --border:    #262b54;
+    --border2:   #343a6b;
+    --text:      #f1f3ff;
+    --dim:       #9aa3c7;
+
+    --violet:    #7c6cff;
+    --violet2:   #a78bfa;
+    --teal:      #2dd4ff;
+    --green:     #4ade80;
+    --orange:    #fb923c;
+    --pink:      #f472b6;
+    --red:       #fb7185;
+
+    --grad:      linear-gradient(120deg, #a78bfa 0%, #2dd4ff 52%, #4ade80 100%);
+    --grad-bar:  linear-gradient(90deg, #7c6cff, #2dd4ff 60%, #4ade80);
+    --grid:      rgba(124,108,255,0.055);
+
+    --radius:    14px;
+    --radius-sm: 9px;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  html { font-size: clamp(13px, 1.46vw, 21px); }
+  html, body {
+    height: 100%;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ════ Atmosphere ════ */
+  .bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .bg-grid {
+    position: absolute; inset: -2px;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(ellipse 130% 120% at 50% 0%, #000 55%, transparent 100%);
+  }
+  .orb { position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.5; }
+  .orb-1 { width: 46vw; height: 46vw; top: -16vw; left: -10vw; background: radial-gradient(circle, #7c6cff, transparent 68%); }
+  .orb-2 { width: 40vw; height: 40vw; bottom: -16vw; right: -8vw; background: radial-gradient(circle, #2dd4ff, transparent 68%); opacity: 0.4; }
+  .orb-3 { width: 30vw; height: 30vw; top: 30%; right: 24%; background: radial-gradient(circle, #4ade80, transparent 70%); opacity: 0.16; }
+  .bg-grain {
+    position: absolute; inset: 0; opacity: 0.035; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ════ Deck ════ */
+  .deck { position: relative; z-index: 1; width: 100vw; height: 100vh; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 4.4rem 4.2rem 3.4rem;
+  }
+  .slide.active { display: flex; }
+
+  /* ════ Top control bar ════ */
+  .chrome {
+    position: fixed; top: 0; left: 0; right: 0; height: 2.7rem; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 1.1rem;
+    background: rgba(8,9,26,0.72);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(10px);
+    font-family: var(--mono);
+  }
+  .brand { font-weight: 800; font-size: 0.82rem; letter-spacing: 0.02em; }
+  .brand .sl { color: var(--teal); }
+  .brand .tr { color: var(--dim); font-weight: 500; }
+
+  .chrome-mid { display: flex; align-items: center; gap: 0.7rem; }
+  .status {
+    display: inline-flex; align-items: center; gap: 0.45rem;
+    font-size: 0.62rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--dim);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+  }
+  .status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+  .status.live { color: var(--green); border-color: rgba(74,222,128,0.4); }
+  .status.live .led { background: var(--green); box-shadow: 0 0 0 0 rgba(74,222,128,0.6); animation: ping 1.4s infinite; }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(74,222,128,0.55);} 70%{ box-shadow:0 0 0 7px rgba(74,222,128,0);} 100%{box-shadow:0 0 0 0 rgba(74,222,128,0);} }
+  .counter { font-size: 0.68rem; color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: 0.08em; }
+
+  .chrome-nav { display: flex; align-items: center; gap: 0.4rem; }
+  .ctl {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--surface2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    width: 2rem; height: 1.7rem; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  .ctl:hover { border-color: var(--violet); background: var(--surface3); }
+  .ctl.play { width: auto; padding: 0 0.7rem; gap: 0.4rem; color: var(--green); border-color: rgba(74,222,128,0.35); }
+  .ctl.play:hover { background: rgba(74,222,128,0.08); }
+
+  /* progress + autoplay scrubber */
+  .track { position: fixed; left: 0; right: 0; top: 2.7rem; z-index: 49; height: 3px; background: rgba(255,255,255,0.04); }
+  .track .fill { height: 100%; width: 0; background: var(--grad-bar); transition: width .4s cubic-bezier(.4,0,.2,1); }
+  .scrub { position: fixed; left: 0; right: 0; top: calc(2.7rem + 3px); z-index: 49; height: 2px; background: transparent; }
+  .scrub .seg { height: 100%; width: 0; background: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.6); }
+
+  /* ════ Slide header ════ */
+  .shead { margin-bottom: 1.5rem; }
+  .kick {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-family: var(--mono); font-size: 0.66rem; font-weight: 600;
+    letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim);
+    margin-bottom: 0.7rem;
+  }
+  .kick .sq { width: 8px; height: 8px; border-radius: 2px; }
+  .stitle {
+    font-family: var(--mono); font-weight: 800;
+    font-size: 2rem; line-height: 1.05; letter-spacing: -0.02em;
+  }
+  .stitle em { font-style: normal; background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .ssub { color: var(--dim); font-size: 0.88rem; margin-top: 0.55rem; max-width: 56ch; line-height: 1.5; }
+  .ssub code { font-family: var(--mono); font-size: 0.9em; color: var(--teal); }
+  .shead-rule { height: 1px; margin-top: 1.1rem; background: linear-gradient(90deg, var(--violet) 0%, var(--teal) 32%, transparent 78%); }
+
+  /* ════ Layout helpers ════ */
+  .body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+  .g3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.1rem; }
+  .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  .g2.wide { grid-template-columns: 1.15fr 0.85fr; }
+
+  /* ════ Card ════ */
+  .card {
+    position: relative; overflow: hidden;
+    background: linear-gradient(180deg, var(--surface2), var(--surface));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.3rem 1.3rem 1.15rem;
+    display: flex; flex-direction: column;
+  }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; opacity: 0.9; }
+  .card::after {
+    content: ''; position: absolute; inset: 0; border-radius: var(--radius);
+    box-shadow: inset 0 0 36px -22px var(--gl, transparent); pointer-events: none;
+  }
+  .v { --gl: #7c6cff; } .v::before { background: linear-gradient(90deg, #7c6cff, transparent); }
+  .t { --gl: #2dd4ff; } .t::before { background: linear-gradient(90deg, #2dd4ff, transparent); }
+  .gr{ --gl: #4ade80; } .gr::before{ background: linear-gradient(90deg, #4ade80, transparent); }
+  .o { --gl: #fb923c; } .o::before { background: linear-gradient(90deg, #fb923c, transparent); }
+  .p { --gl: #f472b6; } .p::before { background: linear-gradient(90deg, #f472b6, transparent); }
+
+  .c-ico { font-size: 1.4rem; line-height: 1; margin-bottom: 0.7rem; }
+  .c-tag {
+    font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 0.35rem;
+  }
+  .c-title { font-family: var(--mono); font-weight: 700; font-size: 0.98rem; letter-spacing: -0.01em; line-height: 1.2; margin-bottom: 0.55rem; }
+  .c-body { font-size: 0.8rem; line-height: 1.55; color: #cdd3f0; flex: 1; }
+  .c-body strong { color: var(--text); font-weight: 600; }
+  code, .mono { font-family: var(--mono); }
+  .c-body code, .b code { font-family: var(--mono); font-size: 0.86em; background: #1b1f3d; border: 1px solid var(--border); border-radius: 4px; padding: 0.05em 0.34em; color: var(--teal); }
+
+  /* readout chip */
+  .readout {
+    display: inline-flex; align-items: baseline; gap: 0.5rem; margin-top: 0.9rem;
+    background: #0a0b1e; border: 1px solid var(--border); border-radius: 9px; padding: 0.45rem 0.8rem;
+  }
+  .ro-val { font-family: var(--mono); font-weight: 800; font-size: 1.5rem; line-height: 1; }
+  .ro-lab { font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); }
+  .x-v { color: var(--violet2); } .x-t { color: var(--teal); } .x-g { color: var(--green); } .x-o { color: var(--orange); } .x-p { color: var(--pink); }
+
+  /* bullets with state dots */
+  .b { list-style: none; display: flex; flex-direction: column; gap: 0.62rem; }
+  .b li { display: flex; gap: 0.6rem; font-size: 0.8rem; line-height: 1.45; color: #cdd3f0; }
+  .b li strong { color: var(--text); font-weight: 600; }
+  .b .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 0.42rem; box-shadow: 0 0 7px -1px currentColor; }
+  .d-v { background: var(--violet2); color: var(--violet2); }
+  .d-t { background: var(--teal); color: var(--teal); }
+  .d-g { background: var(--green); color: var(--green); }
+  .d-o { background: var(--orange); color: var(--orange); }
+  .d-p { background: var(--pink); color: var(--pink); }
+  .d-r { background: var(--red); color: var(--red); }
+
+  /* code block */
+  .code {
+    background: #060713; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 0.95rem 1.1rem; font-family: var(--mono); font-size: 0.72rem; line-height: 1.85;
+    white-space: pre; overflow: auto;
+  }
+  .code .top { display: flex; gap: 0.4rem; margin-bottom: 0.7rem; }
+  .code .top i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .cm { color: #6b73a3; } .ky { color: var(--teal); } .st { color: var(--orange); } .nu { color: var(--green); } .kw { color: var(--violet2); } .ot { color: var(--text); }
+
+  /* shard rail */
+  .rail { display: grid; grid-template-columns: repeat(4,1fr); gap: 0.5rem; margin-top: 0.9rem; }
+  .gpu {
+    background: #0a0b1e; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.55rem;
+    font-family: var(--mono); text-align: center;
+  }
+  .gpu .lab { font-size: 0.56rem; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; }
+  .gpu .bar { height: 5px; border-radius: 3px; margin: 0.4rem 0 0.32rem; background: linear-gradient(90deg, var(--violet), var(--teal)); }
+  .gpu .sh { font-size: 0.62rem; color: var(--green); }
+
+  /* modality grid */
+  .mods { display: grid; grid-template-columns: repeat(4,1fr); gap: 0.8rem; }
+  .mod {
+    position: relative; background: linear-gradient(180deg, var(--surface2), var(--surface));
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.85rem 0.9rem;
+    display: flex; flex-direction: column; gap: 0.28rem;
+  }
+  .mod .mi { font-size: 1.3rem; }
+  .mod h4 { font-family: var(--mono); font-size: 0.84rem; font-weight: 700; letter-spacing: -0.01em; }
+  .mod .mt { font-family: var(--mono); font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--violet2); }
+  .mod p { font-size: 0.7rem; color: var(--dim); line-height: 1.4; }
+  .mod span.ex { font-family: var(--mono); font-size: 0.66rem; color: var(--teal); }
+
+  /* strategy columns */
+  .hd { display: flex; align-items: center; justify-content: space-between; }
+  .nm { font-family: var(--mono); font-weight: 800; font-size: 1.1rem; }
+  .pip { font-family: var(--mono); font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 0.16rem 0.5rem; }
+
+  /* pills */
+  .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .pill {
+    font-family: var(--mono); font-size: 0.68rem; font-weight: 500; letter-spacing: 0.04em;
+    color: #c3c9ee; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 0.34rem 0.8rem;
+  }
+  .pill b { color: var(--teal); font-weight: 700; }
+
+  /* hero / close */
+  .center { align-items: center; justify-content: center; text-align: center; }
+  .corners::before, .corners::after { content: ''; position: absolute; width: 22px; height: 22px; }
+  .corners > .ctL, .corners > .ctR { position: absolute; width: 22px; height: 22px; }
+  .corners::before { top: 3.6rem; left: 2.4rem; border-left: 2px solid var(--border2); border-top: 2px solid var(--border2); }
+  .corners::after  { bottom: 2.8rem; right: 2.4rem; border-right: 2px solid var(--border2); border-bottom: 2px solid var(--border2); }
+  .corners > .ctL  { top: 3.6rem; right: 2.4rem; border-right: 2px solid var(--border2); border-top: 2px solid var(--border2); }
+  .corners > .ctR  { bottom: 2.8rem; left: 2.4rem; border-left: 2px solid var(--border2); border-bottom: 2px solid var(--border2); }
+  .hero-wm { font-family: var(--mono); font-weight: 800; letter-spacing: -0.03em; line-height: 0.95; font-size: 5rem; }
+  .hero-wm .sl { background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero-wm .om { color: var(--text); } .hero-wm .tn { color: var(--dim); font-weight: 500; }
+  .hero-tag { font-size: 1.04rem; color: #cdd3f0; max-width: 40ch; line-height: 1.55; margin: 1.2rem 0 1.5rem; }
+  .hero-tag b { color: var(--text); }
+  .kbd { font-family: var(--mono); font-size: 0.68rem; color: var(--dim); margin-top: 1.6rem; }
+  .kbd b { color: var(--green); }
+  .kbd kbd { background: var(--surface2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0.08rem 0.42rem; color: var(--text); font-family: var(--mono); font-size: 0.92em; }
+
+  .ribbon { display: flex; align-items: center; gap: 0.6rem; font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); margin-bottom: 1.1rem; }
+  .ribbon .ln { width: 34px; height: 1px; background: var(--border2); }
+
+  /* hook frame (muted-autoplay grab) */
+  .hook { max-width: 32rem; }
+  .hook-eyebrow { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.24em; text-transform: uppercase; color: var(--dim); }
+  .hook-sm { font-size: 1.15rem; color: #cdd3f0; line-height: 1.5; margin-top: 1rem; }
+  .hook-sm b { color: var(--text); }
+  .hook-xl { font-family: var(--mono); font-weight: 800; font-size: 5.2rem; letter-spacing: -0.03em; line-height: 1; margin: 0.5rem 0 0; }
+  .hook-grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .hook-resolve { margin-top: 1.5rem; color: var(--dim); font-size: 1rem; }
+  .hook-cue { display: inline-block; margin-top: 2.1rem; font-family: var(--mono); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.06em; color: var(--teal); }
+  .hook-cue .sl { color: var(--teal); }
+
+  /* footer telemetry strip */
+  .footstrip {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 40; height: 1.9rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: 0 1.1rem; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.1em;
+    color: var(--dim); background: rgba(8,9,26,0.6); border-top: 1px solid var(--border); backdrop-filter: blur(8px);
+  }
+  .footstrip .tele { display: flex; gap: 1.2rem; }
+  .footstrip .tele span b { color: var(--teal); font-weight: 700; }
+  .footstrip .hint kbd { color: var(--text); }
+
+  .badge-prog {
+    display: inline-block; font-family: var(--mono); font-size: 0.56rem; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; vertical-align: middle;
+    color: var(--teal); background: rgba(45,212,255,0.1); border: 1px solid rgba(45,212,255,0.35);
+    border-radius: 999px; padding: 0.16rem 0.6rem; margin-left: 0.5rem;
+  }
+
+  /* ════ Entrance animation (staggered) ════ */
+  @media (prefers-reduced-motion: no-preference) {
+    .slide.active [data-rise] { animation: rise 0.6s cubic-bezier(0.2,0.7,0.2,1) both; animation-delay: var(--d, 0s); }
+    @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+    .slide.active .hero-wm { animation: pop 0.8s cubic-bezier(0.2,0.7,0.2,1) both; }
+    @keyframes pop { from { opacity: 0; transform: translateY(20px) scale(0.98); filter: blur(6px);} to { opacity: 1; transform: none; filter: none; } }
+  }
+
+  .ty-links { display: flex; gap: 0.7rem; flex-wrap: wrap; justify-content: center; }
+  .ty-link {
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 600; text-decoration: none;
+    color: var(--text); background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 0.55rem 1.1rem; transition: border-color .15s, color .15s;
+  }
+  .ty-link:hover { border-color: var(--teal); color: var(--teal); }
+  .ty-link.prim { background: rgba(124,108,255,0.12); border-color: rgba(124,108,255,0.4); color: var(--violet2); }
+</style>
+</head>
+<body>
+
+<!-- Atmosphere -->
+<div class="bg">
+  <div class="bg-grid"></div>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+  <div class="bg-grain"></div>
+</div>
+
+<!-- Top control bar -->
+<div class="chrome">
+  <span class="brand">OMNI<span class="sl">//</span><span class="om">TRAIN</span></span>
+  <div class="chrome-mid">
+    <span class="status" id="status"><span class="led"></span><span id="statusText">Ready</span></span>
+    <span class="counter" id="counter">01 / 11</span>
+  </div>
+  <div class="chrome-nav">
+    <button class="ctl play" id="playBtn" title="Play / Pause (Space)"><span id="playIco">▶</span><span id="playTxt">Play</span></button>
+    <button class="ctl" onclick="prev()" title="Previous (←)">‹</button>
+    <button class="ctl" onclick="next()" title="Next (→)">›</button>
+    <button class="ctl" onclick="toggleFs()" title="Fullscreen (F)">⛶</button>
+  </div>
+</div>
+<div class="track"><div class="fill" id="fill"></div></div>
+<div class="scrub"><div class="seg" id="seg"></div></div>
+
+<div class="deck" id="deck">
+
+  <!-- ═════ HOOK · muted-autoplay grab ═════ -->
+  <section class="slide center" data-dur="3800">
+    <div class="hook">
+      <span class="hook-eyebrow" data-rise style="--d:.05s">// THE MEMORY WALL</span>
+      <p class="hook-sm" data-rise style="--d:.14s">Fine-tuning a <b>7B</b> model needs</p>
+      <h1 class="hook-xl" data-rise style="--d:.22s"><span class="hook-grad">84&nbsp;GB</span> of VRAM.</h1>
+      <p class="hook-sm hook-resolve" data-rise style="--d:.34s">No single GPU holds that — so I built the framework that shards it across many.</p>
+      <span class="hook-cue" data-rise style="--d:.5s">OMNI<span class="sl">//</span>TRAIN&nbsp;&nbsp;↓</span>
+    </div>
+  </section>
+
+  <!-- ═════ 00 · HERO ═════ -->
+  <section class="slide center corners" data-dur="5200">
+    <span class="ctL"></span><span class="ctR"></span>
+    <div class="ribbon" data-rise style="--d:.05s"><span class="ln"></span>PYTORCH · DISTRIBUTED TRAINING FRAMEWORK<span class="ln"></span></div>
+    <h1 class="hero-wm"><span class="om">OMNI</span><span class="sl">//</span><span class="tn">TRAIN</span></h1>
+    <p class="hero-tag" data-rise style="--d:.2s">Fine-tune <b>any</b> model across <b>any</b> number of GPUs — driven by a single <b>YAML file</b> or a browser UI.</p>
+    <div class="pills" data-rise style="--d:.32s;justify-content:center">
+      <span class="pill"><b>FSDP2</b></span>
+      <span class="pill">DDP</span>
+      <span class="pill">LoRA / QLoRA</span>
+      <span class="pill">NCCL</span>
+      <span class="pill">DCP &amp; DTensor</span>
+      <span class="pill">SLURM</span>
+      <span class="pill">Web UI</span>
+    </div>
+    <p class="kbd" data-rise style="--d:.46s">Press <kbd>Space</kbd> to play · <kbd>→</kbd> to advance · <kbd>F</kbd> for fullscreen</p>
+  </section>
+
+  <!-- ═════ 01 · WHY ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--teal)"></i>// 01 — THE CASE FOR SCALE</span>
+      <h2 class="stitle">One GPU <em>isn't enough</em>.</h2>
+      <p class="ssub">The strongest models are the biggest — and full fine-tuning them blows past any single card.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g3">
+        <div class="card v" data-rise style="--d:.06s">
+          <div class="c-ico">📈</div>
+          <div class="c-title">Bigger keeps winning</div>
+          <div class="c-body">Scale is still the most reliable lever for accuracy, reasoning and generalization. Frontier models live at <strong>70B+</strong> parameters.</div>
+          <div class="readout"><span class="ro-val x-v">70B+</span><span class="ro-lab">frontier scale</span></div>
+        </div>
+        <div class="card o" data-rise style="--d:.16s">
+          <div class="c-ico">⚖️</div>
+          <div class="c-title">PEFT has a ceiling</div>
+          <div class="c-body">LoRA, QLoRA and 4-bit save VRAM — but cap capacity and degrade hard tasks. <strong>Full fine-tuning still wins on quality.</strong></div>
+          <div class="readout"><span class="ro-val x-o">100%</span><span class="ro-lab">weights trainable</span></div>
+        </div>
+        <div class="card gr" data-rise style="--d:.26s">
+          <div class="c-ico">🧱</div>
+          <div class="c-title">The memory wall</div>
+          <div class="c-body">Full fine-tune needs <strong>~12× the bf16 model</strong> in VRAM:
+            <ul class="b" style="margin-top:.55rem">
+              <li><span class="dot d-g"></span><span>Weights + grads (bf16) — <strong>4 B/param</strong></span></li>
+              <li><span class="dot d-g"></span><span>AdamW m₁+m₂ (fp32) — <strong>8 B/param</strong></span></li>
+            </ul>
+          </div>
+          <div class="readout"><span class="ro-val x-g">84 GB</span><span class="ro-lab">to train a 7B · &gt; 1 A100</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 02 · THE PAIN ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--pink)"></i>// 02 — WHAT IT NORMALLY TAKES</span>
+      <h2 class="stitle">The <em>distributed tax</em>.</h2>
+      <p class="ssub">Weeks of plumbing — and a dozen ways to fail silently — before training step 1.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g3">
+        <div class="card v" data-rise style="--d:.06s">
+          <div class="c-tag">Launch &amp; comms</div>
+          <div class="c-title">Process orchestration</div>
+          <ul class="b">
+            <li><span class="dot d-v"></span><span><strong>torchrun</strong> — <code>RANK</code>, <code>WORLD_SIZE</code>, rendezvous, elastic launch</span></li>
+            <li><span class="dot d-v"></span><span><strong>NCCL</strong> — all-reduce, reduce-scatter, all-gather, barrier</span></li>
+            <li><span class="dot d-v"></span><span><strong>ZeRO 1/2/3</strong> — how FSDP maps to optimizer + grad sharding</span></li>
+          </ul>
+        </div>
+        <div class="card t" data-rise style="--d:.16s">
+          <div class="c-tag">Sharding &amp; memory</div>
+          <div class="c-title">Getting weights to fit</div>
+          <ul class="b">
+            <li><span class="dot d-t"></span><span><strong>fully_shard</strong> — wrap policy, meta-device init, leaf order</span></li>
+            <li><span class="dot d-t"></span><span><strong>Mixed precision</strong> — bf16 params vs fp32 optimizer states</span></li>
+            <li><span class="dot d-t"></span><span><strong>Prefetch + grad checkpoint</strong> — overlap &amp; recompute</span></li>
+          </ul>
+        </div>
+        <div class="card p" data-rise style="--d:.26s">
+          <div class="c-tag">Persistence &amp; traps</div>
+          <div class="c-title">Saving — and silent death</div>
+          <ul class="b">
+            <li><span class="dot d-p"></span><span><strong>DCP / DTensor</strong> — sharded save, rank-0 reassembly</span></li>
+            <li><span class="dot d-p"></span><span><strong>Library quirks</strong> — Transformers · PEFT · BitsAndBytes</span></li>
+            <li><span class="dot d-r"></span><span><strong>Silent failures</strong> — deadlock, NaN loss, grad corruption — <em>no stack trace</em></span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 03 · THE FIX ═════ -->
+  <section class="slide" data-dur="11000">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--violet2)"></i>// 03 — THE FIX</span>
+      <h2 class="stitle">One config file <em>is the interface</em>.</h2>
+      <p class="ssub">Declare the model, data and strategy. OMNI-Train wires up everything above.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g2 wide">
+        <div class="card v" data-rise style="--d:.06s">
+          <div class="c-tag">config.yaml — the only file you touch</div>
+          <div class="code"><span class="top"><i style="background:#fb7185"></i><i style="background:#fb923c"></i><i style="background:#4ade80"></i></span><span class="ky">model_name</span>: <span class="ot">meta-llama/Llama-2-7b</span>
+<span class="ky">model_type</span>: <span class="ot">llm</span>          <span class="cm"># llm·vlm·vision·yolo·encoder</span>
+
+<span class="ky">dataset</span>:
+  <span class="ky">name</span>:  <span class="ot">wikitext</span>
+  <span class="ky">split</span>: <span class="ot">train[:2%]</span>
+
+<span class="ky">strategy</span>: <span class="kw">fsdp</span>         <span class="cm"># solo · ddp · fsdp</span>
+<span class="ky">num_gpus</span>: <span class="nu">8</span>
+
+<span class="ky">training</span>:
+  <span class="ky">epochs</span>:        <span class="nu">3</span>
+  <span class="ky">batch_size</span>:    <span class="nu">16</span>
+  <span class="ky">learning_rate</span>: <span class="nu">2e-5</span>
+
+<span class="ky">peft</span>:
+  <span class="ky">enabled</span>: <span class="kw">true</span>
+  <span class="ky">type</span>:    <span class="ot">lora</span>       <span class="cm"># lora · qlora</span>
+  <span class="ky">r</span>: <span class="nu">8</span>  <span class="ky">alpha</span>: <span class="nu">16</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1.1rem;min-height:0">
+          <div class="card gr" data-rise style="--d:.18s">
+            <div class="c-title">Then just launch</div>
+            <div class="code" style="font-size:.7rem"><span class="cm"># single GPU</span>
+<span class="kw">python</span> train.py
+
+<span class="cm"># multi-GPU (auto torchrun)</span>
+<span class="kw">bash</span> scripts/launch.sh
+
+<span class="cm"># multi-node cluster</span>
+<span class="kw">sbatch</span> scripts/slurm_train.sh</div>
+          </div>
+          <div class="card t" data-rise style="--d:.3s">
+            <div class="c-title">You declare · it handles</div>
+            <ul class="b">
+              <li><span class="dot d-t"></span><span>GPU assignment, process groups, per-rank model load</span></li>
+              <li><span class="dot d-t"></span><span>Sharding, mixed precision, checkpoint save/resume</span></li>
+              <li><span class="dot d-t"></span><span><strong>Zero distributed code</strong> in your project</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 04 · CHOOSE YOUR STRATEGY ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--green)"></i>// 04 — CHOOSE YOUR STRATEGY</span>
+      <h2 class="stitle">Three strategies. <em>Different problems.</em></h2>
+      <p class="ssub">solo, DDP and FSDP solve different bottlenecks — a single card, raw throughput, or model size. OMNI-Train runs all three from the <em>same training code</em>; you pick the right one for the job.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g3">
+        <div class="card v" data-rise style="--d:.06s">
+          <div class="hd"><span class="nm" style="color:var(--violet2)">solo</span><span class="pip">1 GPU</span></div>
+          <div class="c-title" style="margin-top:.7rem">You have one GPU</div>
+          <div class="c-body">No torchrun, no process group — the prototyping path for small models.</div>
+        </div>
+        <div class="card t" data-rise style="--d:.16s">
+          <div class="hd"><span class="nm" style="color:var(--teal)">ddp</span><span class="pip">compute-bound</span></div>
+          <div class="c-title" style="margin-top:.7rem">Model fits — you want speed</div>
+          <div class="c-body">Every GPU holds a <strong>full replica</strong>; all-reduce syncs gradients each step. Throughput scales as you add GPUs.</div>
+        </div>
+        <div class="card gr" data-rise style="--d:.26s">
+          <div class="hd"><span class="nm" style="color:var(--green)">fsdp</span><span class="pip">memory-bound</span></div>
+          <div class="c-title" style="margin-top:.7rem">Model won't fit on one GPU</div>
+          <div class="c-body">Params, grads &amp; optimizer states <strong>sharded across ranks</strong> — ZeRO-3 style.</div>
+          <div class="rail">
+            <div class="gpu"><div class="lab">GPU0</div><div class="bar"></div><div class="sh">¼ shard</div></div>
+            <div class="gpu"><div class="lab">GPU1</div><div class="bar"></div><div class="sh">¼ shard</div></div>
+            <div class="gpu"><div class="lab">GPU2</div><div class="bar"></div><div class="sh">¼ shard</div></div>
+            <div class="gpu"><div class="lab">GPU3</div><div class="bar"></div><div class="sh">¼ shard</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 05 · MODALITIES ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--teal)"></i>// 05 — MODALITY-NATIVE</span>
+      <h2 class="stitle">Not just <em>LLMs</em>.</h2>
+      <p class="ssub">One <code>model_type</code> field routes the right HF class, data pipeline and collator for each modality.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="mods">
+        <div class="mod" data-rise style="--d:.04s"><div class="mi">💬</div><span class="mt">llm</span><h4>Causal LLM</h4><p>Llama · OPT · GPT-2</p></div>
+        <div class="mod" data-rise style="--d:.1s"><div class="mi">🖼️</div><span class="mt">vlm</span><h4>Vision-Language</h4><p>SmolVLM · LLaVA</p></div>
+        <div class="mod" data-rise style="--d:.16s"><div class="mi">👁️</div><span class="mt">vision</span><h4>Image Classify</h4><p>ViT · ResNet</p></div>
+        <div class="mod" data-rise style="--d:.22s"><div class="mi">🎯</div><span class="mt">yolo</span><h4>Detection</h4><p>YOLOS · COCO boxes</p></div>
+        <div class="mod" data-rise style="--d:.28s"><div class="mi">🔗</div><span class="mt">encoder</span><h4>Embeddings</h4><p>BERT · triplet LoRA</p></div>
+        <div class="mod" data-rise style="--d:.34s"><div class="mi">🔄</div><span class="mt">seq2seq</span><h4>Seq2Seq</h4><p>T5 · encoder-decoder</p></div>
+        <div class="mod" data-rise style="--d:.4s"><div class="mi">🧩</div><span class="mt">custom</span><h4>From Scratch</h4><p>Toy Transformer</p></div>
+        <div class="mod" data-rise style="--d:.46s;justify-content:center;align-items:center"><div class="mi">⚙️</div><span class="ex">+ auto collators</span><p style="text-align:center">detection &amp; VLM batched via custom <code style="font-size:.85em">collate_fn</code></p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 06 · PEFT & QUANT ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--orange)"></i>// 06 — EFFICIENT FINE-TUNING</span>
+      <h2 class="stitle">LoRA, QLoRA, 4/8-bit — <em>with guardrails</em>.</h2>
+      <p class="ssub">Every parameter-efficient path is wired correctly — and the impossible ones are blocked before the GPU ever sees them.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g2">
+        <div class="card o" data-rise style="--d:.06s">
+          <div class="c-title">What you get</div>
+          <ul class="b">
+            <li><span class="dot d-o"></span><span><strong>LoRA</strong> — PEFT adapter injection, <code>all-linear</code> or named targets</span></li>
+            <li><span class="dot d-o"></span><span><strong>QLoRA</strong> — quantized base + LoRA: <strong>4-bit</strong> <code>nf4</code>/<code>fp4</code> or <strong>8-bit</strong> <code>LLM.int8()</code>, double-quant, k-bit prep</span></li>
+            <li><span class="dot d-o"></span><span><strong>PEFT + FSDP</strong> — adapters wrapped inside shard boundaries; grads flow uncorrupted</span></li>
+          </ul>
+        </div>
+        <div class="card v" data-rise style="--d:.2s">
+          <div class="c-title">Guardrails in <code>build_args()</code></div>
+          <ul class="b">
+            <li><span class="dot d-v"></span><span><code>qlora</code> → auto-enables quantization — <strong>4-bit NF4</strong> or <strong>8-bit LLM.int8()</strong></span></li>
+            <li><span class="dot d-v"></span><span>Any quantization <strong>requires PEFT</strong> — direct 4/8-bit training NaNs from step 1</span></li>
+            <li><span class="dot d-r"></span><span><code>fsdp</code> + quantization → <strong>hard error</strong> (sharding can't touch quantized layers)</span></li>
+          </ul>
+          <div class="readout"><span class="ro-val x-g">✓</span><span class="ro-lab">caught at config time, not at 3am</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 07 · UNDER THE HOOD ═════ -->
+  <section class="slide" data-dur="10500">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--violet2)"></i>// 07 — THE HARD PARTS, HANDLED</span>
+      <h2 class="stitle">Engineered for the <em>edge cases</em>.</h2>
+      <p class="ssub">The details that silently break hand-rolled training loops — solved once, reused everywhere.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g3">
+        <div class="card t" data-rise style="--d:.06s">
+          <div class="c-tag">Initialization</div>
+          <div class="c-title">FSDP2 meta-device</div>
+          <div class="c-body">Build on <code>meta</code> (zero memory), shard, then populate via 3 paths: <strong>resume</strong>, <strong>fresh-HF seed</strong>, or <strong>random init</strong>.</div>
+        </div>
+        <div class="card gr" data-rise style="--d:.16s">
+          <div class="c-tag">Persistence</div>
+          <div class="c-title">DCP + DTensor I/O</div>
+          <div class="c-body">Two sharded checkpoint APIs — rank-0 broadcast or manual <code>distribute_tensor</code> gather — with timestamped, resumable folders.</div>
+        </div>
+        <div class="card p" data-rise style="--d:.26s">
+          <div class="c-tag">Correctness</div>
+          <div class="c-title">RoPE buffer fix</div>
+          <div class="c-body">Non-persistent <code>inv_freq</code> stays on meta after load — OMNI <strong>recomputes</strong> it from the formula instead of zeroing (which silently corrupts positions).</div>
+        </div>
+      </div>
+      <div class="g3" style="margin-top:1.1rem">
+        <div class="card v" data-rise style="--d:.34s">
+          <div class="c-title">Mixed precision, managed</div>
+          <div class="c-body">bf16 params, fp32 optimizer states, configurable reduce/output dtypes — no manual casting.</div>
+        </div>
+        <div class="card o" data-rise style="--d:.42s">
+          <div class="c-title">Layer auto-detection</div>
+          <div class="c-body">Probes <code>model.layers</code>, <code>transformer.h</code>, encoder/decoder stacks to find blocks for per-layer sharding.</div>
+        </div>
+        <div class="card t" data-rise style="--d:.5s">
+          <div class="c-title">Per-rank diagnostics</div>
+          <div class="c-body">Rank-0 banners + loss bars; W&amp;B opt-in with GPU memory snapshots via <code>all_gather_object</code>.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 08 · LAUNCH ANYWHERE ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--green)"></i>// 08 — RUN IT YOUR WAY</span>
+      <h2 class="stitle">CLI, Web UI, or <em>SLURM</em>.</h2>
+      <p class="ssub">The same config drives a terminal, a browser control panel, or a multi-node cluster.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g3">
+        <div class="card v" data-rise style="--d:.06s">
+          <div class="c-ico">⌨️</div>
+          <div class="c-title">CLI</div>
+          <div class="c-body">Edit <code>config.yaml</code> and launch. <code>launch.sh</code> reads strategy + GPU count and picks <code>python</code> vs <code>torchrun</code> for you.</div>
+        </div>
+        <div class="card t" data-rise style="--d:.16s">
+          <div class="c-ico">🖥️</div>
+          <div class="c-title">Web UI</div>
+          <div class="c-body">FastAPI control panel — visual editor, template gallery, <strong>live log streaming</strong>, and a SQLite job queue with priority scheduling.</div>
+          <div class="readout"><span class="ro-val x-t">:8787</span><span class="ro-lab">bash ui/launch_ui.sh</span></div>
+        </div>
+        <div class="card gr" data-rise style="--d:.26s">
+          <div class="c-ico">🛰️</div>
+          <div class="c-title">SLURM</div>
+          <div class="c-body">Auto-generated job scripts set <code>MASTER_ADDR</code>, <code>MASTER_PORT</code> &amp; <code>WORLD_SIZE</code> — scale across nodes over InfiniBand.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 09 · ROADMAP ═════ -->
+  <section class="slide">
+    <header class="shead" data-rise>
+      <span class="kick"><i class="sq" style="background:var(--pink)"></i>// 09 — IN PROGRESS</span>
+      <h2 class="stitle">Toward <em>trillion-parameter</em> scale.</h2>
+      <p class="ssub">Two tracks under active development extend OMNI-Train past single-node data parallelism.</p>
+      <div class="shead-rule"></div>
+    </header>
+    <div class="body">
+      <div class="g2">
+        <div class="card gr" data-rise style="--d:.06s">
+          <div class="c-ico">🌐</div>
+          <div class="c-title">SLURM multi-node <span class="badge-prog">In Progress</span></div>
+          <div class="c-body">From one node to <strong>N nodes</strong>, each with its own GPUs:
+            <ul class="b" style="margin-top:.6rem">
+              <li><span class="dot d-g"></span><span>Elastic rendezvous via <code>--rdzv-backend=c10d</code></span></li>
+              <li><span class="dot d-g"></span><span>Auto-requeue + checkpoint-on-signal on preemption</span></li>
+            </ul>
+          </div>
+          <div class="readout"><span class="ro-val x-g">1 → N</span><span class="ro-lab">nodes</span></div>
+        </div>
+        <div class="card v" data-rise style="--d:.2s">
+          <div class="c-ico">🔲</div>
+          <div class="c-title">3D parallelism <span class="badge-prog">In Progress</span></div>
+          <div class="c-body">Data × Tensor × Pipeline via <code>DeviceMesh</code>:
+            <ul class="b" style="margin-top:.6rem">
+              <li><span class="dot d-v"></span><span><strong>TP</strong> — split weight matrices within a node</span></li>
+              <li><span class="dot d-v"></span><span><strong>PP</strong> — slice layers across stages over slow links</span></li>
+            </ul>
+          </div>
+          <div class="readout"><span class="ro-val x-v">1T+</span><span class="ro-lab">params — target scale</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════ 10 · CLOSE ═════ -->
+  <section class="slide center corners" data-dur="5500">
+    <span class="ctL"></span><span class="ctR"></span>
+    <div class="ribbon" data-rise style="--d:.05s"><span class="ln"></span>OMNI//TRAIN<span class="ln"></span></div>
+    <h2 class="hero-wm" style="font-size:3.4rem">Scale Anything.<br><span class="sl">Train Everything.</span></h2>
+    <p class="hero-tag" data-rise style="--d:.2s">From a single GPU to a multi-node cluster — <b>every modality, every strategy</b>, from one file.</p>
+    <div class="pills" data-rise style="--d:.3s;justify-content:center">
+      <span class="pill"><b>FSDP2</b></span><span class="pill">DDP</span><span class="pill">LoRA / QLoRA</span><span class="pill">NCCL</span><span class="pill">DCP &amp; DTensor</span><span class="pill">Web UI</span>
+    </div>
+    <div class="ty-links" data-rise style="--d:.42s;margin-top:1.5rem">
+      <a class="ty-link prim" href="#" onclick="return false">▶ Live Demo — RunPod Multi-GPU</a>
+      <a class="ty-link" href="#" onclick="return false">⌥ GitHub</a>
+    </div>
+  </section>
+
+</div><!-- /.deck -->
+
+<!-- Footer telemetry strip -->
+<div class="footstrip">
+  <div class="tele">
+    <span>STRATEGY <b id="fStrat">FSDP2</b></span>
+    <span>MESH <b>8×1×1</b></span>
+    <span>PRECISION <b>bf16</b></span>
+    <span>COMMS <b>NCCL</b></span>
+  </div>
+  <div class="hint">←/→ NAVIGATE · <kbd>SPACE</kbd> PLAY · <kbd>F</kbd> FULLSCREEN</div>
+</div>
+
+<script>
+  const deck   = document.getElementById('deck');
+  const slides = [...deck.querySelectorAll('.slide')];
+  const N      = slides.length;
+  const DUR    = 8500;                 // default ms per slide; override per-slide with data-dur
+
+  const fill    = document.getElementById('fill');
+  const seg     = document.getElementById('seg');
+  const counter = document.getElementById('counter');
+  const statusEl= document.getElementById('status');
+  const statusTx= document.getElementById('statusText');
+  const playIco = document.getElementById('playIco');
+  const playTxt = document.getElementById('playTxt');
+  const fStrat  = document.getElementById('fStrat');
+
+  // per-slide footer telemetry flavor
+  const STRATS = ['BOOT','IDLE','MEMORY','BLOCKED','YAML','FSDP2','MULTI','PEFT','META','QUEUE','MESH','READY'];
+
+  let cur = 0, playing = false, timer = null;
+
+  function pad(n){ return String(n).padStart(2,'0'); }
+
+  function render(){
+    counter.textContent = pad(cur + 1) + ' / ' + pad(N);
+    fill.style.width = (cur / (N - 1) * 100) + '%';
+    fStrat.textContent = STRATS[cur] || 'OMNI';
+  }
+
+  function show(i){
+    slides[cur].classList.remove('active');
+    cur = (i + N) % N;
+    slides[cur].classList.add('active');
+    render();
+    if (playing) arm();
+  }
+  function next(){ show(cur + 1); }
+  function prev(){ show(cur - 1); }
+
+  // autoplay scrubber
+  function arm(){
+    clearTimeout(timer);
+    const d = parseInt(slides[cur].dataset.dur, 10) || DUR;   // per-slide pacing
+    seg.style.transition = 'none';
+    seg.style.width = '0%';
+    void seg.offsetWidth;                       // reflow → restart
+    seg.style.transition = 'width ' + d + 'ms linear';
+    seg.style.width = '100%';
+    timer = setTimeout(next, d);                // loops via modulo in show()
+  }
+
+  function play(){
+    playing = true;
+    statusEl.classList.add('live');
+    statusTx.textContent = 'Live';
+    playIco.textContent = '❙❙';
+    playTxt.textContent = 'Pause';
+    arm();
+  }
+  function stop(){
+    playing = false;
+    clearTimeout(timer);
+    statusEl.classList.remove('live');
+    statusTx.textContent = 'Ready';
+    playIco.textContent = '▶';
+    playTxt.textContent = 'Play';
+    seg.style.transition = 'none';
+    seg.style.width = '0%';
+  }
+  function toggle(){ playing ? stop() : play(); }
+
+  function toggleFs(){
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  }
+
+  document.getElementById('playBtn').addEventListener('click', toggle);
+
+  // click the slide area to advance (ignore controls / links)
+  deck.addEventListener('click', e => {
+    if (e.target.closest('a, button, .ctl')) return;
+    next();
+  });
+
+  document.addEventListener('keydown', e => {
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowDown': case 'PageDown': next(); break;
+      case 'ArrowLeft':  case 'ArrowUp':   case 'PageUp':   prev(); break;
+      case ' ':          e.preventDefault(); toggle(); break;
+      case 'f': case 'F': toggleFs(); break;
+      case 'Home': show(0); break;
+      case 'End':  show(N - 1); break;
+    }
+  });
+
+  // expose for inline onclick
+  window.next = next; window.prev = prev; window.toggleFs = toggleFs;
+
+  render();
+</script>
+</body>
+</html>

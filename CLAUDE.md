@@ -153,7 +153,7 @@ Two FSDP checkpoint APIs:
 
 ### Key Constraints Enforced in `build_args`
 
-- `peft.type: qlora` → forces `quantization.enabled=true` and `bits=4`
+- `peft.type: qlora` → forces `quantization.enabled=true`; supports `bits=4` (NF4, the default) or `bits=8` (LLM.int8())
 - 4-bit quantization requires `peft.enabled=true` — cannot train 4-bit weights directly (NF4 has no differentiable backward)
 - 8-bit quantization requires `peft.enabled=true` — direct AdamW updates to INT8 weights overflow the quantization range immediately, causing NaN losses from step 1. Use 8-bit LoRA instead.
 - Any quantization without PEFT → hard error in `build_args` (both 4-bit and 8-bit)

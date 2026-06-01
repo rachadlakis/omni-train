@@ -402,9 +402,11 @@ def build_args(cfg):
     if args.peft_type == "qlora":
         args.peft_enabled = True
         args.quantization_enabled = True
-        
-        if args.quantization_bits != 4:
-            raise ValueError("QLoRA requires quantization.bits=4")
+
+        # QLoRA supports both 4-bit (NF4) and 8-bit (LLM.int8()) base weights.
+        # bits is already validated to {4, 8} above; default stays 4 (canonical QLoRA).
+        if args.quantization_bits not in {4, 8}:
+            raise ValueError("QLoRA requires quantization.bits=4 or 8")
 
     if args.quantization_enabled and not args.peft_enabled:
         if args.quantization_bits == 4:
