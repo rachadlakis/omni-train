@@ -325,6 +325,43 @@ SMOKE_EXTRA_CASES = [
         ("peft", "enabled"): True,
         ("peft", "type"): "lora",
     },
+    # ── Non-LLM modalities ───────────────────────────────────────────────────
+    # Each uses a deliberately tiny real model + a tiny slice of a real dataset
+    # so the full pipeline (processor → dataloader/collate → train loop) is
+    # exercised end-to-end without long downloads or large GPU memory.
+    #
+    # Vision (image classification): AutoModelForImageClassification on beans
+    # (3 classes). Path: AutoImageProcessor → process_images map → pixel_values.
+    {
+        "id": "vision_solo_vit_beans",
+        "strategy": "solo",
+        ("model_type",): "vision",
+        ("model_name",): "WinKawaks/vit-tiny-patch16-224",
+        ("dataset",): {"name": "beans", "subset": None, "split": "train[:3%]"},
+        ("training", "max_length"): 224,
+    },
+    # Object detection: AutoModelForObjectDetection (YOLOS-tiny) on cppe-5.
+    # Path: AutoImageProcessor + _detection_collate → COCO boxes/class_labels.
+    {
+        "id": "detection_solo_yolos_cppe5",
+        "strategy": "solo",
+        ("model_type",): "yolo",
+        ("model_name",): "hustvl/yolos-tiny",
+        ("dataset",): {"name": "cppe-5", "subset": None, "split": "train[:3%]"},
+        ("training", "batch_size"): 2,
+        ("training", "max_length"): 256,
+    },
+    # Vision-language: AutoModelForImageTextToText (SmolVLM-256M) on a tiny
+    # 6-row public image+caption dataset. Path: AutoProcessor + _vlm_collate →
+    # input_ids + pixel_values + masked labels.
+    {
+        "id": "vlm_solo_smolvlm_football",
+        "strategy": "solo",
+        ("model_type",): "vlm",
+        ("model_name",): "HuggingFaceTB/SmolVLM-256M-Instruct",
+        ("dataset",): {"name": "ybelkada/football-dataset", "subset": None, "split": "train"},
+        ("training", "batch_size"): 1,
+    },
 ]
 
 # ── Grid expansion ────────────────────────────────────────────────────────────

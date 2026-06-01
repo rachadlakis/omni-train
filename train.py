@@ -138,13 +138,13 @@ def main(args):
         
         ## WANDB setup - only on rank 0 to avoid multiple runs/logs for distributed strategies
         if args.wandb_log_with_train and rank == 0:
-            wandb.login(key=WANDB_API_KEY) # type: ignore
+            wandb.login(key=WANDB_API_KEY) 
             print_on_rank_0(rank, f"WANDB logging enabled | project={args.wandb_project}", "📊")
-            run = wandb.init( # type: ignore
+            run = wandb.init(
                 project=args.wandb_project,
                 config=vars(args),
                 tensorboard=True
-        )
+                )
 
 
         ## Print environment info for debugging and verification
@@ -164,13 +164,28 @@ def main(args):
         if args.model_type == "custom_transformer":
             print_on_rank_0(rank, "Custom Transformer: skipping tokenizer (synthetic data will be used)", "⏩")
 
-        elif args.model_type in {"llm", "seq2seq", "encoder", "vlm"}:
+        elif args.model_type in {"llm", "seq2seq", "encoder"}:
             print_banner_on_rank_0(rank, "LOADING TOKENIZER")
             print_on_rank_0(rank, f"Fetching tokenizer: {args.model_name}", "🔤")
             tokenizer = AutoTokenizer.from_pretrained(args.model_name, token=HF_TOKEN)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
             print_on_rank_0(rank, "Tokenizer ready ✓")
+        elif args.model_type == "vlm":
+            from transformers import AutoProcessor
+            print_banner_on_rank_0(rank, "LOADING PROCESSOR")
+            print_on_rank_0(rank, f"Fetching multimodal processor: {args.model_name}", "🖼️")
+            tokenizer = AutoProcessor.from_pretrained(args.model_name, token=HF_TOKEN)
+            # Disable image tiling/splitting (Idefics3/SmolVLM) so one image maps
+            # to a bounded number of tokens — tiling can blow sequence length up
+            # into the thousands and exhaust memory.
+            image_processor = getattr(tokenizer, "image_processor", None)
+            if image_processor is not None and hasattr(image_processor, "do_image_splitting"):
+                image_processor.do_image_splitting = False
+            inner_tok = getattr(tokenizer, "tokenizer", None)
+            if inner_tok is not None and inner_tok.pad_token is None:
+                inner_tok.pad_token = inner_tok.eos_token
+            print_on_rank_0(rank, "Processor ready ✓")
         elif args.model_type in {"vision", "yolo"}:
             from transformers import AutoImageProcessor 
             print_banner_on_rank_0(rank, "LOADING IMAGE PROCESSOR")
@@ -315,10 +330,35 @@ def main(args):
                             logits_shift.view(-1, logits_shift.size(-1)),
                             labels_shift.view(-1),
                         )
-                    elif args.model_type in {"vision", "yolo"}:
+                    elif args.model_type == "vision":
                         pixel_values = batch["pixel_values"].to(device)
                         labels = batch["labels"].to(device)
                         outputs = model(pixel_values=pixel_values, labels=labels)
+                        loss = outputs.loss
+                    elif args.model_type == "yolo":
+                        # Detection labels are a list of per-image dicts (boxes,
+                        # class_labels, …) — move each tensor to the device but
+                        # keep the list structure the model expects.
+                        pixel_values = batch["pixel_values"].to(device)
+                        labels = [
+                            {k: v.to(device) for k, v in target.items()}
+                            for target in batch["labels"]
+                        ]
+                        det_kwargs = {"pixel_values": pixel_values, "labels": labels}
+                        if "pixel_mask" in batch:
+                            det_kwargs["pixel_mask"] = batch["pixel_mask"].to(device)
+                        outputs = model(**det_kwargs)
+                        loss = outputs.loss
+                    elif args.model_type == "vlm":
+                        # Processor already produced input_ids, attention_mask,
+                        # pixel_values, (pixel_attention_mask) and labels. Move
+                        # tensors to the device; pass any non-tensor entries
+                        # (some processors emit lists) through untouched.
+                        model_inputs = {
+                            k: (v.to(device) if torch.is_tensor(v) else v)
+                            for k, v in batch.items()
+                        }
+                        outputs = model(**model_inputs)
                         loss = outputs.loss
                     else:
                         input_ids = batch["input_ids"].to(device)

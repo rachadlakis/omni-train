@@ -20,7 +20,7 @@ training:
   weight_decay: 0.01            ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 2                 ## number of GPUs to launch with torchrun for ddp/fsdp
+num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 
@@ -52,24 +52,24 @@ peft: ## Parameter Efficient Fine Tuning
   bias: none                  ## whether to include bias in LoRA. Options: "none", "all", "lora_only"
 
 quantization:
-  enabled: false           ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
+  enabled: false          ## whether to apply quantization (uses bitsandbytes backend). Options: true, false
   bits: 8                 ## number of bits for quantization: 4 (int4) or 8 (int8). Options: 4, 8
   quant_type: nf4         ## quantization type for 4-bit quantization (e.g. nf4, fp4, int4). Options: nf4, fp4, int4 (only relevant if bits=4)
   compute_dtype: bfloat16 ## dtype to use for computations with quantized weights (e.g. bfloat16, float16, float32). Options: bfloat16, float16, float32 (only relevant if quantization is enabled)
   double_quant: true      ## whether to use double quantization for 4-bit quantization (only applicable if bits=4). Options: true, false (only relevant if bits=4)
   
 wandb:
-  wandb_log_with_train: false          ## whether to log training metrics to Weights & Biases. Options: true, false
+  wandb_log_with_train: false         ## whether to log training metrics to Weights & Biases. Options: true, false
   wandb_entity: "dist-train"          ## your W&B entity (username or team). 
   wandb_project: "dist-train-project" ## your W&B project name
 
 custom_transformer_args:
   n_layers: 2           ## number of transformer layers (required if model_type=custom_transformer)
-  vocab_size: 1024         ## vocabulary size (required if model_type=custom_transformer)
-  max_seq_len: 1024       ## maximum sequence length (required if model_type=custom_transformer)
-  dim: 512               ## hidden dimension (required if model_type=custom_transformer)
-  n_heads: 4           ## number of attention heads (required if model_type=custom_transformer)
-  dropout_p: 0.1         ## dropout probability (required if model_type=custom_transformer)
+  vocab_size: 1024      ## vocabulary size (required if model_type=custom_transformer)
+  max_seq_len: 102      ## maximum sequence length (required if model_type=custom_transformer)
+  dim: 512              ## hidden dimension (required if model_type=custom_transformer)
+  n_heads: 4            ## number of attention heads (required if model_type=custom_transformer)
+  dropout_p: 0.1        ## dropout probability (required if model_type=custom_transformer)
 
 
 ## ------------------------------------ In progress  ------------------------------------ ##

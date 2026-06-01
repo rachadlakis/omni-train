@@ -172,6 +172,22 @@ Two FSDP checkpoint APIs:
 | `encoder` | `AutoModel` |
 | `custom_transformer` | `model.Transformer` (toy model built from scratch, uses synthetic data) |
 
+### Data Pipeline by Model Type (`data.py`)
+
+`get_dataloader()` branches on `model_type` to decide how raw dataset rows become batches. Each type expects a specific dataset schema:
+
+| `model_type` | Dataset columns expected | How batches are built | Train-loop call |
+|---|---|---|---|
+| `llm` / `seq2seq` / `encoder` | `text` | `dataset.map(tokenize)` → `input_ids`/`labels` | `model(input_ids, attention_mask, labels)` |
+| `vision` | image (`img`/`image`) + `label`/`labels` | `dataset.map(process_images)` → `pixel_values` + int label | `model(pixel_values, labels)` |
+| `yolo` (detection) | `image` + `objects` (`bbox` COCO `[x,y,w,h]`, `category`, optional `area`/`id`/`iscrowd`) + `image_id` | `_detection_collate` runs the image processor with COCO `annotations` → `pixel_values` + `labels` as a **list of per-image dicts** (`class_labels`, normalized `boxes`) | `model(pixel_values, labels=[{...}], pixel_mask?)` |
+| `vlm` | image (`image`/`img`) + caption (`text`/`caption`/`captions`/`sentence`) | `_vlm_collate` frames each row via the processor chat template, expands `<image>` tokens, pads, and masks pad + image tokens to `-100` | `model(input_ids, attention_mask, pixel_values, pixel_attention_mask, labels)` |
+| `custom_transformer` | — (synthetic) | random token tensors | next-token loss |
+
+Detection and VLM use a `collate_fn` (not `dataset.map`) because their per-row outputs are variable-length structures that can't be default-collated into a tensor. Those paths keep the dataset raw (PIL images preserved) and run `num_workers` collation under fork. `load_dataset` is called with `token=HF_TOKEN` so gated/rate-limited datasets resolve instead of hanging on unauthenticated Hub requests.
+
+For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables image splitting/tiling (`do_image_splitting=False`) on Idefics3/SmolVLM-style processors so one image maps to a bounded number of tokens rather than blowing the sequence length up into the thousands.
+
 ### Layer Detection for FSDP Sharding
 
 `get_model_layers(model)` in `distributed_utils.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
