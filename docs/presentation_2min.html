@@ -147,6 +147,8 @@
   .body { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
   /* keep content in a comfortable column instead of sprawling on ultrawide screens */
   .shead, .body { width: 100%; max-width: 1240px; margin-inline: auto; }
+  /* "fill" mode (press W) — widen to fill a 16:9 capture frame when recording */
+  body.fill .shead, body.fill .body { max-width: 1740px; }
   .g3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.1rem; }
   .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
   .g2.wide { grid-template-columns: 1.15fr 0.85fr; }
@@ -722,7 +724,7 @@
 <!-- Footer telemetry strip -->
 <div class="footstrip">
   <div class="tele" id="tele"></div>
-  <div class="hint">←/→ NAVIGATE · <kbd>SPACE</kbd> PLAY · <kbd>F</kbd> FULLSCREEN</div>
+  <div class="hint">←/→ NAVIGATE · <kbd>SPACE</kbd> PLAY · <kbd>F</kbd> FULLSCREEN · <kbd>W</kbd> FILL</div>
 </div>
 
 <script>
@@ -828,6 +830,7 @@
       case 'ArrowLeft':  case 'ArrowUp':   case 'PageUp':   prev(); break;
       case ' ':          e.preventDefault(); toggle(); break;
       case 'f': case 'F': toggleFs(); break;
+      case 'w': case 'W': document.body.classList.toggle('fill'); break;
       case 'Home': show(0); break;
       case 'End':  show(N - 1); break;
     }
