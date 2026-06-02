@@ -131,19 +131,9 @@ body {
   transform: scale(0.98);
 }
 
-/* On the config page the fixed toggle shares the row with the sticky header.
-   Center the 40px toggle within the ~58px header band (16px symmetric padding)
-   so it lines up vertically with the status badge ("Dark" level with "IDLE"). */
-body:has(.header) .theme-toggle {
-  top: 9px;
-}
-
-/* YAML editor / env pages use .yaml-header, which sits ~20px lower than the
-   config header (page padding) and is shorter (no 16px header padding), so the
-   toggle needs a slightly larger top to line up with the "YAML EDITOR" badge. */
-body:has(.yaml-header) .theme-toggle {
-  top: 13px;
-}
+/* The toggle keeps a single fixed position (top: 20px, right: 24px) on every
+   page. Each header is padded so its status badge centers at the same Y (40px),
+   so "Dark" lines up with "IDLE" / "YAML EDITOR" identically across pages. */
 
 .theme-toggle .icon-sun { display: none; }
 .theme-toggle .icon-moon { display: flex; }
@@ -801,7 +791,7 @@ body:has(.yaml-header) .theme-toggle {
 .header {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 16px 32px;
+  padding: 20px 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -846,9 +836,10 @@ body:has(.yaml-header) .theme-toggle {
 }
 
 .status-badge {
-  padding: 6px 14px;
+  height: 40px;
+  padding: 0 16px;
   border-radius: 20px;
-  font-size: 12px;
+  font-size: 13px;
   margin-right: 100px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1125,6 +1116,12 @@ body:has(.yaml-header) .theme-toggle {
 .form-group input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* Locked field (e.g. GPU Count forced to 1 in Solo mode) */
+.form-group input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .form-group select {
@@ -1513,6 +1510,13 @@ body:has(.yaml-header) .theme-toggle {
 .yaml-header h1 {
   font-size: 20px;
   font-weight: 700;
+}
+
+/* Place the badge's right edge 160px from the viewport edge (20px page padding
+   + 140px) so it lands in the identical spot as the config page's badge and
+   clears the fixed .theme-toggle, overriding the global margin-right: 100px. */
+.yaml-header #yaml-status-badge {
+  margin-right: 140px;
 }
 
 .yaml-header h1 span {
@@ -2681,6 +2685,14 @@ body:has(.training-overlay.active) .theme-toggle {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* Place the badge's right edge 160px from the viewport edge — the same offset
+   the YAML page uses (20px page padding + 140px) — so the badge lands in the
+   identical spot across pages and clears the fixed .theme-toggle. The config
+   header has 32px side padding, so 160 - 32 = 128px of margin. */
+.header #status-badge {
+  margin-right: 128px;
 }
 
 .queue-indicator {

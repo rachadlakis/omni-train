@@ -854,7 +854,7 @@ function checkStrategyGpuCompatibility() {
   if (!warnEl) return;
 
   if (strategy === 'fsdp' && gpuCount < 2) {
-    warnEl.textContent = '⚠ FSDP requires multiple GPUs to shard parameters. Increase GPU count or switch to Solo/DDP.';
+    warnEl.textContent = '⚠ FSDP with 1 GPU provides no memory-saving benefit (nothing to shard across). Use 2+ GPUs or switch to Solo mode.';
     warnEl.style.display = 'block';
   } else if (strategy === 'ddp' && gpuCount < 2) {
     warnEl.textContent = '⚠ DDP with 1 GPU provides no throughput benefit. Use 2+ GPUs or switch to Solo mode.';
@@ -866,19 +866,16 @@ function checkStrategyGpuCompatibility() {
 
 function syncGpuOptionsWithStrategy() {
   const strategy = getVal('f-strategy');
-  const gpuSelect = document.getElementById('f-gpu-count');
-  if (!gpuSelect) return;
+  const gpuInput = document.getElementById('f-gpu-count');
+  if (!gpuInput) return;
 
   const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp' || strategy === 'hybrid';
 
-  Array.from(gpuSelect.options).forEach(opt => {
-    const gpuValue = parseInt(opt.value, 10);
-    opt.disabled = !multiGpuAllowed && gpuValue > 1;
-  });
-
-  const selectedGpu = parseInt(gpuSelect.value || '1', 10);
-  if (!multiGpuAllowed && selectedGpu > 1) {
-    gpuSelect.value = '1';
+  // Solo runs on exactly one GPU — lock the field to 1. Multi-GPU strategies
+  // leave it free for any positive count the user types.
+  gpuInput.disabled = !multiGpuAllowed;
+  if (!multiGpuAllowed) {
+    gpuInput.value = '1';
   }
 }
 
@@ -3348,14 +3345,6 @@ async function updateGpuAvailability() {
     const total = status.total_gpus;
     const statusClass = available > 0 ? 'available' : 'busy';
     el.innerHTML = `<span class="gpu-status-text ${statusClass}">${available} of ${total} GPUs available</span>`;
-
-    const gpuSelect = document.getElementById('f-gpu-count');
-    if (gpuSelect) {
-      Array.from(gpuSelect.options).forEach(opt => {
-        const count = parseInt(opt.value);
-        opt.text = `${count} GPU${count > 1 ? 's' : ''}`;
-      });
-    }
   }
 
   // Update queue indicator
@@ -3638,14 +3627,14 @@ async function pollJobStatus(jobId) {
  */
 function onStrategyChange() {
   const strategy = getVal('f-strategy');
-  const gpuSelect = document.getElementById('f-gpu-count');
+  const gpuInput = document.getElementById('f-gpu-count');
 
   syncGpuOptionsWithStrategy();
 
   // Solo always forces 1 GPU; hybrid starts at 1 (topology product drives it from there).
   // DDP and FSDP leave the count unchanged so the user stays in control.
   if (strategy === 'none' || strategy === 'hybrid') {
-    if (gpuSelect) gpuSelect.value = '1';
+    if (gpuInput) gpuInput.value = '1';
   }
 
   // Show / hide 3D topology section
@@ -3694,13 +3683,10 @@ function onTopologyChange() {
   const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
   const total = dp * tp * pp;
 
-  const gpuSelect = document.getElementById('f-gpu-count');
-
-  // Auto-sync GPU count if an exact matching option exists
-  if (gpuSelect) {
-    const opt = Array.from(gpuSelect.options).find(o => parseInt(o.value) === total);
-    if (opt) gpuSelect.value = String(total);
-  }
+  // Mirror the topology product (dp × tp × pp) straight into GPU Count so the
+  // mesh stays consistent — any positive total is now a valid entry.
+  const gpuInput = document.getElementById('f-gpu-count');
+  if (gpuInput && total >= 1) gpuInput.value = String(total);
 
   updateTopologyHint();
 }

@@ -349,13 +349,8 @@
             </select>
           </div>
           <div class="form-group">
-            <label>GPU Count <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Number of GPUs to request for this training job">?</span></label>
-            <select id="f-gpu-count" onchange="onGpuCountChange()">
-              <option value="1">1 GPU</option>
-              <option value="2">2 GPUs</option>
-              <option value="4">4 GPUs</option>
-              <option value="8">8 GPUs</option>
-            </select>
+            <label>GPU Count <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="Number of GPUs to request for this training job. Any positive count (e.g. 1, 2, 3, 6, 8, 16).">?</span></label>
+            <input type="number" id="f-gpu-count" min="1" step="1" value="1" placeholder="e.g., 2" onchange="onGpuCountChange()">
             <div class="gpu-availability" id="gpu-availability">
               <span class="gpu-status-text">Checking availability...</span>
             </div>

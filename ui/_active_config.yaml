@@ -2,7 +2,7 @@ checkpoint_dir: checkpoints/mini_style_fsdp
 custom_transformer_args:
   dim: 512
   dropout_p: 0.1
-  max_seq_len: 1024
+  max_seq_len: 102
   n_heads: 4
   n_layers: 2
   vocab_size: 1024
@@ -23,6 +23,7 @@ model_name: facebook/opt-350m
 model_type: llm
 multi_dimensional_parallelism:
   device_mesh_shape:
+  - 2
   - 2
   - 2
   dp_enabled: false
