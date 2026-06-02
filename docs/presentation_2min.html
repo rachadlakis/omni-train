@@ -350,7 +350,7 @@
       <span class="hook-eyebrow" data-rise style="--d:.05s">// THE MEMORY WALL</span>
       <p class="hook-sm" data-rise style="--d:.14s">Training a <b>7B</b> model takes</p>
       <h1 class="hook-xl" data-rise style="--d:.22s"><span class="hook-grad">84&nbsp;GB</span> of VRAM.</h1>
-      <p class="hook-sm hook-resolve" data-rise style="--d:.34s">A single A100 has 80&nbsp;GB — so I built the framework that closes the gap.</p>
+      <p class="hook-sm hook-resolve" data-rise style="--d:.34s">A single A100 has 80&nbsp;GB. <b>OMNI-Train</b> closes the gap.</p>
       <span class="hook-cue" data-rise style="--d:.5s">OMNI<span class="sl">//</span>TRAIN&nbsp;&nbsp;↓</span>
     </div>
   </section>
@@ -414,7 +414,7 @@
   <section class="slide">
     <header class="shead" data-rise>
       <span class="kick"><i class="sq" style="background:var(--pink)"></i>// 02 — WHAT IT NORMALLY TAKES</span>
-      <h2 class="stitle">The <em>distributed tax</em>.</h2>
+      <h2 class="stitle">What distributed training <em>requires</em>.</h2>
       <p class="ssub">Weeks of plumbing — and a dozen ways to fail silently — before training step 1.</p>
       <div class="shead-rule"></div>
     </header>
@@ -435,7 +435,7 @@
           <ul class="b">
             <li><span class="dot d-t"></span><span><strong>fully_shard</strong> — wrap policy, meta-device init, leaf order</span></li>
             <li><span class="dot d-t"></span><span><strong>Mixed precision</strong> — bf16 params vs fp32 optimizer states</span></li>
-            <li><span class="dot d-t"></span><span><strong>Prefetch + grad checkpoint</strong> — overlap &amp; recompute</span></li>
+            <li><span class="dot d-t"></span><span><strong>Prefetch + grad checkpoint</strong></span></li>
           </ul>
         </div>
         <div class="card p" data-rise style="--d:.26s">
@@ -525,13 +525,13 @@
         </div>
         <div class="card t" data-rise style="--d:.16s">
           <div class="hd"><span class="nm" style="color:var(--teal)">ddp</span><span class="pip">compute-bound</span></div>
-          <div class="c-title" style="margin-top:.7rem">Model fits — you want speed</div>
-          <div class="c-body">Every GPU holds a <strong>full replica</strong>; all-reduce syncs gradients each step. Throughput scales as you add GPUs.</div>
+          <div class="c-title" style="margin-top:.7rem">Everything fits — you want speed</div>
+          <div class="c-body">Params + grads + optimizer states fit on one card, so every GPU holds a <strong>full replica</strong>; all-reduce syncs gradients each step. Throughput scales as you add GPUs.</div>
         </div>
         <div class="card gr" data-rise style="--d:.26s">
           <div class="hd"><span class="nm" style="color:var(--green)">fsdp</span><span class="pip">memory-bound</span></div>
-          <div class="c-title" style="margin-top:.7rem">Model won't fit on one GPU</div>
-          <div class="c-body">Params, grads &amp; optimizer states <strong>sharded across ranks</strong> — ZeRO-3 style.</div>
+          <div class="c-title" style="margin-top:.7rem">Params + grads + optimizer states won't fit</div>
+          <div class="c-body">When the full footprint blows past one card — <code>OOM</code> — FSDP <strong>shards all three across ranks</strong>, ZeRO-3 style.</div>
           <div class="rail">
             <div class="gpu"><div class="lab">GPU0</div><div class="bar"></div><div class="sh">¼ shard</div></div>
             <div class="gpu"><div class="lab">GPU1</div><div class="bar"></div><div class="sh">¼ shard</div></div>
@@ -576,7 +576,7 @@
     <div class="body">
       <div class="g2">
         <div class="card o" data-rise style="--d:.06s">
-          <div class="c-title">What you get</div>
+          <div class="c-title">Supported methods</div>
           <ul class="b">
             <li><span class="dot d-o"></span><span><strong>LoRA</strong> — PEFT adapter injection, <code>all-linear</code> or named targets</span></li>
             <li><span class="dot d-o"></span><span><strong>QLoRA</strong> — quantized base + LoRA: <strong>4-bit</strong> <code>nf4</code>/<code>fp4</code> or <strong>8-bit</strong> <code>LLM.int8()</code>, double-quant, k-bit prep</span></li>
@@ -590,7 +590,7 @@
             <li><span class="dot d-v"></span><span>Any quantization <strong>requires PEFT</strong> — direct 4/8-bit training NaNs from step 1</span></li>
             <li><span class="dot d-r"></span><span><code>fsdp</code> + quantization → <strong>hard error</strong> (sharding can't touch quantized layers)</span></li>
           </ul>
-          <div class="readout"><span class="ro-val x-g">✓</span><span class="ro-lab">caught at config time, not at 3am</span></div>
+          <div class="readout"><span class="ro-val x-g">✓</span><span class="ro-lab">caught at config time, before allocation</span></div>
         </div>
       </div>
     </div>
@@ -599,8 +599,8 @@
   <!-- ═════ 07 · UNDER THE HOOD ═════ -->
   <section class="slide" data-dur="10500">
     <header class="shead" data-rise>
-      <span class="kick"><i class="sq" style="background:var(--violet2)"></i>// 07 — THE HARD PARTS, HANDLED</span>
-      <h2 class="stitle">Engineered for the <em>edge cases</em>.</h2>
+      <span class="kick"><i class="sq" style="background:var(--violet2)"></i>// 07 — IMPLEMENTATION DETAILS</span>
+      <h2 class="stitle">The edge cases, <em>handled correctly</em>.</h2>
       <p class="ssub">The details that silently break hand-rolled training loops — solved once, reused everywhere.</p>
       <div class="shead-rule"></div>
     </header>
@@ -642,13 +642,13 @@
   <!-- ═════ 08 · LAUNCH ANYWHERE ═════ -->
   <section class="slide">
     <header class="shead" data-rise>
-      <span class="kick"><i class="sq" style="background:var(--green)"></i>// 08 — RUN IT YOUR WAY</span>
-      <h2 class="stitle">CLI, Web UI, or <em>SLURM</em>.</h2>
-      <p class="ssub">The same config drives a terminal, a browser control panel, or a multi-node cluster.</p>
+      <span class="kick"><i class="sq" style="background:var(--green)"></i>// 08 — EXECUTION INTERFACES</span>
+      <h2 class="stitle">CLI or <em>Web UI</em>.</h2>
+      <p class="ssub">The same config drives a terminal or a browser control panel.</p>
       <div class="shead-rule"></div>
     </header>
     <div class="body">
-      <div class="g3">
+      <div class="g2">
         <div class="card v" data-rise style="--d:.06s">
           <div class="c-ico">⌨️</div>
           <div class="c-title">CLI</div>
@@ -659,11 +659,6 @@
           <div class="c-title">Web UI</div>
           <div class="c-body">FastAPI control panel — visual editor, template gallery, <strong>live log streaming</strong>, and a SQLite job queue with priority scheduling.</div>
           <div class="readout"><span class="ro-val x-t">:8787</span><span class="ro-lab">bash ui/launch_ui.sh</span></div>
-        </div>
-        <div class="card gr" data-rise style="--d:.26s">
-          <div class="c-ico">🛰️</div>
-          <div class="c-title">SLURM</div>
-          <div class="c-body">Auto-generated job scripts set <code>MASTER_ADDR</code>, <code>MASTER_PORT</code> &amp; <code>WORLD_SIZE</code> — scale across nodes over InfiniBand.</div>
         </div>
       </div>
     </div>
@@ -693,7 +688,7 @@
         <div class="card v" data-rise style="--d:.2s">
           <div class="c-ico">🔲</div>
           <div class="c-title">3D parallelism <span class="badge-prog">In Progress</span></div>
-          <div class="c-body">Data × Tensor × Pipeline via <code>DeviceMesh</code>:
+          <div class="c-body">Tensor × Pipeline × Data via <code>DeviceMesh</code>:
             <ul class="b" style="margin-top:.6rem">
               <li><span class="dot d-v"></span><span><strong>TP</strong> — split weight matrices within a node</span></li>
               <li><span class="dot d-v"></span><span><strong>PP</strong> — slice layers across stages over slow links</span></li>
@@ -724,12 +719,7 @@
 
 <!-- Footer telemetry strip -->
 <div class="footstrip">
-  <div class="tele">
-    <span>STRATEGY <b id="fStrat">FSDP2</b></span>
-    <span>MESH <b>8×1×1</b></span>
-    <span>PRECISION <b>bf16</b></span>
-    <span>COMMS <b>NCCL</b></span>
-  </div>
+  <div class="tele" id="tele"></div>
   <div class="hint">←/→ NAVIGATE · <kbd>SPACE</kbd> PLAY · <kbd>F</kbd> FULLSCREEN</div>
 </div>
 
@@ -746,10 +736,23 @@
   const statusTx= document.getElementById('statusText');
   const playIco = document.getElementById('playIco');
   const playTxt = document.getElementById('playTxt');
-  const fStrat  = document.getElementById('fStrat');
+  const tele    = document.getElementById('tele');
 
-  // per-slide footer telemetry flavor
-  const STRATS = ['BOOT','IDLE','MEMORY','BLOCKED','YAML','FSDP2','MULTI','PEFT','META','QUEUE','MESH','READY'];
+  // per-slide footer telemetry — one triplet per slide, tied to its content
+  const TELE = [
+    [['MODEL','7B'],['VRAM_REQ','84GB'],['SINGLE_A100','80GB']],                  // hook · memory wall
+    [['FRAMEWORK','OMNI//TRAIN'],['BACKEND','PyTorch'],['MODE','ready']],         // hero
+    [['FRONTIER','70B+'],['FOOTPRINT','12×/param'],['FULL_FT','84GB']],           // 01 · why
+    [['LAUNCH','torchrun'],['COMMS','NCCL'],['FAILMODE','silent']],               // 02 · the pain
+    [['INPUT','config.yaml'],['DIST_CODE','0 lines'],['LAUNCH','1 cmd']],         // 03 · the fix
+    [['SOLO','1 GPU'],['DDP','replica'],['FSDP2','sharded']],                     // 04 · strategy
+    [['MODELS','LLM·VLM·VISION'],['+','YOLO·ENCODER'],['ROUTING','model_type']],  // 05 · modalities
+    [['LORA','on'],['QLORA','4/8-bit'],['GUARDRAILS','enforced']],                // 06 · peft
+    [['INIT','meta-device'],['CKPT','DCP+DTensor'],['FIX','RoPE buffer']],        // 07 · implementation
+    [['CLI','torchrun'],['WEB_UI',':8787'],['QUEUE','SQLite']],                   // 08 · interfaces
+    [['MULTI_NODE','WIP'],['3D_PARALLEL','WIP'],['TARGET','1T+']],                // 09 · roadmap
+    [['STRATEGIES','3'],['MODALITIES','7'],['SOURCE','1 file']],                  // 10 · close
+  ];
 
   let cur = 0, playing = false, timer = null;
 
@@ -758,7 +761,7 @@
   function render(){
     counter.textContent = pad(cur + 1) + ' / ' + pad(N);
     fill.style.width = (cur / (N - 1) * 100) + '%';
-    fStrat.textContent = STRATS[cur] || 'OMNI';
+    tele.innerHTML = (TELE[cur] || []).map(p => '<span>' + p[0] + ' <b>' + p[1] + '</b></span>').join('');
   }
 
   function show(i){
@@ -813,6 +816,7 @@
   // click the slide area to advance (ignore controls / links)
   deck.addEventListener('click', e => {
     if (e.target.closest('a, button, .ctl')) return;
+    if (window.getSelection && window.getSelection().toString()) return;  // don't advance while selecting text
     next();
   });
 
