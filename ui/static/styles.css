@@ -1246,7 +1246,7 @@ body {
 .side-panel {
   position: fixed;
   left: 0;
-  top: 57px;
+  top: 81px;
   bottom: 0;
   width: 272px;
   background: var(--surface);
@@ -2517,7 +2517,7 @@ body:has(.training-overlay.active) .theme-toggle {
   .side-panel {
     position: fixed;
     left: 0;
-    top: 57px;
+    top: 81px;
     bottom: 0;
     z-index: 50;
     box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
