@@ -1,4 +1,4 @@
-# Beginner's Guide — Distributed Training Project
+# Beginner's Guide — OMNI-Train
 
 New to distributed training or this project? Start here.
 For the full technical reference see [TECHNICAL.md](TECHNICAL.md).

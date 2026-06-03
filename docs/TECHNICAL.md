@@ -1,4 +1,4 @@
-# Technical Reference — Distributed Training Project
+# Technical Reference — OMNI-Train
 
 For high-level setup and usage see the [README](../README.md). For a beginner-friendly introduction see [GUIDE.md](GUIDE.md).
 

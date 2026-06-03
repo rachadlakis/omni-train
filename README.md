@@ -1,4 +1,4 @@
-# Distributed Training Project
+# OMNI-Train
 
 A modular framework for training LLMs, vision models, and embedding models across multiple GPUs using PyTorch Distributed.
 
