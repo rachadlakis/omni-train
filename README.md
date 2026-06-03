@@ -48,8 +48,8 @@ Supports:
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/rachadlakis/dist-train-project.git
-cd dist-train-project
+git clone https://github.com/rachadlakis/omni-train.git
+cd omni-train
 ```
 
 ---
@@ -259,7 +259,7 @@ Best when:
 # Project Structure
 
 ```text
-dist-train-project/
+omni-train/
 ├── train.py
 ├── config.yaml
 ├── distributed_utils.py

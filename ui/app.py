@@ -1254,7 +1254,7 @@ async def queue_delete_job(job_id: str):
 
 def main():
     import uvicorn
-    print("\n dist-train-project UI")
+    print("\n omni-train UI")
     print("  http://localhost:8000\n")
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

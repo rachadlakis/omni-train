@@ -480,8 +480,8 @@ def build_args(cfg):
     # --------------------------------------------------
     wb = cfg["wandb"]
     args.wandb_log_with_train = to_bool(wb.get("wandb_log_with_train", True))
-    args.wandb_entity = wb.get("wandb_entity", "dist-train-project")
-    args.wandb_project = wb.get("wandb_project", "dist-train-project")
+    args.wandb_entity = wb.get("wandb_entity", "omni-train")
+    args.wandb_project = wb.get("wandb_project", "omni-train")
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
     return args

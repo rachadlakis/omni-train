@@ -70,6 +70,6 @@ training:
   warmup_steps: 100
   weight_decay: 0.01
 wandb:
-  wandb_entity: dist-train-project
+  wandb_entity: omni-train
   wandb_log_with_train: false
-  wandb_project: dist-train-project
+  wandb_project: omni-train

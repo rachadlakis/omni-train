@@ -7,8 +7,8 @@ Thanks for your interest in contributing. This guide covers everything you need 
 ## Setup
 
 ```bash
-git clone https://github.com/rachadlakis/dist-train-project.git
-cd dist-train-project
+git clone https://github.com/rachadlakis/omni-train.git
+cd omni-train
 
 python3 -m venv .venv
 source .venv/bin/activate

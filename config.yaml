@@ -61,7 +61,7 @@ quantization:
 wandb:
   wandb_log_with_train: false         ## whether to log training metrics to Weights & Biases. Options: true, false
   wandb_entity: "dist-train"          ## your W&B entity (username or team). 
-  wandb_project: "dist-train-project" ## your W&B project name
+  wandb_project: "omni-train" ## your W&B project name
 
 custom_transformer_args:
   n_layers: 2           ## number of transformer layers (required if model_type=custom_transformer)

@@ -68,8 +68,8 @@ def _default_config(project_root: Path) -> dict[str, Any]:
         },
         "wandb": {
             "wandb_log_with_train": False,
-            "wandb_entity": "dist-train-project",
-            "wandb_project": "dist-train-project",
+            "wandb_entity": "omni-train",
+            "wandb_project": "omni-train",
             "wandb_run_name": "",
         },
     }
@@ -181,8 +181,8 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
         },
         "wandb": {
             "wandb_log_with_train": wandb.get("wandb_log_with_train", base["wandb"].get("wandb_log_with_train", False)),
-            "wandb_entity": wandb.get("wandb_entity", base["wandb"].get("wandb_entity", "dist-train-project")),
-            "wandb_project": wandb.get("wandb_project", base["wandb"].get("wandb_project", "dist-train-project")),
+            "wandb_entity": wandb.get("wandb_entity", base["wandb"].get("wandb_entity", "omni-train")),
+            "wandb_project": wandb.get("wandb_project", base["wandb"].get("wandb_project", "omni-train")),
             "wandb_run_name": wandb.get("wandb_run_name", base["wandb"].get("wandb_run_name", "")),
         },
     }
