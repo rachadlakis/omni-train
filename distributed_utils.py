@@ -347,9 +347,17 @@ def setup_dist_process_group():
 def cleanup():
     try:
         if dist.is_available() and dist.is_initialized():
+            # Drain pending CUDA work so NCCL aborts its communicator from a clean state.
+            # Without this, NCCL 2.21.5 can report a misleading "unhandled cuda error /
+            # out of memory" while tearing down — after all real work is already done.
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             dist.destroy_process_group()
     except Exception as e:
-        print(f"⚠️ Warning: Failed to clean up process group: {e}")
+        # Teardown runs after training + checkpointing complete, so a NCCL error here does
+        # not affect results. Report it once, quietly, instead of a scary per-rank warning.
+        if int(os.environ.get("RANK", "0")) == 0:
+            print(f"ℹ️  Process group teardown note (harmless — run already completed): {e}", flush=True)
 
 
 
