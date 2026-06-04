@@ -107,42 +107,38 @@ def print_config(args):
     }
 
     cfg = vars(args)
-    width = 72
-    col = 32
+    bar = "═" * 60      # horizontal rule only — no right border to drift out of alignment
+    label_w = 28        # key column width; longest key (~26 chars) + breathing room
+    max_val = 44        # truncate very long values so a row never wraps
 
-    print(f"\n  ╔{'═' * width}╗")
-    print(f"  ║{'  ⚙  TRAINING CONFIGURATION':^{width}}║")
-    print(f"  ╠{'═' * width}╣")
+    def _row(key, val):
+        val_str = str(val) if val not in (None, "") else "—"
+        if len(val_str) > max_val:
+            val_str = val_str[: max_val - 3] + "..."
+        print(f"      {key:<{label_w}}{val_str}", flush=True)
+
+    print(f"\n{bar}", flush=True)
+    print("  ⚙  TRAINING CONFIGURATION", flush=True)
+    print(bar, flush=True)
 
     seen = set()
     for group, keys in groups.items():
-        print(f"  ║  {'▸ ' + group:<{width - 2}}║")
-        for key in keys:
-            if key not in cfg:
-                continue
+        present = [k for k in keys if k in cfg]
+        if not present:
+            continue
+        print(f"\n  ▸ {group}", flush=True)
+        for key in present:
             seen.add(key)
-            val = cfg[key]
-            label = f"    {key}"
-            val_str = str(val) if val is not None else "—"
-            # truncate long values
-            if len(val_str) > width - col - 2:
-                val_str = val_str[: width - col - 5] + "..."
-            print(f"  ║  {label:<{col - 2}}  {val_str:<{width - col - 2}}║")
-        print(f"  ║{' ' * width}║")
+            _row(key, cfg[key])
 
     # catch any attrs not covered by groups
     extras = [(k, v) for k, v in cfg.items() if k not in seen]
     if extras:
-        print(f"  ║  {'▸ Other':<{width - 2}}║")
+        print("\n  ▸ Other", flush=True)
         for key, val in extras:
-            label = f"    {key}"
-            val_str = str(val) if val is not None else "—"
-            if len(val_str) > width - col - 2:
-                val_str = val_str[: width - col - 5] + "..."
-            print(f"  ║  {label:<{col - 2}}  {val_str:<{width - col - 2}}║")
-        print(f"  ║{' ' * width}║")
+            _row(key, val)
 
-    print(f"  ╚{'═' * width}╝\n")
+    print(f"{bar}\n", flush=True)
 
 
 # ----------------------------------------------------------------------

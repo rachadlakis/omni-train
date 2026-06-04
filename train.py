@@ -36,6 +36,7 @@ from distributed_utils import (
     print_banner_on_rank_0,
     print_on_all_ranks,
     gpu_memory_snapshot,
+    print_training_vram_estimate,
     setup_dist_process_group,
     cleanup,
     apply_solo,
@@ -215,6 +216,12 @@ def main(args):
         if not trainable_params:
             raise RuntimeError("No trainable parameters were found. Check PEFT/quantization configuration.")
 
+        # Report the memory footprint of training this model. FSDP prints this earlier,
+        # before it shards (inside apply_fsdp), so here we only cover the non-sharded
+        # strategies to avoid printing it twice.
+        if args.strategy != "fsdp":
+            print_training_vram_estimate(rank, model, args, world_size)
+
         ## Create the optimizer (AdamW) for trainable model parameters.
         # CHANGED: pass trainable_params instead of model.parameters() to AdamW.
         # Reason: for PEFT/QLoRA runs, most base weights are frozen (requires_grad=False).
@@ -277,7 +284,7 @@ def main(args):
             print_on_rank_0(rank, f"LR warmup enabled: warmup_steps={args.warmup_steps}, total_steps={total_steps}", "📈")
 
         # print_on_rank_0(rank, f"Counting Model Parameters", )
-        print_on_rank_0(rank,f"Counting model parameters for training time estimation... (this may take a moment)""⏳",)
+        print_on_rank_0(rank, "Counting model parameters for training time estimation... (this may take a moment)", "⏳")
         model_total_params = sum(p.numel() for p in model.parameters())
         print_on_rank_0(rank, f"Total model parameters: {model_total_params:,}")
 

@@ -45,15 +45,50 @@ if torch.cuda.is_available():
 else:
     BACKEND = "gloo"
 
+# Terminal columns reserved for the leading emoji so that message text always
+# starts at the same column no matter which emoji (or none) precedes it.
+_GUTTER = 4
+
+def _display_width(text):
+    """Best-effort count of terminal columns occupied by `text`.
+
+    Zero-width joiners and variation selectors take no cell; emoji and symbol
+    glyphs take two. This is a small heuristic (no wcwidth dependency) that
+    matches how modern terminals render the emoji used in these banners, so the
+    gutter padding lines up instead of drifting by an emoji's render width.
+    """
+    import unicodedata
+    width = 0
+    for ch in text:
+        code = ord(ch)
+        if unicodedata.combining(ch) or code in (0x200D, 0xFE0E, 0xFE0F):
+            continue  # ZWJ + variation selectors are zero-width
+        if (code >= 0x1F000                  # emoji & pictographs
+                or 0x2600 <= code <= 0x27BF  # misc symbols / dingbats
+                or 0x2B00 <= code <= 0x2BFF  # arrows & symbols
+                or 0x2190 <= code <= 0x21FF):
+            width += 2
+        else:
+            width += 1
+    return width
+
+def _gutter(emoji):
+    """Emoji padded out to the fixed-width left gutter, or blank spaces if none."""
+    if not emoji:
+        return " " * _GUTTER
+    return emoji + " " * max(1, _GUTTER - _display_width(emoji))
+
 def print_on_rank_0(rank, msg, emoji=""):
     if rank == 0:
-        print(f"\n{emoji}  {msg}" if emoji else f"   {msg}", flush=True)
+        # Emoji lines are event headers (one blank line above for separation);
+        # plain lines are tight detail lines under the preceding event.
+        lead = "\n" if emoji else ""
+        print(f"{lead}{_gutter(emoji)}{msg}", flush=True)
 
 def print_banner_on_rank_0(rank, title):
     if rank == 0:
-        print(f"\n{'='*60}",flush=True)
-        print(f"  {title}", flush=True)
-        print(f"{'='*60}",  flush=True)
+        bar = "=" * 60
+        print(f"\n{bar}\n  {title}\n{bar}", flush=True)
 
 def print_on_all_ranks(rank, msg, emoji="", local_rank=None, device=None):
     """Prints a message from all ranks, prefixed with rank and device info."""
@@ -64,8 +99,8 @@ def print_on_all_ranks(rank, msg, emoji="", local_rank=None, device=None):
     if device is not None:
         prefix_parts.append(f"device={device}")
     prefix = " | ".join(prefix_parts)
-    print(f"\n{emoji}  [{prefix}] {msg}" if emoji else f"\n[{prefix}] {msg}", flush=True)
-    
+    print(f"\n{_gutter(emoji)}[{prefix}] {msg}", flush=True)
+
 def gather_rank_debug(rank, world_size, title, message):
     """Utility to gather debug messages from all ranks and print them together on rank 0."""
     if not dist.is_available() or not dist.is_initialized():
@@ -87,6 +122,132 @@ def gpu_memory_snapshot(device):
     allocated = torch.cuda.memory_allocated(device) / (1024 ** 3)
     reserved = torch.cuda.memory_reserved(device) / (1024 ** 3)
     return f"allocated={allocated:.2f} GB | reserved={reserved:.2f} GB"
+
+
+def _resolve_hf_config(model):
+    """Best-effort fetch of the underlying HF config from a (possibly DDP/FSDP/PEFT) model.
+
+    For VLMs the transformer dims live on a nested text_config, so we unwrap that too.
+    Returns None for architectures we can't introspect (e.g. the toy custom_transformer).
+    """
+    for obj in (model, getattr(model, "module", None), getattr(model, "base_model", None)):
+        cfg = getattr(obj, "config", None) if obj is not None else None
+        if cfg is not None:
+            return getattr(cfg, "text_config", cfg)
+    return None
+
+def _transformer_dims(cfg):
+    """Pull (num_layers, hidden_dim) from an HF config across common naming schemes."""
+    def first(names):
+        for n in names:
+            v = getattr(cfg, n, None)
+            if v:
+                return int(v)
+        return None
+    layers = first(("num_hidden_layers", "n_layer", "num_layers", "n_layers"))
+    hidden = first(("hidden_size", "n_embd", "d_model", "hidden_dim"))
+    return layers, hidden
+
+# UI model_type labels → the set accepted by utils.estimate_training_vram.
+# Mirrors the _type_map in ui/app.py so terminal and UI feed the formula identically.
+_VRAM_TYPE_MAP = {
+    "llm": "llm", "seq2seq": "seq2seq", "vlm": "vlm",
+    "encoder": "encoder", "embedding": "encoder",
+    "vision": "vision", "cnn": "vision",
+    "yolo": "yolo", "detection": "yolo",
+}
+
+def print_training_vram_estimate(rank, model, args, world_size):
+    """Print the GPU memory needed to train `model`, kept numerically in sync with the UI.
+
+    This does NOT reimplement the memory math — it feeds *measured* inputs (exact parameter
+    count from numel(), real layer/hidden dims read from the model config) into the very same
+    `utils.estimate_training_vram` the web UI calls. So the conventions are identical by
+    construction: decimal GB (÷1e9), AdamW = fp32 master + two fp32 moments (12 B/param),
+    a 0.85 allocator-efficiency factor on the total, and the same ~10×(batch×seq×hidden)
+    per-layer activation heuristic (halved under gradient checkpointing).
+
+    Any residual gap vs. the UI is only because the UI *infers* the parameter count from the
+    model name while we *measure* it here — i.e. this figure is the more accurate of the two.
+
+    Activations do not shard under FSDP, so the per-GPU line divides only weights+grads+optim
+    by `world_size` and adds activations back un-sharded — matching ui/app.py's fsdp-check.
+
+    Falls back to a measured params+grads+optim figure (activations excluded) for
+    architectures the formula doesn't cover (e.g. custom_transformer) or when the model
+    config doesn't expose transformer dims.
+    """
+    if rank != 0:
+        return
+
+    # ---- Measured inputs ----
+    num_params = 0
+    param_dtype_bits = 16  # bf16/fp16 storage → 16, fp32 → 32
+    for p in model.parameters():
+        num_params += p.numel()
+        if p.is_floating_point():
+            param_dtype_bits = 32 if p.element_size() >= 4 else 16
+
+    layers, hidden = (None, None)
+    cfg = _resolve_hf_config(model)
+    if cfg is not None:
+        layers, hidden = _transformer_dims(cfg)
+
+    seq_len = int(getattr(args, "max_length", 0) or 0)
+    batch = int(getattr(args, "batch_size", 0) or 0)
+    grad_ckpt = bool(getattr(args, "gradient_checkpointing", False))
+    vram_type = _VRAM_TYPE_MAP.get(str(getattr(args, "model_type", "")).lower())
+    quant_bits = int(getattr(args, "quantization_bits", 0)) if getattr(args, "quantization_enabled", False) else 0
+
+    print_banner_on_rank_0(rank, "ESTIMATED VRAM TO TRAIN")
+
+    # ---- Shared formula (same one the UI calls) ----
+    vram = None
+    if vram_type and layers and hidden and seq_len and batch:
+        try:
+            from utils import estimate_training_vram
+            vram = estimate_training_vram(
+                model_type=vram_type,
+                num_params=num_params,
+                param_dtype_bits=param_dtype_bits,
+                batch_size=batch,
+                seq_len=seq_len,
+                num_layers=layers,
+                hidden_dim=hidden,
+                activation_checkpointing=grad_ckpt,
+                peft_enabled=bool(getattr(args, "peft_enabled", False)),
+                peft_r=int(getattr(args, "peft_r", 16)),
+                quantization_bits=quant_bits,
+            )
+        except Exception as e:
+            print_on_rank_0(rank, f"Falling back to static estimate ({e})", "⚠️")
+
+    if vram is not None:
+        ckpt = " | grad_ckpt" if grad_ckpt else ""
+        print_on_rank_0(rank, f"Parameters        : {vram['weights_gb']:7.2f} GB", "🧮")
+        print_on_rank_0(rank, f"Gradients         : {vram['gradients_gb']:7.2f} GB")
+        print_on_rank_0(rank, f"Optimizer (AdamW) : {vram['optimizer_gb']:7.2f} GB")
+        print_on_rank_0(rank, f"Activations (est.): {vram['activations_gb']:7.2f} GB | batch={batch} seq={seq_len}{ckpt}", "🔥")
+        # total_gb already includes the 0.85 allocator-efficiency factor (UI convention).
+        print_on_rank_0(rank, f"Est. peak total   : {vram['total_gb']:7.2f} GB (incl. 0.85 alloc factor)", "📈")
+        if args.strategy == "fsdp" and world_size > 1:
+            shardable = vram["weights_gb"] + vram["gradients_gb"] + vram["optimizer_gb"]
+            per_gpu = (shardable / world_size + vram["activations_gb"]) * 0.85
+            print_on_rank_0(rank, f"~Per-GPU under FSDP across {world_size} GPUs: {per_gpu:7.2f} GB")
+        return
+
+    # ---- Fallback: measured static buffers only (architecture not covered by the formula) ----
+    GB = 1e9  # decimal GB, matching the UI
+    weights_gb = num_params * (param_dtype_bits / 8) / GB
+    trainable_elems = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    grad_gb = trainable_elems * (param_dtype_bits / 8) / GB
+    optim_gb = trainable_elems * 12 / GB  # fp32 master + two fp32 moments, UI convention
+    static_gb = weights_gb + grad_gb + optim_gb
+    print_on_rank_0(rank, f"Parameters        : {weights_gb:7.2f} GB", "🧮")
+    print_on_rank_0(rank, f"Gradients         : {grad_gb:7.2f} GB")
+    print_on_rank_0(rank, f"Optimizer (AdamW) : {optim_gb:7.2f} GB")
+    print_on_rank_0(rank, "Activations (est.): n/a — unknown architecture; total excludes activations", "🔥")
+    print_on_rank_0(rank, f"Est. total (excl. activations): {static_gb:7.2f} GB", "📈")
 
 
 
@@ -741,6 +902,11 @@ def _apply_fsdp_custom_transformer(args, device, rank):
 
     with torch.device("meta"):
         model = Transformer(model_args)
+
+    # Report training VRAM on the full model *before* sharding (toy model → activations
+    # are reported as n/a since it exposes no HF config).
+    print_training_vram_estimate(rank, model, args, dist.get_world_size())
+
     for layer in model.layers:
         fully_shard(layer, **fsdp_kwargs) # type: ignore
     fully_shard(model, **fsdp_kwargs)
@@ -939,6 +1105,10 @@ def _apply_fsdp_peft_quant(local_rank, rank, device, args):
     elif args.mixed_precision and args.quantization_enabled:
         print_on_rank_0(rank, "Mixed precision policy skipped for quantized base; using quantization compute dtype", "ℹ️")
 
+    # Report training VRAM on the full model *before* sharding, so the user sees the
+    # unsharded footprint (and why FSDP is needed) ahead of the sharding output.
+    print_training_vram_estimate(rank, model, args, dist.get_world_size())
+
     stacks = get_model_layers(model)
     if stacks:
         total_layers = sum(len(layers) for layers, _ in stacks)
@@ -1027,6 +1197,10 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
             print_on_rank_0(rank, "Gradient Checkpointing (Activation Checkpointing) enabled", "💾")
         else:
             print_on_rank_0(rank, "This model does not support Gradient Checkpointing (Activation Checkpointing).", "⚠️")
+
+    # Report training VRAM on the full model *before* sharding, so the user sees the
+    # unsharded footprint (and why FSDP is needed) ahead of the sharding output.
+    print_training_vram_estimate(rank, model, args, dist.get_world_size())
 
     stacks = get_model_layers(model)
     if stacks:
