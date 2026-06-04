@@ -7,11 +7,11 @@ model_type: llm                  ## Options: llm, seq2seq, vision, yolo, vlm, en
 dataset:
   name: wikitext            ## dataset name from Hugging Face datasets library
   subset: wikitext-2-raw-v1 ## subset name if the dataset has multiple subsets 
-  split: train[:5%]         ## which split and how much to use for trai. Ex. train[:2%]+validation[:3%]"
+  split: train[:20%]         ## which split and how much to use for trai. Ex. train[:2%]+validation[:3%]"
 
 training:
   epochs: 6                     ## Number of epochs to train. Options: 1, 2, 3, 4, 5, 10, etc.
-  batch_size: 16                ## Batch size for training. Options: 1, 2, 4, 8, 16, 32, etc. 
+  batch_size: 8                ## Batch size for training. Options: 1, 2, 4, 8, 16, 32, etc. 
   max_length: 512               ## The maximum sequence length for training. Options: 128, 256, 512, etc. 
   learning_rate: 2e-5           ## Learning rate for training
   gradient_checkpointing: false ## whether to use gradient checkpointing (activation checkpointing)
