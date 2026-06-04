@@ -590,9 +590,9 @@ def _apply_peft_quantization(model, args, rank):
         _task_type = _peft_task_type_map.get(getattr(args, "model_type", "llm"), TaskType.CAUSAL_LM)
         try:
             peft_cfg = LoraConfig(
-                r=int(getattr(args, "peft_r", 16)),
-                lora_alpha=int(getattr(args, "peft_alpha", 32)),
-                lora_dropout=float(getattr(args, "peft_dropout", 0.05)),
+                r=int(getattr(args, "peft_r", 16)), # type: ignore
+                lora_alpha=int(getattr(args, "peft_alpha", 32)), # type: ignore
+                lora_dropout=float(getattr(args, "peft_dropout", 0.05)), # type: ignore
                 target_modules=_normalize_target_modules(getattr(args, "peft_target_modules", "all-linear")),
                 bias=str(getattr(args, "peft_bias", "none")), # type: ignore
                 task_type=_task_type,
