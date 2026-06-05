@@ -45,3 +45,6 @@ docs/presentation_2min.html
 
 
 docs/Steps to clone and run omni-train.txt
+hybrid/
+parallelism.py
+parallelism_test.py
