@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -243,8 +243,13 @@ def _parse_dotenv(path: Path) -> dict:
 
 
 @app.get("/api/env")
-async def get_env_keys(keys: str = Query("", description="Comma-separated key names to fetch")):
-    """Read specific keys from the project's .env file."""
+async def get_env_keys(request: Request, keys: str = Query("", description="Comma-separated key names to fetch")):
+    """Read specific keys from the project's .env file.
+
+    Secret values are only returned to local (loopback) clients. If the UI is
+    exposed on a non-loopback interface, callers receive empty values instead,
+    so an exposed server cannot leak HF_TOKEN / WANDB_API_KEY over the network.
+    """
     env_path = (PROJECT_ROOT / ".env").resolve()
     if not _is_safe_path(env_path, PROJECT_ROOT.resolve()):
         raise HTTPException(403, "Access denied")
@@ -253,11 +258,20 @@ async def get_env_keys(keys: str = Query("", description="Comma-separated key na
 
     if keys:
         requested = [k.strip() for k in keys.split(",") if k.strip()]
-        result = {k: parsed.get(k) for k in requested}
+        selected = {k: parsed.get(k) for k in requested}
     else:
-        result = {k: v for k, v in parsed.items()}
+        selected = dict(parsed)
 
-    return {"found": env_path.exists(), "keys": result}
+    client_host = request.client.host if request.client else None
+    is_local = client_host in {"127.0.0.1", "::1", "localhost"}
+    if is_local:
+        result = selected
+    else:
+        # Non-local caller: never reveal values. Empty string makes the UI fall
+        # back to manual key entry instead of autofilling a stored secret.
+        result = {k: "" for k in selected}
+
+    return {"found": env_path.exists(), "local": is_local, "keys": result}
 
 
 # ---------------------------------------------------------------------------
@@ -1254,9 +1268,15 @@ async def queue_delete_job(job_id: str):
 
 def main():
     import uvicorn
+    host = os.getenv("UI_HOST", "127.0.0.1")
+    port = int(os.getenv("UI_PORT", "8000"))
     print("\n omni-train UI")
-    print("  http://localhost:8000\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"  http://{host}:{port}\n")
+    if host not in ("127.0.0.1", "localhost"):
+        print("  WARNING: this UI has no authentication. Binding to a non-loopback")
+        print("  address exposes training control and .env key presence to your")
+        print("  network — put it behind a firewall or an authenticated proxy.\n")
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

@@ -1,50 +1,51 @@
-.venv/
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .ipynb_checkpoints/
 
-*train.cpython-312.pyc
-.env
-.venv
+# Virtual environments
 .venv/
-dist-train-project/.venv/
-dist-train-project/.env
-dist-train-project/.venv/
-dist-train-project/.env/
-dist-train-project/dist-train-project.egg-info/
+venv/
 
-
-models/__pycache__/registry.cpython-312.pyc
-nul
-*.tar.gz
-*.pyc
+# Secrets / environment
+.env
+.env.*
+!.env.example
 
 # Distributed checkpoint artifacts
+checkpoints/
 *.distcp
 .metadata
-checkpoints/
-dist-train-project/checkpoints/
 
+# Databases (UI job queue)
 *.db
 
-dist-train-project/wandb/*
-dist-train-project/checkpoint.py
-dist-train-project/*
+# Experiment tracking
+wandb/
 
-wandb
+# Packaging / build
+*.tar.gz
+dist/
+build/
+*.egg-info/
+
+# UI runtime artifacts
+ui/_active_config.yaml
 ui/_torchelastic_error.json
-docs/Directions OMNI-Train.txt
 
-docs/presentation.pptx
-docs/presentation_2min.html
-docs/Directions OMNI-Train.txt
-docs/presentation.html
-docs/presentation_2min.html
+# OS / editor cruft
+nul
+.DS_Store
 
-
-docs/Steps to clone and run omni-train.txt
+# Work-in-progress modules (not part of the public release yet)
 hybrid/
 parallelism.py
 parallelism_test.py
+
+# Local scratch / private docs (never publish)
+docs/Directions OMNI-Train.txt
+docs/Steps to clone and run omni-train.txt
+docs/presentation.pptx
+docs/presentation*.html

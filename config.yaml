@@ -1,7 +1,7 @@
 ## config.yaml file
 ## Change the values as needed to test different configurations and features of the training script.
   
-model_name: facebook/opt-6.7b    ## Model name from Hugging Face model hub (e.g. "bert-base-uncased", "gpt2", "facebook/opt-125m", etc.)
+model_name: facebook/opt-125m    ## Model name from Hugging Face model hub (e.g. "bert-base-uncased", "gpt2", "facebook/opt-125m", etc.)
 model_type: llm                  ## Options: llm, seq2seq, vision, yolo, vlm, encoder, custom_transformer
 
 dataset:
@@ -18,8 +18,8 @@ training:
   warmup_steps: 10              ## Number of warmup steps for learning rate scheduler
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 8                 ## number of GPUs to launch with torchrun for ddp/fsdp
+strategy: solo              ## choose from {ddp, fsdp, solo}
+num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 

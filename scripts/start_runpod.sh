@@ -12,12 +12,12 @@ pip install --upgrade pip
 pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
-## Configure git
-git config --global user.name "rachadlakis"
-git config --global user.email "rachadlakis@gmail.com"
-
 ## Set environment variables
-export HF_TOKEN="${HF_TOKEN:-***REDACTED-HF-TOKEN***}"
+## HF_TOKEN is loaded from your .env (copy .env.example -> .env and add your token).
+## It is only required for gated models (LLaMA, Mistral, Gemma).
+set -a
+[ -f .env ] && . ./.env
+set +a
 export HF_HUB_DISABLE_XET=1
 
 ## activate the virtual environment and run the training script
