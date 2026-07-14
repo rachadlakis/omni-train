@@ -1,0 +1,38 @@
+# dist_kit requirements
+# =========================
+# PyTorch (CUDA 12.4) — install separately, matching your CUDA version:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# The kit needs torch >= 2.6 for FSDP2 (fully_shard) and the DCP state_dict APIs.
+
+# =========================
+# Core
+# =========================
+pyyaml==6.0.3
+python-dotenv==1.2.2
+
+# =========================
+# Hugging Face ecosystem
+# =========================
+transformers==5.8.1
+accelerate==1.11.0
+huggingface_hub==1.13.0
+safetensors==0.6.2
+datasets==4.8.5
+
+# =========================
+# GPU / NVML — required: setup_dist_process_group probes NVLink to pick the
+# right NCCL transport and refuses to guess when this is missing.
+# =========================
+nvidia-ml-py==12.560.30
+
+# =========================
+# PEFT / Quantization — only needed when peft_enabled / quantization_enabled.
+# Comment out for full fine-tuning setups.
+# =========================
+peft==0.18.0
+bitsandbytes==0.47.0
+
+# =========================
+# Testing (dev only)
+# =========================
+pytest==8.4.2
