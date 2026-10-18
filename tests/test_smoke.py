@@ -126,14 +126,17 @@ def _find_checkpoint_path(tmpdir: str, strategy: str, distribute_api: str) -> st
     """Return the resume_path for the checkpoint produced in the previous phase.
 
     Checkpoint locations (set by save_checkpoint in distributed_utils.py):
-      solo  → {tmpdir}/solo/solo_checkpoint.pt
-      ddp   → {tmpdir}/ddp/ddp_checkpoint.pt
+      solo  → {tmpdir}/solo/{timestamp}[__tag].pt
+      ddp   → {tmpdir}/ddp/{timestamp}[__tag].pt
       fsdp  → {tmpdir}/fsdp/{dcp_api|dtensor_api}/{latest_timestamp}/
     """
-    if strategy == "solo":
-        return os.path.join(tmpdir, "solo", "solo_checkpoint.pt")
-    if strategy == "ddp":
-        return os.path.join(tmpdir, "ddp", "ddp_checkpoint.pt")
+    if strategy in ("solo", "ddp"):
+        ckpt_dir = os.path.join(tmpdir, strategy)
+        files = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")] if os.path.isdir(ckpt_dir) else []
+        if not files:
+            raise RuntimeError(f"No {strategy} checkpoint found in {ckpt_dir} after save phase.")
+        latest = max(files, key=lambda f: int(f.split("__", 1)[0].removesuffix(".pt")))
+        return os.path.join(ckpt_dir, latest)
     if strategy == "fsdp":
         fsdp_dir = os.path.join(tmpdir, "fsdp", distribute_api)
         # Find the highest-timestamp (most recent) checkpoint directory.

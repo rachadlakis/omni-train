@@ -340,12 +340,12 @@
         </div>
         <div class="form-grid">
           <div class="form-group">
-            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel. hybrid: 2D/3D parallelism (DP × TP × PP).">?</span></label>
+            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel. hybrid: 2D/3D parallelism (DP × TP × PP) — not available yet.">?</span></label>
             <select id="f-strategy" onchange="onStrategyChange()">
               <option value="none">Solo (Single GPU)</option>
               <option value="ddp">DDP (Data Parallel)</option>
               <option value="fsdp">FSDP (Fully Sharded Data Parallel)</option>
-              <option value="hybrid">Hybrid (2D / 3D Parallelism)</option>
+              <option value="hybrid" disabled>Hybrid (2D / 3D Parallelism) — coming soon</option>
             </select>
           </div>
           <div class="form-group">

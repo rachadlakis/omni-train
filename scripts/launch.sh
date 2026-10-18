@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 CONFIG_PATH="${CONFIG_PATH:-$SCRIPT_DIR/../config.yaml}"
-NUM_GPUS=""
+NUM_GPUS="${NUM_GPUS:-}"
 MASTER_ADDR="${MASTER_ADDR:-localhost}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 STRATEGY="${STRATEGY:-}"

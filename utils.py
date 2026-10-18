@@ -96,7 +96,7 @@ def print_config(args):
     groups = {
         "Model & Dataset": ["model_name", "model_type", "dataset", "dataset_full_name", "dataset_split"],
         "System":          ["strategy", "num_gpus", "checkpoint_dir", "save"],
-        "Training":        [ "epochs", "batch_size", "max_length", "learning_rate", "warmup_steps", "weight_decay", "grad_clip"],
+        "Training":        [ "epochs", "batch_size", "max_length", "learning_rate", "lr_scheduler", "warmup_steps", "weight_decay", "grad_clip"],
         "Runtime":         ["gradient_checkpointing"],
         "Precision":       ["mixed_precision", "param_dtype", "reduce_dtype", "output_dtype", "cast_forward_inputs"],
         "PEFT":            ["peft_enabled", "peft_type", "peft_r", "peft_alpha", "peft_dropout", "peft_target_modules", "peft_bias"],
@@ -224,6 +224,7 @@ class Args:
         self.max_length: int  
         self.learning_rate: float  
         self.warmup_steps: int
+        self.lr_scheduler: str
         self.weight_decay: float
         self.grad_clip: float
         self.gradient_checkpointing: bool
@@ -316,6 +317,8 @@ def build_args(cfg):
     args.max_length = int(t["max_length"])
     args.learning_rate = float(t["learning_rate"])
     args.warmup_steps = int(t.get("warmup_steps", 100))
+    # LR after warmup: cosine/linear decay to 0 over the run, or constant.
+    args.lr_scheduler = str(t.get("lr_scheduler", "cosine")).lower()
     args.weight_decay = float(t.get("weight_decay", 0.01))
     args.grad_clip = float(t.get("grad_clip", 1.0))
     # Global activation checkpointing toggle used by both quantized and non-quantized paths.
@@ -329,6 +332,8 @@ def build_args(cfg):
         raise ValueError("max_length must be at least 1")
     if args.warmup_steps < 0:
         raise ValueError("warmup_steps must be non-negative")
+    if args.lr_scheduler not in {"cosine", "linear", "constant"}:
+        raise ValueError(f"Unsupported training.lr_scheduler={args.lr_scheduler}. Use one of: cosine, linear, constant")
     if args.weight_decay < 0:
         raise ValueError("weight_decay must be non-negative")
     if args.grad_clip < 0:
@@ -475,8 +480,8 @@ def build_args(cfg):
     # WANDB
     # --------------------------------------------------
     wb = cfg["wandb"]
-    args.wandb_log_with_train = to_bool(wb.get("wandb_log_with_train", True))
-    args.wandb_entity = wb.get("wandb_entity", "omni-train")
+    args.wandb_log_with_train = to_bool(wb.get("wandb_log_with_train", False))
+    args.wandb_entity = wb.get("wandb_entity", "")  # blank → your default W&B entity
     args.wandb_project = wb.get("wandb_project", "omni-train")
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
@@ -588,6 +593,18 @@ def estimate_training_vram(
     }
 
 
+def _match_gpu_tflops(gpu_name, tflops_map, default):
+    """Look up a GPU in tflops_map by whole-word match, so a full device name like
+    "NVIDIA RTX A4000" or "NVIDIA A100-SXM4-80GB" resolves to its short key, while
+    "a2" does not match "A2000" and "l4" does not match "L40S"."""
+    import re
+    name = (gpu_name or "").lower()
+    for key in sorted(tflops_map, key=len, reverse=True):
+        if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", name):
+            return tflops_map[key]
+    return default
+
+
 def estimate_training_time(
     num_params: int,
     steps_per_epoch: int,
@@ -623,11 +640,11 @@ def estimate_training_time(
     # Peak TFLOPS per GPU by type (bf16/fp16 tensor core throughput)
     gpu_tflops_map = {
         "h100": 990, "a100": 312, "a10g": 125, "v100": 125,
-        "l4": 120, "t4": 65, "a6000": 155, "a5000": 110,
+        "l40s": 362, "l40": 181, "l4": 120, "t4": 65, "a6000": 155, "a5000": 110,
         "a4000": 77, "a2": 31, "4090": 83, "3090": 36, "3080": 30,
         "3070": 20, "3060": 13, "2080": 14, "1080": 11,
     }
-    gpu_tflops = gpu_tflops_map.get(gpu_type, 40)  # 40 TFLOPS: conservative unknown GPU default
+    gpu_tflops = _match_gpu_tflops(gpu_type, gpu_tflops_map, default=40)  # 40 TFLOPS: conservative unknown GPU default
 
     # Distributed communication overhead (reduces effective GPU utilization)
     overhead = {"solo": 0.0, "ddp": 0.08, "fsdp": 0.18}.get(strategy, 0.1)

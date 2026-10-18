@@ -15,14 +15,15 @@
 ##   $DIST_CONFIG > ./config.yaml (project root) > dist_kit/config.yaml (bundled)
 
 import os
-import shutil
+import math
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
 from torch.utils.data import DistributedSampler
 from dotenv import load_dotenv
 
-from .config import DistConfig, resolve_config_path
+from .config import DTYPE_MAP, DistConfig, resolve_config_path
 from .dist_setup import (
     setup_dist_process_group,
     cleanup,
@@ -124,19 +125,39 @@ def main():
         scheduler = None
         if args.dataset_name:
             dataloader = get_text_dataloader(args, tokenizer, rank, world_size)
+            total_steps = max(1, len(dataloader) * args.epochs)
+            warmup_steps = min(args.warmup_steps, total_steps)
 
-            def _warmup_lambda(step_idx: int) -> float:
-                if args.warmup_steps <= 0:
+            def _lr_lambda(step_idx: int) -> float:
+                # Linear warmup, then decay to 0 over the remaining steps (or hold for "constant").
+                if step_idx < warmup_steps:
+                    return float(step_idx + 1) / float(max(1, warmup_steps))
+                if args.lr_scheduler == "constant":
                     return 1.0
-                return min(1.0, float(step_idx + 1) / float(max(1, args.warmup_steps)))
+                progress = min(1.0, (step_idx - warmup_steps) / float(max(1, total_steps - warmup_steps)))
+                if args.lr_scheduler == "linear":
+                    return 1.0 - progress
+                return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lambda)
-            print_on_rank_0(rank, f"LR warmup enabled: warmup_steps={args.warmup_steps}", "📈")
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+            print_on_rank_0(rank, f"LR schedule: {args.lr_scheduler} | warmup_steps={warmup_steps} | total_steps={total_steps}", "📈")
         else:
             print_on_rank_0(rank, f"No dataset configured — random-batch demo ({DEMO_STEPS} steps/epoch)", "🎲")
             dataloader = None
 
         ## 5. Train
+        # Mixed precision for solo/DDP: weights stay fp32 (see strategies._load_dtype),
+        # forward/backward run under autocast. FSDP gets this from its MixedPrecisionPolicy.
+        amp_dtype = DTYPE_MAP.get(args.param_dtype, torch.float32)
+        use_autocast = args.mixed_precision and args.strategy != "fsdp" and amp_dtype != torch.float32
+        if use_autocast and device.type == "cpu" and amp_dtype == torch.float16:
+            use_autocast = False  # CPU autocast is bf16-only
+        # fp16 has a narrow exponent range, so its gradients need loss scaling; bf16 does not.
+        scaler = torch.amp.GradScaler(device.type, enabled=use_autocast and amp_dtype == torch.float16)
+
+        def autocast_ctx():
+            return torch.autocast(device_type=device.type, dtype=amp_dtype) if use_autocast else nullcontext()
+
         print_banner_on_rank_0(rank, "TRAINING")
         vocab_size = getattr(getattr(model, "config", None), "vocab_size", None) or 1000
         model.train()
@@ -158,10 +179,12 @@ def main():
                     k: (v.to(device) if torch.is_tensor(v) else v)
                     for k, v in batch.items()
                 }
-                outputs = model(**model_inputs)
-                loss = outputs.loss
-                loss.backward()
-                optimizer.step()
+                with autocast_ctx():
+                    outputs = model(**model_inputs)
+                    loss = outputs.loss
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 if scheduler is not None:
                     scheduler.step()
                 total_loss += loss.item()
@@ -172,13 +195,6 @@ def main():
         ## 6. Save
         if args.save:
             save_checkpoint(args.strategy, model, optimizer, rank, args, checkpointer=checkpointer)
-
-        # Clean up the rank-0 seed weights written by fresh FSDP runs.
-        if rank == 0:
-            seed_path = os.path.join(args.checkpoint_dir, "pretrained_seed")
-            if os.path.exists(seed_path):
-                shutil.rmtree(seed_path)
-                print_on_rank_0(rank, "Pretrained seed folder deleted", "🧹")
 
         if dist.is_initialized():
             print_on_rank_0(rank, "Process group is being destroyed. All done!", "👋")

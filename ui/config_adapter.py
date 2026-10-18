@@ -134,6 +134,7 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
             "max_length": training.get("max_length", data.get("max_seq_len", base["training"].get("max_length", 128))),
             "learning_rate": training.get("learning_rate", training.get("lr", base["training"].get("learning_rate", 2e-4))),
             "warmup_steps": training.get("warmup_steps", base["training"].get("warmup_steps", 100)),
+            "lr_scheduler": training.get("lr_scheduler", base["training"].get("lr_scheduler", "cosine")),
             "weight_decay": training.get("weight_decay", base["training"].get("weight_decay", 0.01)),
             "grad_clip": training.get("grad_clip", base["training"].get("grad_clip", 1.0)),
             "gradient_checkpointing": training.get(

@@ -7,6 +7,7 @@
 ## and the VRAM-estimate banner (both are app-level, not dist machinery).
 
 import os
+import shutil
 import time
 import traceback
 
@@ -159,6 +160,27 @@ def set_modules_to_backward_prefetch(model, num_to_backward_prefetch):
 # Small shared helpers
 # ---------------------------------------------------------------------------
 
+def _load_dtype(args):
+    """dtype to build/load model weights in.
+
+    Weights the optimizer updates must stay fp32: bf16 has ~3 significant digits, so
+    at fine-tuning learning rates (e.g. 2e-5) most AdamW steps round to zero. Mixed
+    precision is applied at *compute* time instead — FSDP2 via MixedPrecisionPolicy,
+    solo/DDP via torch.autocast in train.py.
+
+    Only exception: PEFT outside FSDP. The base weights are frozen, so they can be
+    stored in param_dtype to save memory; PEFT keeps the adapters in fp32
+    (get_peft_model's autocast_adapter_dtype). FSDP2 requires one dtype per param
+    group, so FSDP + PEFT keeps everything in fp32.
+    """
+    if (
+        getattr(args, "mixed_precision", False)
+        and getattr(args, "peft_enabled", False)
+        and getattr(args, "strategy", None) != "fsdp"
+    ):
+        return DTYPE_MAP[args.param_dtype]
+    return torch.float32
+
 def _checkpoint_run_tag(args):
     # Encode run mode in checkpoint folder names (for example: __qlora_q4)
     # to distinguish checkpoints created under different adapter/quant settings.
@@ -283,12 +305,9 @@ def _apply_peft_quantization(model, args, rank):
                 bias=str(getattr(args, "peft_bias", "none")),  # type: ignore
                 task_type=_task_type,
             )
+            # Adapters stay fp32 (autocast_adapter_dtype=True upcasts them when the base
+            # is bf16/fp16) so their optimizer updates are not rounded away.
             model = get_peft_model(model, peft_cfg)
-            if not quantization_enabled:
-                target_dtype = DTYPE_MAP.get(getattr(args, "param_dtype", "float32"), torch.float32)
-                for param in model.parameters():
-                    if param.is_floating_point():
-                        param.data = param.data.to(target_dtype)
             if rank == 0 and hasattr(model, "print_trainable_parameters"):
                 model.print_trainable_parameters()
             print_on_rank_0(rank, f"PEFT adapter attached ({getattr(args, 'peft_type', 'lora')}) ✓", "🧩")
@@ -379,7 +398,7 @@ def apply_solo(device, rank, args):
             model_kwargs["quantization_config"] = quant_cfg
             model_kwargs["device_map"] = {"": device}
         else:
-            model_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+            model_kwargs["dtype"] = _load_dtype(args)
             model_kwargs["device_map"] = None
 
         resuming = args.resume and bool(getattr(args, "resume_path", None))
@@ -414,7 +433,7 @@ def apply_solo(device, rank, args):
                 _resume_cfg.use_cache = False
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                     _resume_cfg,
-                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                    dtype=_load_dtype(args),
                 )
             # Apply PEFT wrapping BEFORE load_state_dict so key structure matches
             # (PEFT checkpoints use base_model.model.* keys).
@@ -473,7 +492,7 @@ def apply_ddp(local_rank, rank, device, args):
                 kwargs["device_map"] = {"": local_rank} if torch.cuda.is_available() else {"": "cpu"}
             else:
                 # Keep float model initialization behavior unchanged when quantization is off.
-                kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+                kwargs["dtype"] = _load_dtype(args)
             return kwargs
 
         resuming           = args.resume and bool(args.resume_path)
@@ -508,7 +527,7 @@ def apply_ddp(local_rank, rank, device, args):
                 _resume_config.tie_word_embeddings = False
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                     _resume_config,
-                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                    dtype=_load_dtype(args),
                 )
         elif load_model_from_hf:
             ## rank-0-first download, then all ranks load from cache
@@ -539,7 +558,7 @@ def apply_ddp(local_rank, rank, device, args):
             config.tie_word_embeddings = False
             model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                 config,
-                dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                dtype=_load_dtype(args),
             )
             if hasattr(model, "init_weights"):
                 model.init_weights()
@@ -576,41 +595,68 @@ def apply_ddp(local_rank, rank, device, args):
 # Strategy: fsdp
 # ---------------------------------------------------------------------------
 
-def _materialize_meta_buffers(model, device, rank):
+def _snapshot_buffers(model):
+    """Copy every real (non-meta) buffer so it survives model.to_empty().
+
+    The meta-init path builds the model with parameters on meta but buffers computed
+    for real by the HF constructors (init_empty_weights(include_buffers=False)).
+    to_empty() then replaces *every* tensor with uninitialized memory, and
+    non-persistent buffers (RoPE inv_freq / original_inv_freq, BERT position_ids, …)
+    are excluded from state_dict(), so no checkpoint load ever refills them.
     """
-    After FSDP weight loading, some non-persistent buffers (e.g. RoPE inv_freq in Llama)
-    may still live on the meta device because they are excluded from state_dict() by default.
-    This function walks all buffers and recomputes / materializes any that are still on meta.
-    Zeroing them out would silently break positional encoding, so we recompute inv_freq
-    using the same formula the model uses at init time.
+    return {name: buf.detach().clone() for name, buf in model.named_buffers() if buf.device.type != "meta"}
+
+
+def _restore_buffers(model, snapshot, device, rank, include_persistent=False):
+    """Put back buffers captured by _snapshot_buffers after to_empty() + weight load.
+
+    By default only non-persistent buffers are restored — persistent ones come from the
+    checkpoint. Pass include_persistent=True on the random-init path, where nothing is
+    loaded and the constructor values are the right ones.
     """
-    for name, buf in model.named_buffers():
+    restored = 0
+    for name, buf in list(model.named_buffers()):
         *path, attr = name.split(".")
         parent = model
         for part in path:
             parent = getattr(parent, part)
-
-        if attr == "inv_freq":
-            # Always recompute inv_freq regardless of device — it is registered
-            # with persistent=False so it is NEVER in state_dict and therefore
-            # NEVER restored by load_model(). Two cases both land here:
-            #   (a) still on meta after load  → must materialize
-            #   (b) garbage CUDA value after model.to_empty(device) → must recompute
-            # Zeroing would silently corrupt all positional encodings.
-            half_dim = buf.shape[0]
-            dim = half_dim * 2
-            base = getattr(parent, "base", 10000)
-            inv_freq = 1.0 / (
-                base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim)
-            )
-            setattr(parent, attr, inv_freq)
-            print_on_rank_0(rank, f"Recomputed RoPE inv_freq for '{name}' on {device}", "🔧")
-        elif buf.device.type == "meta":
-            # Other non-persistent meta buffers: materialize as zeros.
-            # Add a named case above (like inv_freq) if zeros would be wrong.
+        persistent = attr not in parent._non_persistent_buffers_set
+        if persistent and not include_persistent:
+            continue
+        if name in snapshot:
+            setattr(parent, attr, snapshot[name].to(device))
+            restored += 1
+        else:
+            # No real value was ever computed for this buffer. Zeros are a guess —
+            # add an explicit case here if a model needs something else.
             setattr(parent, attr, torch.zeros(buf.shape, dtype=buf.dtype, device=device))
-            print_on_rank_0(rank, f"Materialized meta buffer '{name}' as zeros on {device}", "🔧")
-        # else: buffer already on the right device — nothing to do
+            print_on_rank_0(rank, f"Buffer '{name}' had no computed value — initialized as zeros", "⚠️")
+    if restored:
+        print_on_rank_0(rank, f"Restored {restored} buffer(s) computed at model construction (RoPE inv_freq, position ids, …)", "🔧")
+
+
+def _remove_seed_dir(seed_subfolder, seed_root, local_rank, rank):
+    """Delete this run's pretrained seed once every rank has loaded it.
+
+    Only this run's timestamped folder is removed (plus parents left empty, up to
+    seed_root) — never the whole pretrained_seed/ tree, which concurrent runs sharing
+    checkpoint_dir may still be reading from.
+    """
+    dist_barrier(local_rank)  # every rank must be done reading before rank 0 deletes
+    if rank != 0:
+        return
+    shutil.rmtree(seed_subfolder, ignore_errors=True)
+    parent = os.path.dirname(os.path.normpath(seed_subfolder))
+    root = os.path.normpath(seed_root)
+    while parent.startswith(root):
+        try:
+            os.rmdir(parent)  # only succeeds when empty
+        except OSError:
+            break
+        if parent == root:
+            break
+        parent = os.path.dirname(parent)
+    print_on_rank_0(rank, "Pretrained seed deleted (weights are now on every rank)", "🧹")
 
 
 def _build_mp_policy(args, rank):
@@ -655,7 +701,7 @@ def _apply_fsdp_peft_quant(local_rank, rank, device, args):
         config.tie_word_embeddings = False
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
             config,
-            dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+            dtype=_load_dtype(args),
         )
 
     elif load_model_from_hf:
@@ -683,7 +729,7 @@ def _apply_fsdp_peft_quant(local_rank, rank, device, args):
             pretrained_kwargs["quantization_config"] = quant_cfg
             pretrained_kwargs["device_map"] = {"": local_rank} if torch.cuda.is_available() else {"": "cpu"}
         else:
-            pretrained_kwargs["dtype"] = DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32
+            pretrained_kwargs["dtype"] = _load_dtype(args)
 
         if rank == 0:
             import transformers as _transformers
@@ -721,12 +767,13 @@ def _apply_fsdp_peft_quant(local_rank, rank, device, args):
 
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
             config,
-            dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+            dtype=_load_dtype(args),
         )
         model.load_state_dict(
             torch.load(peft_seed_path, mmap=True, weights_only=True, map_location="cpu")
         )
         print_on_rank_0(rank, "Pretrained seed weights loaded ✓")
+        _remove_seed_dir(peft_seed_subfolder, peft_seed_folder, local_rank, rank)
 
     else:
         print_on_rank_0(rank, "No checkpoint dir — random weight init for PEFT path", "⚠️")
@@ -735,7 +782,7 @@ def _apply_fsdp_peft_quant(local_rank, rank, device, args):
         config.tie_word_embeddings = False
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
             config,
-            dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+            dtype=_load_dtype(args),
         )
 
     try:
@@ -823,10 +870,14 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
     config.use_cache = False
     config.tie_word_embeddings = False
 
-    with torch.device("meta"):
+    # Parameters go on meta (no memory); buffers are still computed for real on CPU so
+    # non-persistent ones (RoPE inv_freq, position_ids, …) keep the exact values the
+    # HF constructor produced — see _snapshot_buffers / _restore_buffers.
+    from accelerate import init_empty_weights
+    with init_empty_weights(include_buffers=False):
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
             config,
-            dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+            dtype=_load_dtype(args),
         )
 
     ## FSDP Step 2: shard layers + root model (still on meta)
@@ -883,9 +934,10 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
         # Materialize meta-device DTensors to real (empty) CUDA storage so
         # set_model_state_dict can copy_() weights via NCCL into each rank's shard.
         # Without this, copy_() into a meta tensor deadlocks silently.
+        buffers = _snapshot_buffers(model)
         model.to_empty(device=device)
         checkpointer.load_model(model)
-        _materialize_meta_buffers(model, device, rank)
+        _restore_buffers(model, buffers, device, rank)
 
     elif load_model_from_hf:
         print_on_rank_0(rank, "Loading pretrained weights from HuggingFace on rank 0", "🆕")
@@ -910,7 +962,7 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
                 seed_model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_pretrained(
                     args.model_name,
                     token=HF_TOKEN,
-                    dtype=DTYPE_MAP[args.param_dtype] if args.mixed_precision else torch.float32,
+                    dtype=_load_dtype(args),
                     low_cpu_mem_usage=True,
                 )
                 _transformers.logging.disable_progress_bar()  # re-suppress for the rest of training
@@ -938,18 +990,24 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
         dist_barrier(local_rank)
         # Materialize meta-device DTensors to real (empty) CUDA storage — same
         # reason as the resume path above. Each rank allocates only its 1/N shard.
+        buffers = _snapshot_buffers(model)
         model.to_empty(device=device)
         seed_checkpointer = Checkpointer(folder=pretrained_seed_folder, dcp_api=args.dcp_api)
+        # Pin to this run's seed — "latest folder" could be a concurrent run's seed
+        # for a different model when several jobs share checkpoint_dir.
+        seed_checkpointer.last_training_time = str(timestamp)
         seed_checkpointer.load_model(model)
         print_on_rank_0(rank, "Pretrained weights loaded and sharded ✓")
 
-        _materialize_meta_buffers(model, device, rank)
+        _restore_buffers(model, buffers, device, rank)
+        _remove_seed_dir(pretrained_seed_subfolder, pretrained_seed_folder, local_rank, rank)
 
         checkpointer = Checkpointer(folder=args.checkpoint_dir, dcp_api=args.dcp_api, run_tag=_checkpoint_run_tag(args))
 
     else:
         # PATH C: no checkpoint dir — random init
         print_on_rank_0(rank, "No checkpoint dir — random weight init", "⚠️")
+        buffers = _snapshot_buffers(model)
         model.to_empty(device=device)
         if hasattr(model, "init_weights"):
             model.init_weights()
@@ -957,6 +1015,7 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
             for m in model.modules():
                 if hasattr(m, "reset_parameters"):
                     m.reset_parameters()
+        _restore_buffers(model, buffers, device, rank, include_persistent=True)
         checkpointer = None
 
     return model, checkpointer

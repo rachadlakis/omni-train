@@ -33,8 +33,16 @@ uvicorn ui.app:app --reload --port 8000
 For a Linux server or VM, bind the app to all interfaces:
 
 ```bash
-cd /home/rachad_lakkis/projects/distributed-training/Local/omni_train/testing/fsdp-mini-project
+cd omni-train   # the repository root
 uvicorn ui.app:app --host 0.0.0.0 --port 8000
+```
+
+The server only answers requests addressed to `localhost`, an IP address, or this
+machine's hostname (this blocks DNS-rebinding attacks from web pages). If you reach it
+through another DNS name, allow that name explicitly:
+
+```bash
+OMNI_UI_ALLOWED_HOSTS=gpu-box.example.org uvicorn ui.app:app --host 0.0.0.0 --port 8000
 ```
 
 ## 3) Open it in the browser

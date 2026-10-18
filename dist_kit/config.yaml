@@ -18,6 +18,7 @@ training:
   learning_rate: 2e-5          ## Learning rate for training
   gradient_checkpointing: true ## whether to use gradient checkpointing (activation checkpointing)
   warmup_steps: 10             ## Number of warmup steps for learning rate scheduler
+  lr_scheduler: cosine         ## LR after warmup: cosine | linear (decay to 0 by the last step) | constant
   weight_decay: 0.01           ## Weight decay for optimizer
 
 strategy: fsdp              ## choose from {ddp, fsdp, solo}

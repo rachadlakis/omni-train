@@ -168,3 +168,30 @@ def test_custom_transformer_valid(cfg):
     args = build_args(cfg)
     assert args.custom_dim == 16
     assert args.custom_n_heads == 4
+
+
+# ------------------------------------------------------------------
+# LR scheduler / W&B defaults
+# ------------------------------------------------------------------
+
+def test_lr_scheduler_defaults_to_cosine(cfg):
+    assert build_args(cfg).lr_scheduler == "cosine"
+
+
+@pytest.mark.parametrize("name", ["cosine", "linear", "constant", "LINEAR"])
+def test_lr_scheduler_valid_values(cfg, name):
+    cfg["training"]["lr_scheduler"] = name
+    assert build_args(cfg).lr_scheduler == name.lower()
+
+
+def test_lr_scheduler_invalid_raises(cfg):
+    cfg["training"]["lr_scheduler"] = "step"
+    with pytest.raises(ValueError, match="lr_scheduler"):
+        build_args(cfg)
+
+
+def test_wandb_off_and_entity_blank_when_keys_missing(cfg):
+    cfg["wandb"] = {}
+    args = build_args(cfg)
+    assert args.wandb_log_with_train is False
+    assert args.wandb_entity == ""

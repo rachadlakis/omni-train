@@ -211,6 +211,8 @@ DTensor is safer when NCCL is flaky; DCP is faster when NCCL is healthy. The use
 
 ### 2.12 RoPE buffer fix (`_materialize_meta_buffers`)
 
+> **Update (2026-10-18):** this verdict was wrong. The formula fell back to `base=10000` because transformers 5.x rotary modules have no `.base` attribute, so `rope_theta` and rope scaling (Llama 3, Qwen, Mistral) were ignored. Other non-persistent buffers such as BERT `position_ids` were left as `to_empty()` garbage. It has been replaced by `_snapshot_buffers()` / `_restore_buffers()`. See CLAUDE.md, "Non-Persistent Buffers".
+
 **File:** `distributed_utils.py:716–750`.
 
 Non-persistent buffers like `inv_freq` (Llama, Mistral, Qwen, Gemma, Phi-3) are excluded from `state_dict()`, so they stay on meta after FSDP weight load. The fix recomputes `inv_freq` using the same `1 / base^(2i/dim)` formula the model uses at init.

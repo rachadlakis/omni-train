@@ -21,7 +21,8 @@ from dist_kit.strategies import (
     _check_checkpoint_peft_compat,
     _checkpoint_run_tag,
     _get_auto_model_class,
-    _materialize_meta_buffers,
+    _restore_buffers,
+    _snapshot_buffers,
     _normalize_target_modules,
     get_model_layers,
     save_checkpoint,
@@ -171,48 +172,56 @@ def test_layers_found_on_hf_gpt2():
 # Meta-buffer materialization (RoPE fix)
 # ---------------------------------------------------------------------------
 
-def test_inv_freq_recomputed_not_zeroed():
-    class Rope(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.base = 10000
-            self.register_buffer("inv_freq", torch.empty(4, device="meta"), persistent=False)
+def test_meta_init_restores_rope_with_theta_and_scaling():
+    """Params on meta, buffers real → snapshot → to_empty → restore reproduces the
+    HF-computed inv_freq (rope_theta=500k + llama3 scaling, not base 10000)."""
+    from accelerate import init_empty_weights
+    from transformers import LlamaConfig
 
-    class M(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.rope = Rope()
+    cfg = LlamaConfig(
+        vocab_size=128, hidden_size=64, intermediate_size=128,
+        num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=256, rope_theta=500000.0,
+        rope_scaling={"rope_type": "llama3", "factor": 8.0, "low_freq_factor": 1.0,
+                      "high_freq_factor": 4.0, "original_max_position_embeddings": 64},
+    )
+    ref = AutoModelForCausalLM.from_config(cfg).eval()
+    with init_empty_weights(include_buffers=False):
+        m = AutoModelForCausalLM.from_config(cfg)
+    buffers = _snapshot_buffers(m)
+    m.to_empty(device="cpu")
+    m.load_state_dict(ref.state_dict(), strict=False)
+    _restore_buffers(m, buffers, torch.device("cpu"), rank=0)
+    m.eval()
 
-    m = M()
-    _materialize_meta_buffers(m, torch.device("cpu"), rank=0)
-    dim = 8  # half_dim (4) * 2
-    expected = 1.0 / (10000 ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-    assert m.rope.inv_freq.device.type == "cpu"
-    assert torch.allclose(m.rope.inv_freq, expected)
-    assert not torch.all(m.rope.inv_freq == 0)
+    ids = torch.randint(0, 128, (2, 8))
+    with torch.no_grad():
+        assert torch.equal(ref(input_ids=ids).logits, m(input_ids=ids).logits)
 
 
-def test_other_meta_buffers_zeroed():
+def test_buffer_without_snapshot_zeroed():
     class B(nn.Module):
         def __init__(self):
             super().__init__()
             self.register_buffer("mask", torch.empty(3, 3, device="meta"), persistent=False)
 
     b = B()
-    _materialize_meta_buffers(b, torch.device("cpu"), rank=0)
+    _restore_buffers(b, _snapshot_buffers(b), torch.device("cpu"), rank=0)
     assert b.mask.device.type == "cpu"
     assert torch.all(b.mask == 0)
 
 
-def test_real_buffers_untouched():
+def test_persistent_buffers_untouched_by_default():
     class B(nn.Module):
         def __init__(self):
             super().__init__()
             self.register_buffer("stats", torch.ones(2))
 
     b = B()
-    _materialize_meta_buffers(b, torch.device("cpu"), rank=0)
-    assert torch.all(b.stats == 1)
+    snap = _snapshot_buffers(b)
+    b.stats.fill_(5.0)  # value "loaded from checkpoint"
+    _restore_buffers(b, snap, torch.device("cpu"), rank=0)
+    assert torch.all(b.stats == 5)
 
 
 # ---------------------------------------------------------------------------

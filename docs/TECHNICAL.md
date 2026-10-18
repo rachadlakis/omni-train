@@ -148,7 +148,7 @@ If `--explicit-prefetching` is set, `set_modules_to_forward_prefetch` and `set_m
 | Path | Trigger | Behavior |
 |------|---------|----------|
 | **A — Resume** | `resume=true` + `resume_path` set | `Checkpointer.load_model()` + `load_optim()` |
-| **B — Fresh from HF** | No checkpoint, `load_model_from_hf=true` | Rank 0 downloads model, saves `pretrained_seed/model_state_dict.pt`, all ranks load via `Checkpointer` |
+| **B — Fresh from HF** | No checkpoint, `load_model_from_hf=true` | Rank 0 downloads model, saves `pretrained_seed/fsdp/<api>/<timestamp>/model_state_dict.pt`, all ranks load that exact seed via `Checkpointer`, then it is deleted |
 | **C — Random init** | `load_model_from_hf=false` | `model.to_empty(device=device)` then `init_weights()` |
 
 Path B: rank 0 saves the seed file, calls `dist.barrier()`, then all ranks load and shard it. This prevents every rank from independently downloading the model.

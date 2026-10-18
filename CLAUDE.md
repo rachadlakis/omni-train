@@ -117,12 +117,12 @@ train.py main()
 
 ### FSDP2 Meta-Device Initialization (Path 3, no PEFT/quant)
 
-FSDP builds the model on `torch.device("meta")` first (no real memory allocated), shards layers with `fully_shard()`, then populates weights via one of three paths:
+FSDP builds the model with its **parameters** on meta first (`accelerate.init_empty_weights(include_buffers=False)` — no real memory allocated; buffers are still computed for real), shards layers with `fully_shard()`, then populates weights via one of three paths:
 - **A — Resume:** `Checkpointer.load_model()` reads latest checkpoint
 - **B — Fresh HF:** rank 0 downloads model, saves seed `.pt` to disk, barrier, all ranks load and shard
 - **C — Random init:** `model.to_empty(device=device)` then `init_weights()`
 
-Path B is why a `checkpoints/pretrained_seed/` folder appears on fresh runs; it is deleted at the end of training.
+Path B is why a `checkpoints/pretrained_seed/<api>/<timestamp>/` folder appears on fresh runs. Each run loads its own timestamped seed (never "the latest", which could belong to a concurrent run) and deletes only that folder as soon as every rank has loaded it.
 
 ### FSDP + PEFT/Quantization (Path 2)
 
@@ -132,8 +132,8 @@ When `peft.enabled=true` or `quantization.enabled=true`, the model is **material
 
 ```
 checkpoints/
-├── solo/solo_checkpoint.pt
-├── ddp/ddp_checkpoint.pt
+├── solo/<unix_ms_timestamp>[__lora_q4].pt
+├── ddp/<unix_ms_timestamp>[__lora_q4].pt
 └── fsdp/
     ├── dcp_api/
     │   └── <unix_ms_timestamp>[__lora_q4]/
@@ -155,9 +155,9 @@ Two FSDP checkpoint APIs:
 
 - `peft.type: qlora` → forces `quantization.enabled=true`; supports `bits=4` (NF4, the default) or `bits=8` (LLM.int8())
 - 4-bit quantization requires `peft.enabled=true` — cannot train 4-bit weights directly (NF4 has no differentiable backward)
-- 8-bit quantization requires `peft.enabled=true` — direct AdamW updates to INT8 weights overflow the quantization range immediately, causing NaN losses from step 1. Use 8-bit LoRA instead.
-- Any quantization without PEFT → hard error in `build_args` (both 4-bit and 8-bit)
+- 8-bit quantization without PEFT → `UserWarning`, not an error. Only the non-quantized float params (embeddings, norms, biases) can learn, and NaN losses are likely. Use 8-bit LoRA instead.
 - `strategy: fsdp` + `quantization.enabled: true` → hard error
+- `training.lr_scheduler` must be `cosine` (default), `linear` or `constant` — applied after the linear warmup
 - `peft.enabled=true` only supports model types: `llm, seq2seq, encoder, vlm, vision`
 
 ### Model Types
@@ -192,13 +192,17 @@ For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables
 
 `get_model_layers(model)` in `distributed_utils.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
 
-### RoPE Buffer Fix
+### Non-Persistent Buffers (RoPE `inv_freq`, `position_ids`)
 
-After FSDP checkpoint loading, non-persistent buffers (e.g., `inv_freq` in Llama's RoPE) remain on the meta device because they are excluded from `state_dict()`. `_materialize_meta_buffers()` recomputes `inv_freq` using the same formula (`1 / base^(2i/dim)`) rather than zeroing it — zeroing would silently corrupt positional encodings.
+`model.to_empty()` replaces every tensor with uninitialized memory, and non-persistent buffers (RoPE `inv_freq`/`original_inv_freq`, BERT `position_ids`, …) are excluded from `state_dict()`, so no checkpoint load refills them. The meta-init path therefore builds with buffers computed for real, `_snapshot_buffers()` copies them before `to_empty()`, and `_restore_buffers()` puts the non-persistent ones back after loading. Don't recompute them by formula: `rope_theta` and rope scaling (Llama 3, Qwen, Mistral) make the textbook `1 / 10000^(2i/dim)` wrong.
+
+### Precision
+
+Trainable weights are always fp32 (`_load_dtype()`), because bf16 rounds most fine-tuning-sized AdamW updates to zero. `mixed_precision: true` casts at compute time instead: FSDP via `MixedPrecisionPolicy`, solo/DDP via `torch.autocast` in `train.py` (plus `GradScaler` for float16). The only low-precision storage is a frozen PEFT base outside FSDP; PEFT keeps the adapters in fp32. FSDP2 needs one dtype per parameter group, so FSDP + PEFT stays fp32 throughout.
 
 ### Web UI (`ui/`)
 
-FastAPI server (`ui/app.py`) with a REST API. The UI has its own config schema; `ui/config_adapter.py` converts it to the `config.yaml` format before launching. `ui/queue.py` manages a SQLite-backed job queue with priority scheduling. Active config is written to `ui/_active_config.yaml` before each run.
+FastAPI server (`ui/app.py`) with a REST API. Requests must carry a Host header that is `localhost`, an IP address, this machine's hostname, or a name in `OMNI_UI_ALLOWED_HOSTS` (blocks DNS rebinding). Every torchrun launch, manual or queued, gets a free `--master_port`, and ddp/fsdp jobs always go through torchrun, even on 1 GPU. The UI has its own config schema; `ui/config_adapter.py` converts it to the `config.yaml` format before launching. `ui/queue.py` manages a SQLite-backed job queue with priority scheduling. Active config is written to `ui/_active_config.yaml` before each run.
 
 ### Parallelism Module (`parallelism.py`)
 

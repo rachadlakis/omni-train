@@ -33,10 +33,10 @@ from starlette.requests import Request
 from pydantic import BaseModel
 
 try:
-    from .queue import QueueManager, JobStatus
+    from .queue import QueueManager, JobStatus, find_free_port
     from .config_adapter import adapt_ui_config_to_mini, validate_mini_config
 except ImportError:
-    from ui.queue import QueueManager, JobStatus
+    from ui.queue import QueueManager, JobStatus, find_free_port
     from ui.config_adapter import adapt_ui_config_to_mini, validate_mini_config
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,47 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(NoCacheStaticMiddleware)
+
+
+def _allowed_host(host_header: str) -> bool:
+    """Accept loopback names, this machine's hostnames, any IP literal, and anything
+    listed in OMNI_UI_ALLOWED_HOSTS (comma-separated).
+
+    This blocks DNS rebinding: a malicious page on attacker.example re-resolves its
+    own domain to 127.0.0.1 so the browser treats this server as same-origin. Its
+    requests still carry "Host: attacker.example", which is rejected here — otherwise
+    it could read /api/env secrets (the client really is 127.0.0.1) or start jobs.
+    """
+    import ipaddress
+    import socket
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):            # [::1]:8787
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:          # localhost:8787
+        host = host.split(":", 1)[0]
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    allowed = {"localhost", socket.gethostname().lower(), socket.getfqdn().lower()}
+    allowed.update(h.strip().lower() for h in os.environ.get("OMNI_UI_ALLOWED_HOSTS", "").split(",") if h.strip())
+    return host in allowed
+
+
+class TrustedHostCheckMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not _allowed_host(request.headers.get("host", "")):
+            return JSONResponse(
+                {"detail": "Host not allowed. Add it to OMNI_UI_ALLOWED_HOSTS to serve the UI under this name."},
+                status_code=400,
+            )
+        return await call_next(request)
+
+
+app.add_middleware(TrustedHostCheckMiddleware)
 
 UI_DIR = Path(__file__).parent
 STATIC_DIR = UI_DIR / "static"
@@ -1005,7 +1046,7 @@ async def start_training(payload: ConfigPayload):
             "torch.distributed.run",
             f"--nproc_per_node={gpu_count}",
             "--master_addr=localhost",
-            "--master_port=29500",
+            f"--master_port={find_free_port()}",  # a queued job may already hold 29500
             "train.py",
         ]
 

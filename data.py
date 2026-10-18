@@ -1,12 +1,14 @@
 ## data.py ##
 
 import os
+import contextlib
 import functools
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
 from distributed_utils import print_on_rank_0, print_on_all_ranks
+from utils import dist_barrier
 
 
 # ----------------------------------------------------------------------
@@ -62,9 +64,10 @@ def _detection_collate(examples, processor):
 # instruction ("Describe the image." → caption) using the processor's chat
 # template, then let the processor expand the <image> placeholder into the
 # exact number of image tokens the vision tower will produce. Labels are the
-# input ids with pad and image-placeholder tokens masked to -100 so the loss is
-# computed only over the assistant's text. Done as a collate_fn (not map) so the
-# processor handles image-token expansion and padding per batch.
+# input ids with everything except the assistant's reply masked to -100 (prompt,
+# image tokens, padding) so the loss is computed only over the caption. Done as a
+# collate_fn (not map) so the processor handles image-token expansion and padding
+# per batch.
 def _vlm_image_token_id(processor):
     tok = processor.tokenizer
     image_token = getattr(processor, "image_token", None)
@@ -76,33 +79,54 @@ def _vlm_image_token_id(processor):
 
 
 def _vlm_collate(examples, processor, image_col, text_col):
-    texts, images = [], []
+    texts, prompts, images = [], [], []
     for ex in examples:
         img = ex[image_col]
         if hasattr(img, "convert") and getattr(img, "mode", "RGB") != "RGB":
             img = img.convert("RGB")
         caption = str(ex[text_col])
-        messages = [
-            {"role": "user", "content": [
-                {"type": "image"},
-                {"type": "text", "text": "Describe the image."},
-            ]},
-            {"role": "assistant", "content": [{"type": "text", "text": caption}]},
-        ]
-        texts.append(processor.apply_chat_template(messages, tokenize=False))
+        user_turn = {"role": "user", "content": [
+            {"type": "image"},
+            {"type": "text", "text": "Describe the image."},
+        ]}
+        assistant_turn = {"role": "assistant", "content": [{"type": "text", "text": caption}]}
+        texts.append(processor.apply_chat_template([user_turn, assistant_turn], tokenize=False))
+        # Prompt alone (up to and including the assistant header) — its token count is
+        # how many leading tokens of each row to exclude from the loss.
+        prompts.append(processor.apply_chat_template([user_turn], tokenize=False, add_generation_prompt=True))
         images.append([img])  # nested list: one list of images per text sample
 
     enc = processor(text=texts, images=images, return_tensors="pt", padding=True)
+    # Run the prompts through the processor too (with the same images) so the
+    # <image> placeholder expands to exactly the same number of tokens.
+    prompt_lens = processor(text=prompts, images=images, return_tensors="pt", padding=True)["attention_mask"].sum(dim=1)
 
     labels = enc["input_ids"].clone()
-    pad_id = processor.tokenizer.pad_token_id
-    if pad_id is not None:
-        labels[labels == pad_id] = -100
+    attention_mask = enc["attention_mask"]
+    # Mask padding by attention_mask, not pad_token_id: when pad == eos, masking by
+    # id would also hide the real end-of-turn token and the model never learns to stop.
+    labels[attention_mask == 0] = -100
+    for i in range(labels.size(0)):
+        # Works for either padding side: the first prompt_len *real* tokens are the prompt.
+        real_positions = attention_mask[i].nonzero(as_tuple=True)[0]
+        labels[i, real_positions[: int(prompt_lens[i])]] = -100
     image_token_id = _vlm_image_token_id(processor)
     if image_token_id is not None:
         labels[labels == image_token_id] = -100
     enc["labels"] = labels
     return dict(enc)
+
+@contextlib.contextmanager
+def _rank0_first():
+    """Run the enclosed block on rank 0 first, then on the remaining ranks."""
+    distributed = dist.is_available() and dist.is_initialized()
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if distributed and dist.get_rank() != 0:
+        dist_barrier(local_rank)  # wait for rank 0 to finish
+    yield
+    if distributed and dist.get_rank() == 0:
+        dist_barrier(local_rank)  # release the other ranks
+
 
 def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, world_size, batch_size, max_length, model_type="llm", **kwargs):
     try:
@@ -148,103 +172,110 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
             print_on_rank_0(rank, f"Synthetic DataLoader ready | batches per rank: {len(dataloader)} | batch size: {batch_size}")
             return dataloader
 
-        print_on_rank_0(rank, f"Loading dataset: {dataset} / {dataset_full_name} | split: {dataset_split}", "📂")
-        # Pass HF_TOKEN so gated/rate-limited datasets resolve without hanging on
-        # unauthenticated Hub requests (the token is loaded by train.py via dotenv).
-        dataset = load_dataset(
-            dataset, dataset_full_name, split=dataset_split, streaming=False,
-            token=os.getenv("HF_TOKEN"),
-        )  # type: ignore
-        print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")
+        # Rank 0 downloads + preprocesses first and fills the HF datasets cache; the
+        # other ranks then hit that cache instead of racing to write the same files.
+        with _rank0_first():
+            print_on_rank_0(rank, f"Loading dataset: {dataset} / {dataset_full_name} | split: {dataset_split}", "📂")
+            # Pass HF_TOKEN so gated/rate-limited datasets resolve without hanging on
+            # unauthenticated Hub requests (the token is loaded by train.py via dotenv).
+            dataset = load_dataset(
+                dataset, dataset_full_name, split=dataset_split, streaming=False,
+                token=os.getenv("HF_TOKEN"),
+            )  # type: ignore
+            print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")
 
-        # collate_fn stays None for the map-based paths (vision classification,
-        # text) and is set for the paths whose batches can't be default-collated
-        # (detection label dicts, multimodal VLM batches).
-        collate_fn = None
+            # collate_fn stays None for the map-based paths (vision classification,
+            # text) and is set for the paths whose batches can't be default-collated
+            # (detection label dicts, multimodal VLM batches).
+            collate_fn = None
 
-        if model_type == "vision":
-            if tokenizer is None:
-                raise ValueError("Image classification requires an image processor (got None).")
-            img_col = "img" if "img" in dataset.column_names else "image"
-            label_col = "label" if "label" in dataset.column_names else "labels"
+            if model_type == "vision":
+                if tokenizer is None:
+                    raise ValueError("Image classification requires an image processor (got None).")
+                img_col = "img" if "img" in dataset.column_names else "image"
+                label_col = "label" if "label" in dataset.column_names else "labels"
 
-            def process_images(example):
-                inputs = tokenizer(images=example[img_col], return_tensors="pt")
-                return {
-                    "pixel_values": inputs["pixel_values"].squeeze(0),
-                    "labels": example[label_col],
-                }
+                def process_images(example):
+                    inputs = tokenizer(images=example[img_col], return_tensors="pt")
+                    return {
+                        "pixel_values": inputs["pixel_values"].squeeze(0),
+                        "labels": example[label_col],
+                    }
 
-            orig_cols = dataset.column_names
-            num_proc = min(4, os.cpu_count() or 1)
-            dataset = dataset.map(process_images, remove_columns=orig_cols, num_proc=num_proc)
-            dataset.set_format(type="torch")
-            print_on_rank_0(rank, f"Image processing done | img_col={img_col} | label_col={label_col}")
+                orig_cols = dataset.column_names
+                num_proc = min(4, os.cpu_count() or 1)
+                dataset = dataset.map(process_images, remove_columns=orig_cols, num_proc=num_proc)
+                dataset.set_format(type="torch")
+                print_on_rank_0(rank, f"Image processing done | img_col={img_col} | label_col={label_col}")
 
-        elif model_type == "yolo":
-            if tokenizer is None:
-                raise ValueError("Object detection requires an image processor (got None).")
-            # LIMITATION: this path assumes the common HF detection schema — an
-            # `objects` column holding parallel `bbox` (COCO [x,y,w,h]) and
-            # `category` lists (cppe-5 / COCO-HF style). Validate up front and
-            # fail fast with guidance instead of a cryptic KeyError inside a
-            # DataLoader worker for datasets shaped differently.
-            cols = dataset.column_names
-            sample_objs = dataset[0]["objects"] if "objects" in cols else None
-            if not (isinstance(sample_objs, dict) and "bbox" in sample_objs and "category" in sample_objs):
-                raise ValueError(
-                    "Object detection expects an 'objects' column that is a dict with 'bbox' "
-                    "([x,y,w,h]) and 'category' lists (cppe-5 / COCO-HF schema); "
-                    f"got columns={cols}. Adapt _detection_collate in data.py for other layouts. "
-                    "See CLAUDE.md 'Data Pipeline by Model Type'."
+            elif model_type == "yolo":
+                if tokenizer is None:
+                    raise ValueError("Object detection requires an image processor (got None).")
+                # LIMITATION: this path assumes the common HF detection schema — an
+                # `objects` column holding parallel `bbox` (COCO [x,y,w,h]) and
+                # `category` lists (cppe-5 / COCO-HF style). Validate up front and
+                # fail fast with guidance instead of a cryptic KeyError inside a
+                # DataLoader worker for datasets shaped differently.
+                cols = dataset.column_names
+                sample_objs = dataset[0]["objects"] if "objects" in cols else None
+                if not (isinstance(sample_objs, dict) and "bbox" in sample_objs and "category" in sample_objs):
+                    raise ValueError(
+                        "Object detection expects an 'objects' column that is a dict with 'bbox' "
+                        "([x,y,w,h]) and 'category' lists (cppe-5 / COCO-HF schema); "
+                        f"got columns={cols}. Adapt _detection_collate in data.py for other layouts. "
+                        "See CLAUDE.md 'Data Pipeline by Model Type'."
+                    )
+                print_on_rank_0(rank, "Detection assumes COCO-HF schema: objects{bbox [x,y,w,h], category} → other layouts need a custom collate", "⚠️")
+                # Keep the dataset raw (PIL images + objects column); the collate_fn
+                # converts each batch into pixel_values + COCO-style label dicts.
+                collate_fn = functools.partial(_detection_collate, processor=tokenizer)
+                print_on_rank_0(rank, "Detection collate configured | objects → boxes + class_labels", "🎯")
+
+            elif model_type == "vlm":
+                if tokenizer is None:
+                    raise ValueError("VLM training requires a processor (got None).")
+                cols = dataset.column_names
+                image_col = next((c for c in ("image", "img") if c in cols), None)
+                text_col = next((c for c in ("text", "caption", "captions", "sentence") if c in cols), None)
+                if image_col is None or text_col is None:
+                    raise ValueError(
+                        f"VLM dataset must expose an image column and a text/caption column; got columns={cols}"
+                    )
+                # Keep the dataset raw; the collate_fn builds the prompt, expands
+                # image tokens and pads each batch via the processor.
+                collate_fn = functools.partial(
+                    _vlm_collate, processor=tokenizer, image_col=image_col, text_col=text_col
                 )
-            print_on_rank_0(rank, "Detection assumes COCO-HF schema: objects{bbox [x,y,w,h], category} → other layouts need a custom collate", "⚠️")
-            # Keep the dataset raw (PIL images + objects column); the collate_fn
-            # converts each batch into pixel_values + COCO-style label dicts.
-            collate_fn = functools.partial(_detection_collate, processor=tokenizer)
-            print_on_rank_0(rank, "Detection collate configured | objects → boxes + class_labels", "🎯")
+                print_on_rank_0(rank, f"VLM collate configured | image_col={image_col} | text_col={text_col}", "🖼️")
+                # LIMITATION: heads-up so users understand the assumptions baked into
+                # the VLM path before a long run.
+                print_on_rank_0(rank, "VLM limitations: fixed instruction prompt ('Describe the image.'), captions are NOT truncated (long text → long sequences), each batch's images are processed twice (to locate the prompt/reply boundary), and the collate targets chat-template processors with nested image lists (SmolVLM/Idefics3/LLaVA-interleave families)", "⚠️")
 
-        elif model_type == "vlm":
-            if tokenizer is None:
-                raise ValueError("VLM training requires a processor (got None).")
-            cols = dataset.column_names
-            image_col = next((c for c in ("image", "img") if c in cols), None)
-            text_col = next((c for c in ("text", "caption", "captions", "sentence") if c in cols), None)
-            if image_col is None or text_col is None:
-                raise ValueError(
-                    f"VLM dataset must expose an image column and a text/caption column; got columns={cols}"
-                )
-            # Keep the dataset raw; the collate_fn builds the prompt, expands
-            # image tokens and pads each batch via the processor.
-            collate_fn = functools.partial(
-                _vlm_collate, processor=tokenizer, image_col=image_col, text_col=text_col
-            )
-            print_on_rank_0(rank, f"VLM collate configured | image_col={image_col} | text_col={text_col}", "🖼️")
-            # LIMITATION: heads-up so users understand the assumptions baked into
-            # the VLM path before a long run.
-            print_on_rank_0(rank, "VLM limitations: fixed instruction prompt ('Describe the image.'), captions are NOT truncated (long text → long sequences), and the collate targets chat-template processors with nested image lists (SmolVLM/Idefics3/LLaVA-interleave families)", "⚠️")
+            elif tokenizer is not None:
+                def tokenize(batch):
+                    tokens = tokenizer(
+                        batch["text"],
+                        truncation=True,
+                        max_length=max_length,
+                        padding="max_length",
+                    )
+                    # Padding positions are -100 so they don't count toward the loss.
+                    tokens["labels"] = [
+                        [tok if keep else -100 for tok, keep in zip(ids, mask)]
+                        for ids, mask in zip(tokens["input_ids"], tokens["attention_mask"])
+                    ]
+                    return tokens
 
-        elif tokenizer is not None:
-            def tokenize(batch):
-                tokens = tokenizer(
-                    batch["text"],
-                    truncation=True,
-                    max_length=max_length,
-                    padding="max_length",
-                )
-                tokens["labels"] = tokens["input_ids"].copy()
-                return tokens
+                dataset = dataset.filter(lambda x: len(x["text"].strip()) > 20)
+                print_on_rank_0(rank, f"After filtering short texts: {len(dataset)} samples")
 
-            dataset = dataset.filter(lambda x: len(x["text"].strip()) > 20)
-            print_on_rank_0(rank, f"After filtering short texts: {len(dataset)} samples")
+                dataset = dataset.map(tokenize, batched=True, remove_columns=["text"])
+                dataset.set_format(type="torch")
+                print_on_rank_0(rank, f"Tokenization done. Max length: {max_length} tokens")
+            else:
+                print_on_rank_0(rank, "Tokenizer not provided — skipping tokenization. Ensure the dataset has the required input fields.", "⚠️")
+                dataset.set_format(type="torch")
 
-            dataset = dataset.map(tokenize, batched=True, remove_columns=["text"])
-            dataset.set_format(type="torch")
-            print_on_rank_0(rank, f"Tokenization done. Max length: {max_length} tokens")
-        else:
-            print_on_rank_0(rank, "Tokenizer not provided — skipping tokenization. Ensure the dataset has the required input fields.", "⚠️")
-            dataset.set_format(type="torch")
-        
         use_distributed_sampler = dist.is_available() and dist.is_initialized() # and world_size > 1
         sampler = None
         shuffle = True

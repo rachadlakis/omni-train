@@ -9,6 +9,7 @@ import json
 import os
 import re
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -24,6 +25,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import yaml
+
+
+def find_free_port() -> int:
+    """Ask the OS for an unused TCP port for torchrun's rendezvous.
+
+    A fixed --master_port (29500) makes a second concurrent multi-GPU job fail with
+    "address already in use".
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("localhost", 0))
+        return sock.getsockname()[1]
 
 try:
     from .config_adapter import adapt_ui_config_to_mini
@@ -552,17 +564,18 @@ class QueueManager:
         # Build command
         gpu_count = len(job.gpu_indices)
         strategy = str(mini_cfg.get("strategy", "solo")).lower()
-        if strategy in {"ddp", "fsdp"} and gpu_count > 1:
-            # Multi-GPU: use torchrun
+        if strategy in {"ddp", "fsdp"}:
+            # ddp/fsdp always need torchrun — even on 1 GPU, train.py initializes a
+            # process group, which requires the RANK/WORLD_SIZE/MASTER_* env torchrun sets.
             cmd = [
                 sys.executable, "-u", "-m", "torch.distributed.run",
                 f"--nproc_per_node={gpu_count}",
                 "--master_addr=localhost",
-                "--master_port=29500",
+                f"--master_port={find_free_port()}",
                 "train.py",
             ]
         else:
-            # Single GPU
+            # Solo: plain single process
             cmd = [
                 sys.executable, "-u", "train.py",
             ]

@@ -117,9 +117,10 @@ python -m pytest dist_kit/tests -m smoke
 - **LoRA / QLoRA** — adapters attach before sharding; quantized bases are
   prepared with `prepare_model_for_kbit_training`.
 - **Distributed checkpointing** — DCP API (rank-0 broadcast) or DTensor API
-  (manual gather); resume validates PEFT/non-PEFT compatibility and recomputes
-  RoPE `inv_freq` buffers that meta-device init leaves unmaterialized
-  (zeroing them would silently corrupt positional encodings).
+  (manual gather); resume validates PEFT/non-PEFT compatibility and restores
+  non-persistent buffers (RoPE `inv_freq`, `position_ids`) that `to_empty()`
+  wipes, using the values the HF constructor computed (zeroing or re-deriving
+  them would silently corrupt positional encodings).
 
 ## Hard constraints (enforced by DistConfig)
 

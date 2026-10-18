@@ -6,12 +6,25 @@
 ## kit's wrapping/checkpointing still applies.
 
 import os
+import contextlib
 
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 
-from .dist_setup import print_on_rank_0, print_on_all_ranks
+from .dist_setup import print_on_rank_0, print_on_all_ranks, dist_barrier
+
+
+@contextlib.contextmanager
+def _rank0_first():
+    """Run the enclosed block on rank 0 first, then on the remaining ranks."""
+    distributed = dist.is_available() and dist.is_initialized()
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if distributed and dist.get_rank() != 0:
+        dist_barrier(local_rank)  # wait for rank 0 to finish
+    yield
+    if distributed and dist.get_rank() == 0:
+        dist_barrier(local_rank)  # release the other ranks
 
 
 def get_text_dataloader(args, tokenizer, rank, world_size):
@@ -31,33 +44,40 @@ def get_text_dataloader(args, tokenizer, rank, world_size):
     from datasets import load_dataset
 
     subset = args.dataset_subset or None
-    print_on_rank_0(rank, f"Loading dataset: {args.dataset_name} / {subset} | split: {args.dataset_split}", "📂")
-    # Pass HF_TOKEN so gated/rate-limited datasets resolve without hanging on
-    # unauthenticated Hub requests.
-    dataset = load_dataset(
-        args.dataset_name, subset, split=args.dataset_split, streaming=False,
-        token=os.getenv("HF_TOKEN"),
-    )  # type: ignore
-    print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")
+    # Rank 0 downloads + preprocesses first and fills the HF datasets cache; the
+    # other ranks then hit that cache instead of racing to write the same files.
+    with _rank0_first():
+        print_on_rank_0(rank, f"Loading dataset: {args.dataset_name} / {subset} | split: {args.dataset_split}", "📂")
+        # Pass HF_TOKEN so gated/rate-limited datasets resolve without hanging on
+        # unauthenticated Hub requests.
+        dataset = load_dataset(
+            args.dataset_name, subset, split=args.dataset_split, streaming=False,
+            token=os.getenv("HF_TOKEN"),
+        )  # type: ignore
+        print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")
 
-    max_length = args.max_length
+        max_length = args.max_length
 
-    def tokenize(batch):
-        tokens = tokenizer(
-            batch["text"],
-            truncation=True,
-            max_length=max_length,
-            padding="max_length",
-        )
-        tokens["labels"] = tokens["input_ids"].copy()
-        return tokens
+        def tokenize(batch):
+            tokens = tokenizer(
+                batch["text"],
+                truncation=True,
+                max_length=max_length,
+                padding="max_length",
+            )
+            # Padding positions are -100 so they don't count toward the loss.
+            tokens["labels"] = [
+                [tok if keep else -100 for tok, keep in zip(ids, mask)]
+                for ids, mask in zip(tokens["input_ids"], tokens["attention_mask"])
+            ]
+            return tokens
 
-    dataset = dataset.filter(lambda x: len(x["text"].strip()) > 20)
-    print_on_rank_0(rank, f"After filtering short texts: {len(dataset)} samples")
+        dataset = dataset.filter(lambda x: len(x["text"].strip()) > 20)
+        print_on_rank_0(rank, f"After filtering short texts: {len(dataset)} samples")
 
-    dataset = dataset.map(tokenize, batched=True, remove_columns=["text"])
-    dataset.set_format(type="torch")
-    print_on_rank_0(rank, f"Tokenization done. Max length: {max_length} tokens")
+        dataset = dataset.map(tokenize, batched=True, remove_columns=["text"])
+        dataset.set_format(type="torch")
+        print_on_rank_0(rank, f"Tokenization done. Max length: {max_length} tokens")
 
     use_distributed_sampler = dist.is_available() and dist.is_initialized()
     sampler = None

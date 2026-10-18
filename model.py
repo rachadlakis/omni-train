@@ -42,12 +42,15 @@ class Attention(nn.Module):
         queries = queries.transpose(1, 2)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
+        # Causal mask: position t may only attend to positions <= t. Without it the
+        # model can read the very token it is asked to predict (next-token loss → ~0).
         output = F.scaled_dot_product_attention(
             queries,
             keys,
             values,
             None,
             self.dropout_p if self.training else 0,
+            is_causal=True,
         )
 
         output = output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)

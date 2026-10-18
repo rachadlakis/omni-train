@@ -67,8 +67,11 @@ All config validation lives in `utils.py::build_args()`. If you add a new config
 **Meta-device init is FSDP-only.**
 The meta-device loading path only applies when PEFT and quantization are both disabled. If you add a new loading path, make sure it does not break this invariant.
 
-**RoPE buffers must be recomputed, not zeroed.**
-After FSDP checkpoint loading, `inv_freq` buffers remain on the meta device. `_materialize_meta_buffers()` recomputes them using the correct formula. Zeroing them silently corrupts positional encodings.
+**Non-persistent buffers must be restored, not zeroed or re-derived.**
+`to_empty()` wipes buffers like RoPE `inv_freq`, and they are not in `state_dict()`. The meta-init path snapshots the constructor-computed values (`_snapshot_buffers()`) and restores them after loading (`_restore_buffers()`). Zeroing them silently corrupts positional encodings, and recomputing with a fixed formula ignores `rope_theta`/rope scaling.
+
+**Trainable weights stay fp32.**
+Use `_load_dtype()` when building a model. Mixed precision is a compute-time cast (FSDP `MixedPrecisionPolicy`, or autocast in `train.py`); storing trainable weights in bf16 makes most AdamW updates round to zero.
 
 ---
 

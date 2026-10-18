@@ -45,6 +45,7 @@ class DistConfig:
     max_length: int = 64
     learning_rate: float = 2e-5
     warmup_steps: int = 10
+    lr_scheduler: str = "cosine"             # after warmup: cosine | linear | constant
     weight_decay: float = 0.01
 
     # ---- checkpointing ----
@@ -96,9 +97,12 @@ class DistConfig:
         self.batch_size = int(self.batch_size)
         self.max_length = int(self.max_length)
         self.warmup_steps = int(self.warmup_steps)
+        self.lr_scheduler = str(self.lr_scheduler).lower()
         self.learning_rate = float(self.learning_rate)
         self.weight_decay = float(self.weight_decay)
 
+        if self.lr_scheduler not in {"cosine", "linear", "constant"}:
+            raise ValueError(f"lr_scheduler='{self.lr_scheduler}' — expected one of cosine, linear, constant")
         if self.strategy not in _VALID_STRATEGIES:
             raise ValueError(f"strategy='{self.strategy}' — expected one of {sorted(_VALID_STRATEGIES)}")
         if self.distribute_api not in _VALID_APIS:
@@ -182,6 +186,7 @@ class DistConfig:
             "max_length": training.get("max_length"),
             "learning_rate": training.get("learning_rate"),
             "warmup_steps": training.get("warmup_steps"),
+            "lr_scheduler": training.get("lr_scheduler"),
             "weight_decay": training.get("weight_decay"),
             "gradient_checkpointing": training.get("gradient_checkpointing"),
 

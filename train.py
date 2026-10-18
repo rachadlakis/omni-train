@@ -14,8 +14,9 @@ import traceback
 # import argparse
 # import yaml
 # import time
-import shutil
+import math
 import warnings
+from contextlib import nullcontext
 from transformers import AutoTokenizer
 import torch
 # import torch.nn as nn
@@ -143,6 +144,8 @@ def main(args):
             print_on_rank_0(rank, f"WANDB logging enabled | project={args.wandb_project}", "📊")
             run = wandb.init(
                 project=args.wandb_project,
+                entity=args.wandb_entity or None,   # blank → your default W&B entity
+                name=args.wandb_run_name or None,   # blank → W&B auto-generated name
                 config=vars(args),
                 tensorboard=True
                 )
@@ -274,14 +277,22 @@ def main(args):
 
         if hasattr(dataloader, "__len__"):
             total_steps = max(1, len(dataloader) * args.epochs)
+            warmup_steps = min(args.warmup_steps, total_steps)
 
-            def _warmup_lambda(step_idx: int) -> float:
-                if args.warmup_steps <= 0:
+            def _lr_lambda(step_idx: int) -> float:
+                # Linear warmup, then decay to 0 over the remaining steps (or hold for "constant").
+                if step_idx < warmup_steps:
+                    return float(step_idx + 1) / float(max(1, warmup_steps))
+                if args.lr_scheduler == "constant":
                     return 1.0
-                return min(1.0, float(step_idx + 1) / float(max(1, args.warmup_steps)))
+                progress = (step_idx - warmup_steps) / float(max(1, total_steps - warmup_steps))
+                progress = min(1.0, progress)
+                if args.lr_scheduler == "linear":
+                    return 1.0 - progress
+                return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lambda)
-            print_on_rank_0(rank, f"LR warmup enabled: warmup_steps={args.warmup_steps}, total_steps={total_steps}", "📈")
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+            print_on_rank_0(rank, f"LR schedule: {args.lr_scheduler} | warmup_steps={warmup_steps} | total_steps={total_steps}", "📈")
 
         # print_on_rank_0(rank, f"Counting Model Parameters", )
         print_on_rank_0(rank, "Counting model parameters for training time estimation... (this may take a moment)", "⏳")
@@ -295,6 +306,7 @@ def main(args):
                 steps_per_epoch=len(dataloader),
                 epochs=args.epochs,
                 batch_size=args.batch_size,
+                seq_len=args.custom_max_seq_len if args.model_type == "custom_transformer" else args.max_length,
                 num_gpus=world_size,
                 gpu_type=torch.cuda.get_device_name(local_rank) if torch.cuda.is_available() else "CPU",
                 strategy=args.strategy, 
@@ -304,6 +316,20 @@ def main(args):
             )
             print_on_rank_0(rank,f"Estimated time | total≈{time_est['human_readable']} | total minutes≈{time_est['total_minutes']} min | total hours≈{time_est['total_hours']} h ","⏱️",)
         
+        # Mixed precision for solo/DDP: weights stay fp32 (see distributed_utils._load_dtype),
+        # forward/backward run under autocast. FSDP gets this from its MixedPrecisionPolicy.
+        amp_dtype = DTYPE_MAP.get(args.param_dtype, torch.float32)
+        use_autocast = args.mixed_precision and args.strategy != "fsdp" and amp_dtype != torch.float32
+        if use_autocast and device.type == "cpu" and amp_dtype == torch.float16:
+            use_autocast = False  # CPU autocast is bf16-only
+        # fp16 has a narrow exponent range, so its gradients need loss scaling; bf16 does not.
+        scaler = torch.amp.GradScaler(device.type, enabled=use_autocast and amp_dtype == torch.float16)
+        if use_autocast:
+            print_on_rank_0(rank, f"Autocast enabled | compute dtype={amp_dtype} | fp32 weights{' | GradScaler on' if scaler.is_enabled() else ''}", "⚡")
+
+        def autocast_ctx():
+            return torch.autocast(device_type=device.type, dtype=amp_dtype) if use_autocast else nullcontext()
+
         print_banner_on_rank_0(rank, "TRAINING")
         model.train()
         losses = []
@@ -326,60 +352,63 @@ def main(args):
                     #     model.unshard() # type: ignore
 
                     optimizer.zero_grad()
-                    if args.model_type == "custom_transformer":
-                        import torch.nn.functional as F
-                        tokens = batch[0].to(device)    ## TensorDataset yields (tensor,) tuples
-                        logits = model(tokens)          ## [bsz, seq_len, vocab_size]
-                        # Next-token prediction loss
-                        logits_shift = logits[:, :-1, :].contiguous()
-                        labels_shift = tokens[:, 1:].contiguous()
-                        loss = F.cross_entropy(
-                            logits_shift.view(-1, logits_shift.size(-1)),
-                            labels_shift.view(-1),
-                        )
-                    elif args.model_type == "vision":
-                        pixel_values = batch["pixel_values"].to(device)
-                        labels = batch["labels"].to(device)
-                        outputs = model(pixel_values=pixel_values, labels=labels)
-                        loss = outputs.loss
-                    elif args.model_type == "yolo":
-                        # Detection labels are a list of per-image dicts (boxes,
-                        # class_labels, …) — move each tensor to the device but
-                        # keep the list structure the model expects.
-                        pixel_values = batch["pixel_values"].to(device)
-                        labels = [
-                            {k: v.to(device) for k, v in target.items()}
-                            for target in batch["labels"]
-                        ]
-                        det_kwargs = {"pixel_values": pixel_values, "labels": labels}
-                        if "pixel_mask" in batch:
-                            det_kwargs["pixel_mask"] = batch["pixel_mask"].to(device)
-                        outputs = model(**det_kwargs)
-                        loss = outputs.loss
-                    elif args.model_type == "vlm":
-                        # Processor already produced input_ids, attention_mask,
-                        # pixel_values, (pixel_attention_mask) and labels. Move
-                        # tensors to the device; pass any non-tensor entries
-                        # (some processors emit lists) through untouched.
-                        model_inputs = {
-                            k: (v.to(device) if torch.is_tensor(v) else v)
-                            for k, v in batch.items()
-                        }
-                        outputs = model(**model_inputs)
-                        loss = outputs.loss
-                    else:
-                        input_ids = batch["input_ids"].to(device)
-                        labels = batch["labels"].to(device)
-                        attention_mask = batch["attention_mask"].to(device)
-                        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-                        loss = outputs.loss
+                    with autocast_ctx():
+                        if args.model_type == "custom_transformer":
+                            import torch.nn.functional as F
+                            tokens = batch[0].to(device)    ## TensorDataset yields (tensor,) tuples
+                            logits = model(tokens)          ## [bsz, seq_len, vocab_size]
+                            # Next-token prediction loss
+                            logits_shift = logits[:, :-1, :].contiguous()
+                            labels_shift = tokens[:, 1:].contiguous()
+                            loss = F.cross_entropy(
+                                logits_shift.view(-1, logits_shift.size(-1)),
+                                labels_shift.view(-1),
+                            )
+                        elif args.model_type == "vision":
+                            pixel_values = batch["pixel_values"].to(device)
+                            labels = batch["labels"].to(device)
+                            outputs = model(pixel_values=pixel_values, labels=labels)
+                            loss = outputs.loss
+                        elif args.model_type == "yolo":
+                            # Detection labels are a list of per-image dicts (boxes,
+                            # class_labels, …) — move each tensor to the device but
+                            # keep the list structure the model expects.
+                            pixel_values = batch["pixel_values"].to(device)
+                            labels = [
+                                {k: v.to(device) for k, v in target.items()}
+                                for target in batch["labels"]
+                            ]
+                            det_kwargs = {"pixel_values": pixel_values, "labels": labels}
+                            if "pixel_mask" in batch:
+                                det_kwargs["pixel_mask"] = batch["pixel_mask"].to(device)
+                            outputs = model(**det_kwargs)
+                            loss = outputs.loss
+                        elif args.model_type == "vlm":
+                            # Processor already produced input_ids, attention_mask,
+                            # pixel_values, (pixel_attention_mask) and labels. Move
+                            # tensors to the device; pass any non-tensor entries
+                            # (some processors emit lists) through untouched.
+                            model_inputs = {
+                                k: (v.to(device) if torch.is_tensor(v) else v)
+                                for k, v in batch.items()
+                            }
+                            outputs = model(**model_inputs)
+                            loss = outputs.loss
+                        else:
+                            input_ids = batch["input_ids"].to(device)
+                            labels = batch["labels"].to(device)
+                            attention_mask = batch["attention_mask"].to(device)
+                            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                            loss = outputs.loss
 
-                    loss.backward()
+                    scaler.scale(loss).backward()
 
                     if args.grad_clip > 0:
+                        scaler.unscale_(optimizer)  # clip the true gradients, not the scaled ones
                         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                    
-                    optimizer.step()
+
+                    scaler.step(optimizer)
+                    scaler.update()
                     if scheduler is not None:
                         scheduler.step()
                     total_loss += loss.item()
@@ -433,13 +462,6 @@ def main(args):
                 args, 
                 checkpointer=checkpointer   # type: ignore
             )
-
-        ## delete pretrained_seed folder
-        if rank == 0:
-            pretrained_seed_path = os.path.join(args.checkpoint_dir, "pretrained_seed")
-            if os.path.exists(pretrained_seed_path):
-                shutil.rmtree(pretrained_seed_path)
-                print_on_rank_0(rank, "Pretrained seed folder deleted", "🧹")
 
         if dist.is_initialized():
             print_on_rank_0(rank, "Process group is being destroyed. All done!", "👋")

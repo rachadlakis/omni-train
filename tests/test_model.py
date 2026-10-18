@@ -53,6 +53,20 @@ def test_transformer_forward_shorter_sequence():
     assert logits.shape == (1, 4, TINY.vocab_size)
 
 
+def test_transformer_attention_is_causal():
+    """Changing a later token must not change logits at earlier positions —
+    otherwise next-token training can just copy the answer."""
+    torch.manual_seed(0)
+    model = Transformer(TINY).eval()
+    x = torch.randint(0, TINY.vocab_size, (1, TINY.max_seq_len))
+    x_future_changed = x.clone()
+    x_future_changed[0, -1] = (x[0, -1] + 1) % TINY.vocab_size
+    with torch.no_grad():
+        a, b = model(x), model(x_future_changed)
+    assert torch.allclose(a[:, :-1], b[:, :-1])
+    assert not torch.allclose(a[:, -1], b[:, -1])
+
+
 # ------------------------------------------------------------------
 # get_model_layers on real Transformer
 # ------------------------------------------------------------------

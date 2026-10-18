@@ -73,6 +73,6 @@ model_extras:
 
 wandb:
   wandb_log_with_train: false
-  wandb_entity: omni_train
+  wandb_entity: ""                    ## your W&B entity (username or team); blank = your default entity
   wandb_project: omni_train
   wandb_run_name: embedding-text-infonce
