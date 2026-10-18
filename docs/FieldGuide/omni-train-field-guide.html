@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OMNI-Train Field Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: engineering notebook — sticky step index on the left, one reading column, diagrams break out wider. */
+:root {
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --fg: #18202e;
+  --muted: #5d6879;
+  --line: #cfd6e0;
+  --acc: #2f5be0;
+  --acc-soft: #e3eafd;
+  --amber: #b87a0c;
+  --amber-soft: #fbefd6;
+  --rose: #c2415f;
+  --rose-soft: #fbe2e8;
+  --green: #2c8a5a;
+  --green-soft: #ddf2e6;
+  --code-bg: #eef1f6;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11141b; --panel: #1a1f29; --fg: #e3e7ef; --muted: #98a2b3; --line: #313a49;
+    --acc: #86a2ff; --acc-soft: #1f2b4d; --amber: #e6aa45; --amber-soft: #3a2d14;
+    --rose: #f08aa1; --rose-soft: #3d1d26; --green: #6fd09c; --green-soft: #173327;
+    --code-bg: #202634; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11141b; --panel: #1a1f29; --fg: #e3e7ef; --muted: #98a2b3; --line: #313a49;
+  --acc: #86a2ff; --acc-soft: #1f2b4d; --amber: #e6aa45; --amber-soft: #3a2d14;
+  --rose: #f08aa1; --rose-soft: #3d1d26; --green: #6fd09c; --green-soft: #173327;
+  --code-bg: #202634; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--body); font-size: 16px; line-height: 1.62;
+}
+.page {
+  display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 48px;
+  max-width: 1180px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 80px;
+}
+nav.toc {
+  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px);
+  align-self: start; max-height: calc(100vh - 48px); overflow-y: auto;
+  font-size: 13.5px; padding-right: 8px;
+}
+.toc .brand { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .01em; margin-bottom: 14px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+.toc li { counter-increment: s; }
+.toc a {
+  display: grid; grid-template-columns: 26px 1fr; color: var(--muted);
+  text-decoration: none; padding: 4px 6px; border-radius: 4px;
+}
+.toc a::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 11.5px; padding-top: 2px; }
+.toc a:hover, .toc a:focus-visible { color: var(--fg); background: var(--acc-soft); outline: none; }
+
+main { min-width: 0; }
+header.hero { padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--acc); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5vw, 52px); line-height: 1.05; margin: 10px 0 14px; text-wrap: balance; }
+.lede { font-size: 18.5px; color: var(--muted); max-width: 64ch; margin: 0; }
+.legend-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+.legend-row span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; border: 1px solid; }
+
+section { padding-top: 44px; scroll-margin-top: 16px; }
+section > h2 {
+  font-family: var(--display); font-weight: 600; font-size: 28px; line-height: 1.15;
+  margin: 0 0 6px; display: flex; gap: 14px; align-items: baseline; text-wrap: balance;
+}
+section > h2 .n { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--acc); min-width: 2ch; }
+.where { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+h3 { font-family: var(--display); font-weight: 600; font-size: 19px; margin: 26px 0 6px; }
+p, ul, ol.plain { max-width: 68ch; }
+p { margin: 0 0 14px; }
+ul { padding-left: 20px; margin: 0 0 14px; }
+li { margin-bottom: 4px; }
+code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+pre {
+  font-family: var(--mono); font-size: 13px; line-height: 1.55;
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 14px 16px; overflow-x: auto; margin: 0 0 16px; max-width: 100%;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+.c { color: var(--muted); }
+.k { color: var(--acc); }
+.s { color: var(--green); }
+
+figure { margin: 18px 0 22px; }
+.fig {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 18px; overflow-x: auto;
+}
+.fig svg { display: block; width: 100%; height: auto; min-width: 560px; }
+.fig.narrow svg { min-width: 420px; max-width: 640px; margin: 0 auto; }
+figcaption { font-size: 13.5px; color: var(--muted); margin-top: 8px; max-width: 72ch; }
+
+.callout {
+  border: 1px solid var(--line); border-left: 3px solid var(--amber);
+  background: var(--panel); padding: 12px 16px; border-radius: 4px; margin: 0 0 16px; max-width: 68ch;
+}
+.callout.fix { border-left-color: var(--green); }
+.callout b { font-weight: 600; }
+
+.tablewrap { overflow-x: auto; margin: 0 0 18px; }
+table { border-collapse: collapse; font-size: 14px; min-width: 520px; width: 100%; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--display); font-weight: 600; font-size: 13.5px; letter-spacing: .02em; color: var(--muted); }
+td code { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+
+.steps { list-style: none; padding: 0; margin: 8px 0 18px; display: grid; gap: 10px; counter-reset: st; max-width: 72ch; }
+.steps li {
+  counter-increment: st; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; margin: 0;
+}
+.steps li::before {
+  content: counter(st); font-family: var(--mono); font-weight: 500; color: var(--acc);
+  border: 1px solid var(--acc); border-radius: 50%; width: 26px; height: 26px;
+  display: grid; place-items: center; font-size: 13px; margin-top: 1px;
+}
+.steps li b { font-weight: 600; }
+
+.tokens { display: grid; gap: 8px; margin: 6px 0 4px; }
+.trow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.trow .lab { font-family: var(--mono); font-size: 12px; color: var(--muted); width: 74px; flex: none; }
+.tk {
+  font-family: var(--mono); font-size: 12.5px; padding: 3px 7px; border-radius: 3px;
+  border: 1px solid var(--line); background: var(--code-bg); min-width: 34px; text-align: center;
+}
+.tk.on { background: var(--green-soft); border-color: var(--green); }
+.tk.off { background: var(--rose-soft); border-color: var(--rose); color: var(--rose); }
+.tk.img { background: var(--amber-soft); border-color: var(--amber); }
+
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0 0 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; min-width: 0; }
+.card h4 { font-family: var(--display); font-weight: 600; font-size: 15.5px; margin: 0 0 4px; }
+.card p { font-size: 14.5px; margin: 0; }
+
+/* SVG diagram styling — every colour comes from the theme tokens */
+.d text { fill: var(--fg); font-family: var(--mono); font-size: 12px; }
+.d .tm { fill: var(--muted); }
+.d .ta { fill: var(--acc); }
+.d .tr { fill: var(--rose); }
+.d .tg { fill: var(--green); }
+.d .tam { fill: var(--amber); }
+.d .th { font-family: var(--display); font-weight: 600; font-size: 14px; }
+.d .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.d .bacc { fill: var(--acc-soft); stroke: var(--acc); stroke-width: 1.3; }
+.d .bam { fill: var(--amber-soft); stroke: var(--amber); stroke-width: 1.2; }
+.d .bro { fill: var(--rose-soft); stroke: var(--rose); stroke-width: 1.2; }
+.d .bgr { fill: var(--green-soft); stroke: var(--green); stroke-width: 1.2; }
+.d .fa { fill: var(--acc); }
+.d .fam { fill: var(--amber); }
+.d .fmu { fill: var(--muted); }
+.d .fro { fill: var(--rose); }
+.d .fgr { fill: var(--green); }
+.d .ln { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.d .ar { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#ah); }
+.d .ara { stroke: var(--acc); stroke-width: 1.6; fill: none; marker-end: url(#aha); }
+.d .grid { stroke: var(--line); stroke-width: 1; fill: none; }
+.d .dash { stroke-dasharray: 4 4; }
+.mk { fill: var(--muted); }
+.mka { fill: var(--acc); }
+
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+
+@media (max-width: 900px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 16px; padding-block: 24px 60px; }
+  nav.toc { position: static; max-height: none; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel); }
+  .toc ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .toc ol { grid-template-columns: minmax(0, 1fr); }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  section > h2 { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+
+/* Print / PDF: drop the side index, keep figures whole */
+@media print {
+  @page { size: A4; margin: 14mm 12mm; }
+  nav.toc { display: none; }
+  .page { display: block; max-width: none; padding: 0; }
+  section { break-inside: auto; padding-top: 22px; }
+  section > h2, h3 { break-after: avoid; }
+  figure, .fig, pre, table, .steps li, .card, .callout { break-inside: avoid; }
+  .fig { overflow: visible; }
+  .fig svg { min-width: 0; }
+}
+body { margin: 0; }
+</style>
+</head>
+<body>
+<!-- shared arrowheads for every diagram -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+    <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mka"/></marker>
+  </defs>
+</svg>
+
+<div class="page">
+<nav class="toc" aria-label="Steps">
+  <div class="brand">OMNI-Train</div>
+  <ol>
+    <li><a href="#overview">The whole run</a></li>
+    <li><a href="#launch">launch.sh &amp; torchrun</a></li>
+    <li><a href="#config">Config &amp; utils</a></li>
+    <li><a href="#getattr">getattr everywhere</a></li>
+    <li><a href="#strategies">solo, DDP, FSDP</a></li>
+    <li><a href="#ddp">How DDP works</a></li>
+    <li><a href="#fsdp">How FSDP2 works</a></li>
+    <li><a href="#meta">Meta-device init</a></li>
+    <li><a href="#rope">RoPE &amp; buffers</a></li>
+    <li><a href="#tie">tie_word_embeddings</a></li>
+    <li><a href="#precision">Precision &amp; autocast</a></li>
+    <li><a href="#peft">PEFT / LoRA</a></li>
+    <li><a href="#quant">Quantization</a></li>
+    <li><a href="#data">Data, padding, labels</a></li>
+    <li><a href="#loop">The training step</a></li>
+    <li><a href="#ckpt">Checkpointer</a></li>
+    <li><a href="#ui">Web UI &amp; queue</a></li>
+    <li><a href="#distkit">dist_kit</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow">Field guide · follows one training run from start to finish</div>
+  <h1>OMNI-Train, step by step</h1>
+  <p class="lede">OMNI-Train fine-tunes Hugging Face models (LLMs, vision, detection, VLMs, encoders) on one GPU or many. This guide follows a single run from <code>bash scripts/launch.sh</code> to the saved checkpoint. Each step shows the file it lives in and the PyTorch idea behind it.</p>
+  <div class="legend-row" aria-label="Diagram colour key">
+    <span><i class="sw" style="background:var(--acc-soft);border-color:var(--acc)"></i>model / weights</span>
+    <span><i class="sw" style="background:var(--amber-soft);border-color:var(--amber)"></i>memory / shards</span>
+    <span><i class="sw" style="background:var(--green-soft);border-color:var(--green)"></i>trained on</span>
+    <span><i class="sw" style="background:var(--rose-soft);border-color:var(--rose)"></i>masked / ignored</span>
+  </div>
+</header>
+
+<!-- 01 ------------------------------------------------------------------ -->
+<section id="overview">
+  <h2><span class="n">01</span>The whole run on one page</h2>
+  <p class="where">train.py · utils.py · distributed_utils.py · data.py · checkpoint.py</p>
+  <p>Every run follows the same eight steps. The rest of this guide zooms into each one.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 250" role="img" aria-label="Pipeline: config.yaml to build_args to process group to model setup, then dataloader, training loop, save checkpoint, cleanup">
+        <rect class="box" x="10" y="20" width="190" height="78" rx="6"/>
+        <text class="th" x="24" y="46">1 · config.yaml</text>
+        <text class="tm" x="24" y="68">YAML you edit, or the</text>
+        <text class="tm" x="24" y="84">one the UI writes</text>
+        <rect class="box" x="235" y="20" width="190" height="78" rx="6"/>
+        <text class="th" x="249" y="46">2 · build_args()</text>
+        <text class="tm" x="249" y="68">utils.py: parse +</text>
+        <text class="tm" x="249" y="84">validate → Args</text>
+        <rect class="box" x="460" y="20" width="190" height="78" rx="6"/>
+        <text class="th" x="474" y="46">3 · process group</text>
+        <text class="tm" x="474" y="68">NCCL, one process</text>
+        <text class="tm" x="474" y="84">per GPU (not solo)</text>
+        <rect class="bacc" x="685" y="20" width="205" height="78" rx="6"/>
+        <text class="th" x="699" y="46">4 · build the model</text>
+        <text class="tm" x="699" y="68">apply_solo/ddp/fsdp</text>
+        <text class="tm" x="699" y="84">+ PEFT, quantization</text>
+        <path class="ar" d="M200,59 H233"/><path class="ar" d="M425,59 H458"/><path class="ar" d="M650,59 H683"/>
+        <path class="ar" d="M787,98 V128 H105 V150"/>
+        <rect class="box" x="10" y="152" width="190" height="78" rx="6"/>
+        <text class="th" x="24" y="178">5 · get_dataloader()</text>
+        <text class="tm" x="24" y="200">data.py: tokenize,</text>
+        <text class="tm" x="24" y="216">mask labels, shard</text>
+        <rect class="bgr" x="235" y="152" width="190" height="78" rx="6"/>
+        <text class="th" x="249" y="178">6 · training loop</text>
+        <text class="tm" x="249" y="200">forward, backward,</text>
+        <text class="tm" x="249" y="216">clip, step, schedule</text>
+        <rect class="bam" x="460" y="152" width="190" height="78" rx="6"/>
+        <text class="th" x="474" y="178">7 · save_checkpoint()</text>
+        <text class="tm" x="474" y="200">.pt file, or a</text>
+        <text class="tm" x="474" y="216">Checkpointer folder</text>
+        <rect class="box" x="685" y="152" width="205" height="78" rx="6"/>
+        <text class="th" x="699" y="178">8 · cleanup()</text>
+        <text class="tm" x="699" y="200">loss plot, W&amp;B finish,</text>
+        <text class="tm" x="699" y="216">destroy process group</text>
+        <path class="ar" d="M200,191 H233"/><path class="ar" d="M425,191 H458"/><path class="ar" d="M650,191 H683"/>
+      </svg>
+    </div>
+    <figcaption>Steps 3 and 4 depend on <code>strategy</code>. Steps 4 to 6 also depend on <code>model_type</code>, which chooses the Hugging Face class, the data pipeline and the arguments passed to the model.</figcaption>
+  </figure>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>model_type</th><th>Hugging Face class</th><th>Batch it receives</th></tr></thead>
+      <tbody>
+        <tr><td><code>llm</code></td><td><code>AutoModelForCausalLM</code></td><td>input_ids, attention_mask, labels</td></tr>
+        <tr><td><code>seq2seq</code></td><td><code>AutoModelForSeq2SeqLM</code></td><td>input_ids, attention_mask, labels</td></tr>
+        <tr><td><code>encoder</code></td><td><code>AutoModel</code></td><td>input_ids, attention_mask, labels</td></tr>
+        <tr><td><code>vision</code></td><td><code>AutoModelForImageClassification</code></td><td>pixel_values, labels</td></tr>
+        <tr><td><code>yolo</code></td><td><code>AutoModelForObjectDetection</code></td><td>pixel_values, list of box dicts</td></tr>
+        <tr><td><code>vlm</code></td><td><code>AutoModelForImageTextToText</code></td><td>input_ids, pixel_values, labels, …</td></tr>
+        <tr><td><code>custom_transformer</code></td><td><code>model.Transformer</code> (toy)</td><td>random tokens, next-token loss</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 02 ------------------------------------------------------------------ -->
+<section id="launch">
+  <h2><span class="n">02</span>launch.sh and torchrun</h2>
+  <p class="where">scripts/launch.sh · distributed_utils.setup_dist_process_group()</p>
+  <p><code>launch.sh</code> reads <code>strategy</code> and <code>num_gpus</code> from the config. Either one can be overridden from the environment, as in <code>STRATEGY=ddp NUM_GPUS=2</code>. For <code>solo</code> it runs plain <code>python train.py</code>. For <code>ddp</code> and <code>fsdp</code> it hands off to <code>torchrun</code>, which starts one copy of <code>train.py</code> per GPU.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 300" role="img" aria-label="torchrun starts four processes, each bound to one GPU, joined by an NCCL process group">
+        <rect class="box" x="295" y="10" width="310" height="56" rx="6"/>
+        <text class="th" x="311" y="34">torchrun --nproc_per_node=4</text>
+        <text class="tm" x="311" y="54">--master_port=&lt;free port&gt; train.py</text>
+        <path class="ar" d="M450,66 V84 H112 V104"/><path class="ar" d="M450,84 H338 V104"/>
+        <path class="ar" d="M450,84 H562 V104"/><path class="ar" d="M450,84 H788 V104"/>
+        <g>
+          <rect class="bacc" x="22" y="106" width="180" height="104" rx="6"/>
+          <text class="th" x="36" y="130">process · rank 0</text>
+          <text x="36" y="152">RANK=0</text><text x="36" y="168">LOCAL_RANK=0</text><text x="36" y="184">WORLD_SIZE=4</text>
+          <text class="ta" x="36" y="202">→ cuda:0</text>
+        </g>
+        <g>
+          <rect class="bacc" x="248" y="106" width="180" height="104" rx="6"/>
+          <text class="th" x="262" y="130">process · rank 1</text>
+          <text x="262" y="152">RANK=1</text><text x="262" y="168">LOCAL_RANK=1</text><text x="262" y="184">WORLD_SIZE=4</text>
+          <text class="ta" x="262" y="202">→ cuda:1</text>
+        </g>
+        <g>
+          <rect class="bacc" x="472" y="106" width="180" height="104" rx="6"/>
+          <text class="th" x="486" y="130">process · rank 2</text>
+          <text x="486" y="152">RANK=2</text><text x="486" y="168">LOCAL_RANK=2</text><text x="486" y="184">WORLD_SIZE=4</text>
+          <text class="ta" x="486" y="202">→ cuda:2</text>
+        </g>
+        <g>
+          <rect class="bacc" x="698" y="106" width="180" height="104" rx="6"/>
+          <text class="th" x="712" y="130">process · rank 3</text>
+          <text x="712" y="152">RANK=3</text><text x="712" y="168">LOCAL_RANK=3</text><text x="712" y="184">WORLD_SIZE=4</text>
+          <text class="ta" x="712" y="202">→ cuda:3</text>
+        </g>
+        <rect class="bam" x="22" y="240" width="856" height="46" rx="6"/>
+        <text class="th" x="40" y="262">NCCL process group</text>
+        <text class="tm" x="40" y="279">dist.init_process_group("nccl") · all_reduce, all_gather, reduce_scatter, broadcast, barrier</text>
+        <path class="ln dash" d="M112,210 V240 M338,210 V240 M562,210 V240 M788,210 V240"/>
+      </svg>
+    </div>
+    <figcaption>torchrun sets these environment variables before Python starts. <code>setup_dist_process_group()</code> reads <code>LOCAL_RANK</code>, calls <code>torch.cuda.set_device()</code> and joins the group. Rank 0 does the printing, downloading and saving; the other ranks wait at barriers.</figcaption>
+  </figure>
+  <ul>
+    <li><b>RANK</b> is a process's global id across every machine. <b>LOCAL_RANK</b> is its index on this machine, which picks its GPU. <b>WORLD_SIZE</b> is the total number of processes.</li>
+    <li><b>NCCL_P2P_DISABLE</b> is set automatically. If NVML reports no NVLink, peer-to-peer transfer is turned off, because NCCL's PCIe topology probe can hang on cards like the RTX A4000.</li>
+    <li>Runs started from the UI or the job queue get a <b>free master port</b> from <code>find_free_port()</code>, so two jobs can run at once without fighting over port 29500.</li>
+    <li>A <b>barrier</b> is a point every rank must reach before any continues. <code>dist_barrier()</code> passes <code>device_ids=[local_rank]</code> for NCCL.</li>
+  </ul>
+</section>
+
+<!-- 03 ------------------------------------------------------------------ -->
+<section id="config">
+  <h2><span class="n">03</span>Config and utils.py</h2>
+  <p class="where">utils.load_config() · utils.build_args() · utils.estimate_training_vram/time()</p>
+  <p><code>load_config()</code> reads <code>$CONFIG_PATH</code> (default <code>config.yaml</code>). <code>build_args()</code> flattens the nested YAML into an <code>Args</code> object, for example <code>peft.r</code> becomes <code>args.peft_r</code>. It also rejects bad combinations before any GPU work starts.</p>
+<pre><code><span class="k">training</span>:
+  epochs: 4
+  batch_size: 8
+  max_length: 64
+  learning_rate: 2e-5
+  warmup_steps: 10
+  lr_scheduler: cosine        <span class="c"># cosine | linear | constant</span>
+<span class="k">strategy</span>: fsdp                <span class="c"># solo | ddp | fsdp</span>
+<span class="k">dist_parameters</span>:
+  mixed_precision: true
+  param_dtype: bfloat16       <span class="c"># compute dtype; weights stay fp32</span>
+<span class="k">peft</span>:          { enabled: false, type: lora, r: 8, alpha: 16 }
+<span class="k">quantization</span>: { enabled: false, bits: 8 }</code></pre>
+  <h3>Rules build_args enforces</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Combination</th><th>Result</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>strategy: fsdp</code> + quantization</td><td>error</td><td>FSDP can't shard bitsandbytes' packed integer weights</td></tr>
+        <tr><td>4-bit quantization, no PEFT</td><td>error</td><td>NF4 weights have no gradient; something else has to learn</td></tr>
+        <tr><td>8-bit quantization, no PEFT</td><td>warning</td><td>only norms and biases can learn; NaN losses are likely</td></tr>
+        <tr><td><code>peft.type: qlora</code></td><td>turns on PEFT and quantization</td><td>QLoRA is LoRA on a quantized base</td></tr>
+        <tr><td>unknown <code>lr_scheduler</code></td><td>error</td><td>must be cosine, linear or constant</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>utils.py also holds the helpers that estimate VRAM and training time, the terminal loss plot (<code>plotext</code>) and <code>dist_barrier()</code>. The web UI and the terminal both call the same estimator, so their numbers agree.</p>
+</section>
+
+<!-- 04 ------------------------------------------------------------------ -->
+<section id="getattr">
+  <h2><span class="n">04</span>getattr, and why it's everywhere</h2>
+  <p class="where">distributed_utils.py · dist_kit/strategies.py</p>
+  <p><code>getattr(obj, "name", default)</code> is Python's way to read an attribute when the name is a string, with a fallback value if it doesn't exist. The codebase uses it in three ways:</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>1 · Defensive config reads</h4>
+      <p>Helpers accept an <code>Args</code>, a <code>DistConfig</code> or a test's <code>SimpleNamespace</code>. Each may lack a field, and a fallback keeps them working.</p>
+    </div>
+    <div class="card">
+      <h4>2 · Walking dotted paths</h4>
+      <p><code>get_model_layers()</code> follows strings like <code>"model.decoder.layers"</code> one <code>getattr</code> at a time to find the transformer blocks to shard.</p>
+    </div>
+    <div class="card">
+      <h4>3 · Finding a buffer's owner</h4>
+      <p><code>_restore_buffers()</code> turns <code>"model.rotary_emb.inv_freq"</code> into the parent module plus the name <code>"inv_freq"</code>, then calls <code>setattr</code> on it.</p>
+    </div>
+    <div class="card">
+      <h4>4 · Optional features</h4>
+      <p><code>getattr(processor, "image_processor", None)</code> lets one code path handle processors that do or don't have a component.</p>
+    </div>
+  </div>
+<pre><code><span class="c"># 1 · fallback when a field is missing</span>
+peft_enabled = getattr(args, <span class="s">"peft_enabled"</span>, False)
+
+<span class="c"># 2 · walk "model.decoder.layers" → model.model.decoder.layers</span>
+target = model
+<span class="k">for</span> part <span class="k">in</span> path.split(<span class="s">"."</span>):
+    <span class="k">if not</span> hasattr(target, part): ok = False; <span class="k">break</span>
+    target = getattr(target, part)
+
+<span class="c"># 3 · "model.rotary_emb.inv_freq" → parent module, then setattr</span>
+*path, attr = name.split(<span class="s">"."</span>)
+parent = model
+<span class="k">for</span> part <span class="k">in</span> path:
+    parent = getattr(parent, part)
+setattr(parent, attr, snapshot[name].to(device))</code></pre>
+</section>
+
+<!-- 05 ------------------------------------------------------------------ -->
+<section id="strategies">
+  <h2><span class="n">05</span>solo, DDP or FSDP</h2>
+  <p class="where">distributed_utils.apply_solo() · apply_ddp() · apply_fsdp()</p>
+  <p>Full fine-tuning with AdamW stores about 16 bytes per parameter: 4 for the fp32 weight, 4 for its gradient and 8 for Adam's two moment estimates. For a 1-billion-parameter model that is 16 GB before activations. The strategy decides where those 16 GB live.</p>
+  <figure>
+    <div class="fig narrow">
+      <svg class="d" viewBox="0 0 560 290" role="img" aria-label="Per-GPU memory for a 1B model: solo 16 GB, DDP 16 GB on each of 4 GPUs, FSDP 4 GB on each of 4 GPUs">
+        <!-- scale: 10 px per GB, baseline y=230 -->
+        <path class="grid" d="M70,230 H540 M70,190 H540 M70,150 H540 M70,110 H540 M70,70 H540"/>
+        <text class="tm" x="58" y="234" text-anchor="end">0</text>
+        <text class="tm" x="58" y="194" text-anchor="end">4</text>
+        <text class="tm" x="58" y="154" text-anchor="end">8</text>
+        <text class="tm" x="58" y="114" text-anchor="end">12</text>
+        <text class="tm" x="58" y="74" text-anchor="end">16 GB</text>
+        <!-- solo -->
+        <rect class="bacc" x="100" y="190" width="90" height="40"/>
+        <rect class="bam" x="100" y="150" width="90" height="40"/>
+        <rect class="box" x="100" y="70" width="90" height="80"/>
+        <!-- ddp -->
+        <rect class="bacc" x="250" y="190" width="90" height="40"/>
+        <rect class="bam" x="250" y="150" width="90" height="40"/>
+        <rect class="box" x="250" y="70" width="90" height="80"/>
+        <!-- fsdp -->
+        <rect class="bacc" x="400" y="220" width="90" height="10"/>
+        <rect class="bam" x="400" y="210" width="90" height="10"/>
+        <rect class="box" x="400" y="190" width="90" height="20"/>
+        <text x="145" y="62" text-anchor="middle">16 GB</text>
+        <text x="295" y="62" text-anchor="middle">16 GB</text>
+        <text x="445" y="182" text-anchor="middle">4 GB</text>
+        <text class="th" x="145" y="252" text-anchor="middle">solo</text>
+        <text class="tm" x="145" y="270" text-anchor="middle">1 GPU</text>
+        <text class="th" x="295" y="252" text-anchor="middle">DDP</text>
+        <text class="tm" x="295" y="270" text-anchor="middle">each of 4 GPUs</text>
+        <text class="th" x="445" y="252" text-anchor="middle">FSDP</text>
+        <text class="tm" x="445" y="270" text-anchor="middle">each of 4 GPUs</text>
+        <rect class="bacc" x="80" y="16" width="12" height="12"/><text x="98" y="27">weights 4 B</text>
+        <rect class="bam" x="200" y="16" width="12" height="12"/><text x="218" y="27">gradients 4 B</text>
+        <rect class="box" x="335" y="16" width="12" height="12"/><text x="353" y="27">Adam moments 8 B</text>
+      </svg>
+    </div>
+    <figcaption>Drawn to scale for a 1B-parameter model trained in fp32 with AdamW, activations excluded. DDP copies everything to every GPU, so it buys speed, not memory. FSDP splits all three across the GPUs, so per-GPU memory drops by the number of GPUs.</figcaption>
+  </figure>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Strategy</th><th>Use it when</th><th>Launch</th><th>Works with quantization</th></tr></thead>
+      <tbody>
+        <tr><td><b>solo</b></td><td>one GPU</td><td><code>python train.py</code></td><td>yes</td></tr>
+        <tr><td><b>DDP</b></td><td>the model fits on one GPU and you want more throughput</td><td><code>torchrun</code></td><td>yes</td></tr>
+        <tr><td><b>FSDP</b></td><td>the model doesn't fit on one GPU</td><td><code>torchrun</code></td><td>no</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 06 ------------------------------------------------------------------ -->
+<section id="ddp">
+  <h2><span class="n">06</span>How DDP works</h2>
+  <p class="where">torch.nn.parallel.DistributedDataParallel · apply_ddp()</p>
+  <p>Every GPU holds the whole model and gets a different slice of each batch from the <code>DistributedSampler</code>. After <code>backward()</code>, DDP <b>all-reduces</b> the gradients so every GPU holds the average. Each GPU then runs the same optimizer step on the same averaged gradient, so the copies stay identical.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 230" role="img" aria-label="DDP: four GPUs with full model copies compute different gradients, all-reduce averages them, each applies the same update">
+        <g>
+          <rect class="bacc" x="20" y="14" width="190" height="60" rx="6"/><text class="th" x="34" y="38">GPU 0 · full model</text><text class="tm" x="34" y="58">batch slice 0 → g₀</text>
+          <rect class="bacc" x="242" y="14" width="190" height="60" rx="6"/><text class="th" x="256" y="38">GPU 1 · full model</text><text class="tm" x="256" y="58">batch slice 1 → g₁</text>
+          <rect class="bacc" x="464" y="14" width="190" height="60" rx="6"/><text class="th" x="478" y="38">GPU 2 · full model</text><text class="tm" x="478" y="58">batch slice 2 → g₂</text>
+          <rect class="bacc" x="686" y="14" width="190" height="60" rx="6"/><text class="th" x="700" y="38">GPU 3 · full model</text><text class="tm" x="700" y="58">batch slice 3 → g₃</text>
+        </g>
+        <path class="ar" d="M115,74 V100"/><path class="ar" d="M337,74 V100"/><path class="ar" d="M559,74 V100"/><path class="ar" d="M781,74 V100"/>
+        <rect class="bam" x="20" y="102" width="856" height="44" rx="6"/>
+        <text class="th" x="36" y="122">all_reduce(gradients) / 4</text>
+        <text class="tm" x="36" y="139">every GPU ends up with ḡ = (g₀ + g₁ + g₂ + g₃) / 4, overlapped with backward in gradient buckets</text>
+        <path class="ar" d="M115,146 V172"/><path class="ar" d="M337,146 V172"/><path class="ar" d="M559,146 V172"/><path class="ar" d="M781,146 V172"/>
+        <rect class="bgr" x="20" y="174" width="190" height="44" rx="6"/><text x="34" y="201">optimizer.step(ḡ)</text>
+        <rect class="bgr" x="242" y="174" width="190" height="44" rx="6"/><text x="256" y="201">optimizer.step(ḡ)</text>
+        <rect class="bgr" x="464" y="174" width="190" height="44" rx="6"/><text x="478" y="201">optimizer.step(ḡ)</text>
+        <rect class="bgr" x="686" y="174" width="190" height="44" rx="6"/><text x="700" y="201">optimizer.step(ḡ)</text>
+      </svg>
+    </div>
+    <figcaption>In <code>apply_ddp()</code>, rank 0 downloads the weights into the HF cache first while the others wait at a barrier, then every rank loads from that cache. The model is wrapped with <code>DDP(model, device_ids=[local_rank])</code>.</figcaption>
+  </figure>
+</section>
+
+<!-- 07 ------------------------------------------------------------------ -->
+<section id="fsdp">
+  <h2><span class="n">07</span>How FSDP2 works</h2>
+  <p class="where">torch.distributed.fsdp.fully_shard · get_model_layers() · set_modules_to_forward/backward_prefetch()</p>
+  <p>FSDP2's <code>fully_shard(module)</code> turns each parameter into a <b>DTensor</b> split along dimension 0, so each rank keeps 1/N of every weight. OMNI-Train calls it on every transformer block, then on the root model. A full layer only exists for the moment it is being computed:</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 250" role="img" aria-label="FSDP forward: all-gather layer, compute, free; backward: all-gather, compute gradients, reduce-scatter">
+        <text class="th" x="20" y="24">Forward pass on one rank</text>
+        <rect class="bam" x="20" y="38" width="130" height="40" rx="4"/><text x="30" y="62">all-gather L1</text>
+        <rect class="bacc" x="156" y="38" width="110" height="40" rx="4"/><text x="166" y="62">compute L1</text>
+        <rect class="box" x="272" y="38" width="80" height="40" rx="4"/><text x="282" y="62">free L1</text>
+        <rect class="bam" x="156" y="86" width="130" height="40" rx="4"/><text x="166" y="110">all-gather L2</text>
+        <rect class="bacc" x="292" y="86" width="110" height="40" rx="4"/><text x="302" y="110">compute L2</text>
+        <rect class="box" x="408" y="86" width="80" height="40" rx="4"/><text x="418" y="110">free L2</text>
+        <rect class="bam" x="292" y="134" width="130" height="40" rx="4"/><text x="302" y="158">all-gather L3</text>
+        <rect class="bacc" x="428" y="134" width="110" height="40" rx="4"/><text x="438" y="158">compute L3</text>
+        <text class="tm" x="560" y="158">… one block at a time</text>
+        <text class="ta" x="580" y="62">prefetch: L2's all-gather starts</text>
+        <text class="ta" x="580" y="80">while L1 is still computing</text>
+        <text class="th" x="20" y="212">Backward pass</text>
+        <text class="tm" x="20" y="234">all-gather Lk → compute its gradients → <tspan class="tam">reduce-scatter</tspan>: each rank keeps only its 1/N slice of the summed gradient</text>
+      </svg>
+    </div>
+    <figcaption>Explicit prefetching (<code>prefetch.forward: 2</code>, <code>prefetch.backward: 2</code>) tells each block which blocks to gather next, so communication overlaps with compute. <code>get_model_layers()</code> finds the blocks: first from HF's <code>_no_split_modules</code>, then a list of known paths, then the largest <code>ModuleList</code>.</figcaption>
+  </figure>
+  <p>FSDP has three loading paths, chosen in <code>apply_fsdp()</code>:</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Path</th><th>When</th><th>How the weights arrive</th></tr></thead>
+      <tbody>
+        <tr><td>1 · custom transformer</td><td><code>model_type: custom_transformer</code></td><td>build on meta, shard, <code>to_empty()</code>, <code>reset_parameters()</code></td></tr>
+        <tr><td>2 · PEFT</td><td><code>peft.enabled: true</code></td><td>full model loaded on CPU, adapters attached, then sharded layer by layer</td></tr>
+        <tr><td>3 · meta init</td><td>everything else</td><td>build on meta, shard, then load: resume, fresh HF seed or random (next step)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 08 ------------------------------------------------------------------ -->
+<section id="meta">
+  <h2><span class="n">08</span>Meta-device initialization</h2>
+  <p class="where">distributed_utils._apply_fsdp_meta_init() · _snapshot_buffers() · _restore_buffers() · _remove_seed_dir()</p>
+  <p>A tensor on the <b>meta device</b> has a shape and a dtype but no memory behind it. Building a 70B model on meta costs almost nothing, so no single rank ever has to hold the full model. FSDP then decides which slice each rank owns, and each rank allocates only that slice.</p>
+  <ol class="steps">
+    <li><div><b>Build with parameters on meta.</b> <code>accelerate.init_empty_weights(include_buffers=False)</code> puts parameters on meta but computes buffers for real, so RoPE's <code>inv_freq</code> gets its exact Hugging Face value.</div></li>
+    <li><div><b>Shard.</b> <code>fully_shard()</code> on each block, then the root, with a <code>MixedPrecisionPolicy</code> when mixed precision is on.</div></li>
+    <li><div><b>Snapshot the buffers.</b> <code>_snapshot_buffers()</code> copies them, because the next step wipes everything.</div></li>
+    <li><div><b>Allocate.</b> <code>model.to_empty(device="cuda")</code> gives each rank real but uninitialized memory for its own slice.</div></li>
+    <li><div><b>Load the weights.</b> <b>A, resume:</b> the <code>Checkpointer</code> reads the checkpoint at <code>resume_path</code>. <b>B, fresh run:</b> rank 0 downloads the model, saves a timestamped seed <code>.pt</code>, and all ranks load exactly that seed. <b>C, random:</b> <code>init_weights()</code>.</div></li>
+    <li><div><b>Restore the buffers.</b> <code>_restore_buffers()</code> writes the snapshot back into the non-persistent buffers, the ones <code>state_dict()</code> never contains.</div></li>
+    <li><div><b>Delete the seed.</b> After a barrier, rank 0 removes only this run's seed folder, so a concurrent run's seed is left alone.</div></li>
+  </ol>
+<pre><code><span class="k">with</span> init_empty_weights(include_buffers=False):
+    model = AutoModelForCausalLM.from_config(config, dtype=torch.float32)
+<span class="k">for</span> layers, _ <span class="k">in</span> get_model_layers(model):
+    <span class="k">for</span> layer <span class="k">in</span> layers:
+        fully_shard(layer, mp_policy=mp)
+fully_shard(model, mp_policy=mp)
+
+buffers = _snapshot_buffers(model)       <span class="c"># inv_freq, position_ids, …</span>
+model.to_empty(device=device)            <span class="c"># this rank's slice, uninitialized</span>
+checkpointer.load_model(model)           <span class="c"># rank 0 reads; NCCL broadcasts slices</span>
+_restore_buffers(model, buffers, device, rank)</code></pre>
+</section>
+
+<!-- 09 ------------------------------------------------------------------ -->
+<section id="rope">
+  <h2><span class="n">09</span>RoPE and non-persistent buffers</h2>
+  <p class="where">_snapshot_buffers() · _restore_buffers() · tests/test_fsdp_buffers.py</p>
+  <p><b>RoPE</b> (rotary position embedding) encodes position by rotating pairs of query and key dimensions. Pair <i>i</i> rotates at angular speed <code>inv_freq[i] = θ<sup>−2i/d</sup></code>. Fast pairs track nearby tokens and slow pairs track distant ones. The base θ (<code>rope_theta</code>) and any rope scaling come from the model's config.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" id="ropeChart" viewBox="0 0 860 330" role="img" aria-label="inv_freq per dimension pair on a log scale for theta 10000, theta 500000 and theta 500000 with llama3 scaling"></svg>
+    </div>
+    <figcaption>Computed with head dimension 128. The dashed line is what the old code produced for every model: the textbook θ = 10,000. Llama 3 actually uses θ = 500,000 plus llama3 scaling, which slows the low-frequency pairs by a further 8×. Using the wrong curve breaks positional information without raising any error.</figcaption>
+  </figure>
+  <h3>Why the buffer has to be restored</h3>
+  <p><code>inv_freq</code> is registered with <code>persistent=False</code>, so it is not part of <code>state_dict()</code> and no checkpoint ever contains it. <code>to_empty()</code> overwrites it with uninitialized memory, and nothing reloads it. BERT's <code>position_ids</code> have the same problem. The fix is to save the values Hugging Face computed when it built the model, then put them back after loading. Rebuilding them from a fixed formula is what went wrong before.</p>
+  <div class="callout fix"><b>Verified on GPU:</b> a Llama-3-style model loaded through the full FSDP path produced loss 10.80577, exactly the plain HF reference (difference 0). With the old θ = 10,000 recompute it gave 10.80545.</div>
+</section>
+
+<!-- 10 ------------------------------------------------------------------ -->
+<section id="tie">
+  <h2><span class="n">10</span>tie_word_embeddings</h2>
+  <p class="where">_apply_fsdp_meta_init() · _apply_fsdp_peft_quant() · seed creation</p>
+  <p>Many LLMs use one matrix of shape <code>[vocab × hidden]</code> twice. <code>embed_tokens</code> turns token ids into vectors at the input, and <code>lm_head</code> turns the final hidden state back into vocabulary scores at the output. This is <b>tied</b> embeddings: one tensor, two names.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 220" role="img" aria-label="Tied: embed_tokens and lm_head point to one matrix. OMNI-Train clones it into two independent matrices before sharding.">
+        <text class="th" x="20" y="24">Tied (as on the Hub)</text>
+        <rect class="bacc" x="20" y="40" width="150" height="40" rx="4"/><text x="32" y="65">embed_tokens</text>
+        <rect class="bacc" x="20" y="130" width="150" height="40" rx="4"/><text x="32" y="155">lm_head</text>
+        <rect class="bam" x="250" y="72" width="170" height="66" rx="4"/>
+        <text x="262" y="98">one matrix</text><text class="tm" x="262" y="118">vocab × hidden</text>
+        <path class="ar" d="M170,60 H210 V92 H248"/><path class="ar" d="M170,150 H210 V118 H248"/>
+        <path class="ara" d="M440,105 H500"/>
+        <text class="ta" x="444" y="96">clone()</text>
+        <text class="th" x="520" y="24">Untied (what FSDP shards)</text>
+        <rect class="bacc" x="520" y="40" width="150" height="40" rx="4"/><text x="532" y="65">embed_tokens</text>
+        <rect class="bacc" x="520" y="130" width="150" height="40" rx="4"/><text x="532" y="155">lm_head</text>
+        <rect class="bam" x="710" y="40" width="170" height="40" rx="4"/><text x="722" y="65">matrix A</text>
+        <rect class="bam" x="710" y="130" width="170" height="40" rx="4"/><text x="722" y="155">matrix B (copy)</text>
+        <path class="ar" d="M670,60 H708"/><path class="ar" d="M670,150 H708"/>
+        <text class="tm" x="520" y="200">same start values; they drift apart in training</text>
+      </svg>
+    </div>
+  </figure>
+  <p>Rank 0 loads the model <b>tied</b>. Llama-style checkpoints store only <code>embed_tokens.weight</code>; loading untied would leave <code>lm_head</code> random and the loss stuck near ln(vocab). If the two names share memory (<code>data_ptr()</code> is equal), it clones the matrix into <code>lm_head</code> and sets <code>tie_word_embeddings = False</code> before saving the seed. Each copy then shards independently.</p>
+  <div class="callout"><b>The cost:</b> one extra <code>vocab × hidden</code> matrix. For Qwen2-0.5B that is 151,936 × 896 ≈ 136M parameters, about a fifth of the whole model. The saved checkpoint also no longer matches the Hub's tied layout. Keeping the weights tied under FSDP2 is a possible future improvement.</div>
+</section>
+
+<!-- 11 ------------------------------------------------------------------ -->
+<section id="precision">
+  <h2><span class="n">11</span>Precision, autocast and mixed precision</h2>
+  <p class="where">distributed_utils._load_dtype() · train.py autocast_ctx() · MixedPrecisionPolicy</p>
+  <p>bf16 keeps fp32's range but only 8 bits of precision, about 3 significant digits. That is fine for matrix multiplies and too coarse to store weights you are updating:</p>
+  <figure>
+    <div class="fig narrow">
+      <svg class="d" viewBox="0 0 600 170" role="img" aria-label="Number line near 0.05: bf16 can only represent 0.04980, 0.05005 and 0.05029; a 2e-5 update rounds back">
+        <path class="ln" d="M40,90 H570"/>
+        <path class="ln" d="M131.8,80 V100 M299.2,80 V100 M466.6,80 V100" style="stroke-width:2"/>
+        <text x="131.8" y="122" text-anchor="middle">0.04980</text>
+        <text x="299.2" y="122" text-anchor="middle">0.05005</text>
+        <text x="466.6" y="122" text-anchor="middle">0.05029</text>
+        <text class="tm" x="131.8" y="138" text-anchor="middle">bf16</text>
+        <text class="tm" x="299.2" y="138" text-anchor="middle">bf16 (stored weight)</text>
+        <text class="tm" x="466.6" y="138" text-anchor="middle">bf16</text>
+        <path class="ln dash" d="M382.9,52 V100"/>
+        <text class="tm" x="390" y="58">halfway: rounding boundary</text>
+        <circle class="fro" cx="312.9" cy="90" r="4"/>
+        <path class="ln" d="M294,46 L311,84"/>
+        <text class="tr" x="290" y="42" text-anchor="end">weight + 2e-5, rounds back</text>
+        <text class="tm" x="40" y="160">0.05005 + 0.00002 is still closer to 0.05005, so the update disappears.</text>
+      </svg>
+    </div>
+    <figcaption>Neighbouring bf16 values near 0.05 are 2⁻¹² ≈ 0.000244 apart. A typical fine-tuning update (lr 2e-5 × a unit-sized Adam step) is 12× smaller than the distance to the rounding boundary.</figcaption>
+  </figure>
+  <p>So trainable weights stay in <b>fp32</b>, and only the computation runs in bf16:</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 150" role="img" aria-label="fp32 master weights cast to bf16 for forward, loss and gradients flow back into fp32 weights and fp32 optimizer state">
+        <rect class="bacc" x="16" y="40" width="170" height="60" rx="6"/><text class="th" x="30" y="64">fp32 weights</text><text class="tm" x="30" y="84">the master copy</text>
+        <rect class="bam" x="236" y="40" width="190" height="60" rx="6"/><text class="th" x="250" y="64">bf16 compute</text><text class="tm" x="250" y="84">autocast / FSDP casts</text>
+        <rect class="box" x="476" y="40" width="160" height="60" rx="6"/><text class="th" x="490" y="64">loss</text><text class="tm" x="490" y="84">backward()</text>
+        <rect class="bgr" x="686" y="40" width="200" height="60" rx="6"/><text class="th" x="700" y="64">fp32 grads → AdamW</text><text class="tm" x="700" y="84">fp32 moments</text>
+        <path class="ar" d="M186,70 H234"/><path class="ar" d="M426,70 H474"/><path class="ar" d="M636,70 H684"/>
+        <path class="ar" d="M786,100 V130 H101 V102"/>
+        <text class="tm" x="330" y="124">small updates land in fp32 and are kept</text>
+      </svg>
+    </div>
+  </figure>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Strategy</th><th>Weights stored as</th><th>Compute in bf16 via</th></tr></thead>
+      <tbody>
+        <tr><td>solo / DDP, full fine-tune</td><td>fp32</td><td><code>torch.autocast(dtype=bf16)</code> around the forward pass</td></tr>
+        <tr><td>solo / DDP + PEFT</td><td>frozen base in bf16, LoRA adapters in fp32</td><td><code>torch.autocast</code></td></tr>
+        <tr><td>FSDP (with or without PEFT)</td><td>fp32 shards</td><td><code>MixedPrecisionPolicy(param_dtype=bf16, reduce_dtype=fp32)</code></td></tr>
+        <tr><td>param_dtype: float16</td><td>fp32</td><td>autocast + <code>GradScaler</code> (fp16 can underflow small gradients)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>FSDP2 needs every parameter in a group to share one dtype. That is why FSDP + PEFT keeps the frozen base in fp32 too, instead of mixing bf16 and fp32.</p>
+</section>
+
+<!-- 12 ------------------------------------------------------------------ -->
+<section id="peft">
+  <h2><span class="n">12</span>PEFT and LoRA</h2>
+  <p class="where">distributed_utils._apply_peft_quantization() · peft.get_peft_model()</p>
+  <p><b>LoRA</b> freezes each original weight <code>W</code> and learns a small correction <code>B·A</code> next to it. Here <code>A</code> is <code>r × d</code>, <code>B</code> is <code>d × r</code>, and the rank <code>r</code> is tiny (8 in the default config). <code>B</code> starts at zero, so training begins from exactly the pretrained model.</p>
+  <figure>
+    <div class="fig narrow">
+      <svg class="d" viewBox="0 0 600 240" role="img" aria-label="LoRA: input x goes through frozen W and through A then B; outputs are added">
+        <rect class="box" x="20" y="96" width="60" height="44" rx="4"/><text x="40" y="123">x</text>
+        <rect class="bacc" x="150" y="30" width="190" height="64" rx="4"/><text class="th" x="164" y="56">W · frozen</text><text class="tm" x="164" y="76">d × d, no gradient</text>
+        <rect class="bgr" x="150" y="140" width="80" height="64" rx="4"/><text class="th" x="164" y="166">A</text><text class="tm" x="164" y="186">r × d</text>
+        <rect class="bgr" x="260" y="140" width="80" height="64" rx="4"/><text class="th" x="274" y="166">B</text><text class="tm" x="274" y="186">d × r</text>
+        <circle class="box" cx="420" cy="118" r="18"/><text x="414" y="123">+</text>
+        <rect class="box" x="490" y="96" width="90" height="44" rx="4"/><text x="502" y="123">h = Wx</text>
+        <text class="tm" x="502" y="158">+ (α/r)·BAx</text>
+        <path class="ar" d="M80,110 H110 V62 H148"/><path class="ar" d="M80,126 H110 V172 H148"/>
+        <path class="ar" d="M230,172 H258"/>
+        <path class="ar" d="M340,62 H420 V98"/><path class="ar" d="M340,172 H420 V138"/>
+        <path class="ar" d="M438,118 H488"/>
+      </svg>
+    </div>
+    <figcaption>The OPT-125m LoRA run in this repo trains 1,327,104 of 126,566,400 parameters (1.05%). Gradients and Adam state exist only for that 1%.</figcaption>
+  </figure>
+  <ul>
+    <li><code>target_modules: all-linear</code> attaches adapters to every linear layer. A list such as <code>[q_proj, v_proj]</code> limits them.</li>
+    <li><code>trainable_params = [p for p in model.parameters() if p.requires_grad]</code> is what goes to AdamW, so frozen weights get no optimizer state.</li>
+    <li>Under FSDP, adapters are attached <b>before</b> sharding, so the model is materialized on CPU first (path 2). Meta init can't be used here.</li>
+  </ul>
+</section>
+
+<!-- 13 ------------------------------------------------------------------ -->
+<section id="quant">
+  <h2><span class="n">13</span>Quantization (bitsandbytes)</h2>
+  <p class="where">distributed_utils._build_quantization_config() · prepare_model_for_kbit_training()</p>
+  <p>Quantization stores the frozen base weights in fewer bits. <b>8-bit</b> uses LLM.int8(); <b>4-bit</b> uses NF4, a 4-bit format whose levels are spaced to match normally distributed weights. Weights are unpacked to <code>compute_dtype</code> (bf16) just in time for each matmul.</p>
+  <figure>
+    <div class="fig narrow">
+      <svg class="d" viewBox="0 0 560 210" role="img" aria-label="Weight memory for a 7B model: fp32 28 GB, bf16 14 GB, int8 7 GB, NF4 about 3.5 GB">
+        <!-- scale: 12 px per GB from x=110 -->
+        <path class="grid" d="M110,20 V180 M206,20 V180 M302,20 V180 M398,20 V180"/>
+        <text class="tm" x="110" y="198" text-anchor="middle">0</text>
+        <text class="tm" x="206" y="198" text-anchor="middle">8</text>
+        <text class="tm" x="302" y="198" text-anchor="middle">16</text>
+        <text class="tm" x="398" y="198" text-anchor="middle">24 GB</text>
+        <text x="100" y="44" text-anchor="end">fp32</text><rect class="box" x="110" y="28" width="336" height="24"/><text x="452" y="45">28 GB</text>
+        <text x="100" y="84" text-anchor="end">bf16</text><rect class="bacc" x="110" y="68" width="168" height="24"/><text x="284" y="85">14 GB</text>
+        <text x="100" y="124" text-anchor="end">int8</text><rect class="bam" x="110" y="108" width="84" height="24"/><text x="200" y="125">7 GB</text>
+        <text x="100" y="164" text-anchor="end">NF4</text><rect class="bgr" x="110" y="148" width="42" height="24"/><text x="158" y="165">≈3.5 GB</text>
+      </svg>
+    </div>
+    <figcaption>Weight storage for a 7B-parameter model, drawn to scale (NF4 adds a small overhead for its quantization constants). This is what lets a 7B QLoRA run fit on a single consumer GPU.</figcaption>
+  </figure>
+  <ul>
+    <li><b>QLoRA</b> = 4-bit (or 8-bit) frozen base + LoRA adapters in higher precision. <code>peft.type: qlora</code> turns on both.</li>
+    <li><code>prepare_model_for_kbit_training()</code> upcasts norms to fp32 and enables gradient checkpointing before the adapters attach.</li>
+    <li>bitsandbytes stores packed integers plus per-block constants. FSDP's dim-0 sharding can't split that, which is why <code>fsdp</code> + quantization is rejected. Use <code>ddp</code> or <code>solo</code>.</li>
+  </ul>
+</section>
+
+<!-- 14 ------------------------------------------------------------------ -->
+<section id="data">
+  <h2><span class="n">14</span>Data, padding and labels</h2>
+  <p class="where">data.get_dataloader() · _vlm_collate() · _detection_collate() · _rank0_first()</p>
+  <p>Every sequence in a batch needs the same length, so short ones are filled with <b>pad</b> tokens. The model has to ignore them twice. <code>attention_mask = 0</code> hides them from attention, and <code>label = -100</code> leaves them out of the loss, because PyTorch's cross-entropy skips <code>-100</code>.</p>
+  <div class="fig" style="overflow-x:auto">
+    <div class="tokens" aria-label="Text example: seven real tokens trained on, three pad tokens masked">
+      <div class="trow"><span class="lab">LLM tokens</span><span class="tk">The</span><span class="tk">cat</span><span class="tk">sat</span><span class="tk">on</span><span class="tk">the</span><span class="tk">mat</span><span class="tk">.</span><span class="tk">PAD</span><span class="tk">PAD</span><span class="tk">PAD</span></div>
+      <div class="trow"><span class="lab">mask</span><span class="tk">1</span><span class="tk">1</span><span class="tk">1</span><span class="tk">1</span><span class="tk">1</span><span class="tk">1</span><span class="tk">1</span><span class="tk">0</span><span class="tk">0</span><span class="tk">0</span></div>
+      <div class="trow"><span class="lab">labels</span><span class="tk on">The</span><span class="tk on">cat</span><span class="tk on">sat</span><span class="tk on">on</span><span class="tk on">the</span><span class="tk on">mat</span><span class="tk on">.</span><span class="tk off">-100</span><span class="tk off">-100</span><span class="tk off">-100</span></div>
+    </div>
+    <div class="tokens" style="margin-top:16px" aria-label="VLM example: only the reply and end token are trained on">
+      <div class="trow"><span class="lab">VLM tokens</span><span class="tk">USER:</span><span class="tk img">&lt;image&gt; ×N</span><span class="tk">Describe</span><span class="tk">the</span><span class="tk">image.</span><span class="tk">ASSISTANT:</span><span class="tk">a</span><span class="tk">red</span><span class="tk">car</span><span class="tk">&lt;eos&gt;</span><span class="tk">PAD</span></div>
+      <div class="trow"><span class="lab">labels</span><span class="tk off">-100</span><span class="tk off">-100 ×N</span><span class="tk off">-100</span><span class="tk off">-100</span><span class="tk off">-100</span><span class="tk off">-100</span><span class="tk on">a</span><span class="tk on">red</span><span class="tk on">car</span><span class="tk on">&lt;eos&gt;</span><span class="tk off">-100</span></div>
+    </div>
+  </div>
+  <p style="margin-top:14px">Padding is masked by <code>attention_mask</code>, not by the pad token's id. Many tokenizers reuse <code>&lt;eos&gt;</code> as the pad token, and masking by id would also hide the real end-of-reply token, so the model would never learn to stop. For VLMs, the prompt is run through the processor on its own to find where the reply starts, which works with either padding side.</p>
+  <ul>
+    <li><b>Text</b> (<code>llm</code>, <code>seq2seq</code>, <code>encoder</code>): <code>dataset.map(tokenize)</code> with <code>padding="max_length"</code>.</li>
+    <li><b>Vision</b>: the image processor produces <code>pixel_values</code> plus an integer label.</li>
+    <li><b>Detection</b> and <b>VLM</b> use a <code>collate_fn</code>, because each image has a variable number of boxes or image tokens, which can't be stacked into one tensor.</li>
+    <li><b>DistributedSampler</b> gives each rank a different 1/N of the data. <code>set_epoch()</code> reshuffles each epoch, and <code>drop_last=True</code> keeps ranks in step.</li>
+    <li><b>Rank 0 first:</b> <code>_rank0_first()</code> lets rank 0 download and preprocess while the others wait. They then read the finished HF datasets cache instead of all writing to it at once.</li>
+  </ul>
+</section>
+
+<!-- 15 ------------------------------------------------------------------ -->
+<section id="loop">
+  <h2><span class="n">15</span>The training step</h2>
+  <p class="where">train.py main()</p>
+<pre><code><span class="k">for</span> epoch <span class="k">in</span> range(args.epochs):
+    sampler.set_epoch(epoch)                       <span class="c"># new shuffle on every rank</span>
+    <span class="k">for</span> batch <span class="k">in</span> dataloader:
+        optimizer.zero_grad()
+        <span class="k">with</span> autocast_ctx():                       <span class="c"># bf16 compute (solo/DDP)</span>
+            loss = model(**batch).loss
+        scaler.scale(loss).backward()              <span class="c"># DDP all-reduce / FSDP reduce-scatter here</span>
+        scaler.unscale_(optimizer)
+        clip_grad_norm_(model.parameters(), args.grad_clip)
+        scaler.step(optimizer); scaler.update()    <span class="c"># plain step unless fp16</span>
+        scheduler.step()                           <span class="c"># warmup, then cosine decay</span></code></pre>
+  <figure>
+    <div class="fig">
+      <svg class="d" id="lrChart" viewBox="0 0 860 300" role="img" aria-label="Learning rate over 156 steps: linear warmup for 10 steps, then cosine, linear or constant"></svg>
+    </div>
+    <figcaption>The LR multiplier from <code>_lr_lambda</code> for a 156-step run with <code>warmup_steps: 10</code>. The rate ramps up linearly, then decays to zero by the last step (cosine or linear), or holds (constant). Multiply by <code>learning_rate</code> to get the actual rate.</figcaption>
+  </figure>
+  <p><b>Gradient clipping</b> rescales the whole gradient when its norm exceeds <code>grad_clip</code>, so one bad batch can't throw the weights off. With fp16, <code>unscale_</code> runs first so the clip sees the true gradient. <b>Gradient checkpointing</b> saves memory by recomputing activations during backward instead of storing them, at roughly 33% extra compute.</p>
+</section>
+
+<!-- 16 ------------------------------------------------------------------ -->
+<section id="ckpt">
+  <h2><span class="n">16</span>The Checkpointer</h2>
+  <p class="where">checkpoint.py · distributed_utils.save_checkpoint()</p>
+  <p>Solo and DDP save one <code>state_dict()</code> file. FSDP weights are split across ranks, so the <code>Checkpointer</code> has to gather a full copy before saving, and split it again on load. It offers two APIs:</p>
+  <div class="grid2">
+    <div class="card"><h4>DCP API · <code>dcp_api</code></h4><p><code>get_model_state_dict(full_state_dict=True, cpu_offload=True)</code> gathers the full model. On load, rank 0 reads the file and <code>broadcast_from_rank0</code> sends each rank its slice, so only rank 0 needs the full model in RAM.</p></div>
+    <div class="card"><h4>DTensor API · <code>dtensor_api</code></h4><p>Saving calls <code>full_tensor()</code> on each DTensor. On load, every rank reads the file and <code>distribute_tensor()</code> cuts out its own slice. Simpler, but every rank holds the full file in memory.</p></div>
+  </div>
+<pre><code>checkpoints/
+├── solo/<span class="s">1760772153123</span>.pt                 <span class="c"># &lt;unix ms&gt;[__tag].pt</span>
+├── ddp/<span class="s">1760772159876</span>__lora.pt
+└── fsdp/
+    ├── dcp_api/
+    │   └── <span class="s">1760772201456</span>__lora/          <span class="c"># run tag: __lora, __qlora_q4, …</span>
+    │       ├── model_state_dict.pt
+    │       └── optim_state_dict.pt
+    └── dtensor_api/<span class="s">1760772299001</span>/…
+└── pretrained_seed/…                     <span class="c"># temporary; deleted once loaded</span></code></pre>
+  <ul>
+    <li>Folder names start with a Unix-millisecond timestamp. <code>get_latest_checkpoint_folder()</code> picks the largest.</li>
+    <li>The tag records the run mode. Resuming a PEFT run from a non-PEFT checkpoint, or the reverse, fails fast with a clear message (<code>_check_checkpoint_peft_compat()</code>).</li>
+    <li>FSDP saves optimizer state too, and <code>resume: true</code> restores it. Solo and DDP currently save weights only.</li>
+  </ul>
+</section>
+
+<!-- 17 ------------------------------------------------------------------ -->
+<section id="ui">
+  <h2><span class="n">17</span>Web UI and job queue</h2>
+  <p class="where">ui/app.py · ui/queue.py · ui/config_adapter.py</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 900 210" role="img" aria-label="Browser to FastAPI server; config adapter writes YAML; queue in SQLite allocates GPUs and starts torchrun with CUDA_VISIBLE_DEVICES and a free port">
+        <rect class="box" x="16" y="70" width="150" height="64" rx="6"/><text class="th" x="30" y="96">browser</text><text class="tm" x="30" y="116">:8787</text>
+        <rect class="bacc" x="216" y="70" width="190" height="64" rx="6"/><text class="th" x="230" y="96">FastAPI · app.py</text><text class="tm" x="230" y="116">Host-header check</text>
+        <rect class="box" x="456" y="14" width="200" height="60" rx="6"/><text class="th" x="470" y="38">config_adapter</text><text class="tm" x="470" y="58">UI schema → config.yaml</text>
+        <rect class="bam" x="456" y="130" width="200" height="66" rx="6"/><text class="th" x="470" y="154">queue.py · SQLite</text><text class="tm" x="470" y="174">priority + GPU slots</text>
+        <rect class="bgr" x="706" y="70" width="180" height="64" rx="6"/><text class="th" x="720" y="96">torchrun train.py</text><text class="tm" x="720" y="116">free port per job</text>
+        <path class="ar" d="M166,102 H214"/><path class="ar" d="M406,92 H430 V44 H454"/><path class="ar" d="M406,112 H430 V163 H454"/>
+        <path class="ar" d="M656,44 H680 V92 H704"/><path class="ar" d="M656,163 H680 V112 H704"/>
+        <text class="tm" x="706" y="160">CUDA_VISIBLE_DEVICES=</text><text class="tm" x="706" y="176">the job's GPUs</text>
+      </svg>
+    </div>
+  </figure>
+  <ul>
+    <li>The UI has its own config schema. <code>config_adapter</code> converts it into the format <code>build_args</code> expects before any launch.</li>
+    <li>Queued jobs wait in SQLite (<code>ui/queue.db</code>) until enough GPUs are free. Each job gets its own config file, its own GPUs through <code>CUDA_VISIBLE_DEVICES</code>, and its own master port. ddp/fsdp jobs always go through torchrun, even on one GPU.</li>
+    <li>The server only answers requests addressed to <code>localhost</code>, an IP address or this machine's hostname, plus names in <code>OMNI_UI_ALLOWED_HOSTS</code>. This blocks DNS-rebinding pages from reading <code>/api/env</code> secrets or starting jobs.</li>
+  </ul>
+</section>
+
+<!-- 18 ------------------------------------------------------------------ -->
+<section id="distkit">
+  <h2><span class="n">18</span>dist_kit: the portable core</h2>
+  <p class="where">dist_kit/</p>
+  <p><code>dist_kit</code> is the distributed core of OMNI-Train in one folder, without the UI or the vision, detection and VLM pipelines. Copy it into another project to get solo, DDP and FSDP2 training with LoRA/QLoRA and checkpointing. It reads the same config schema, and carries the same precision, buffer and seed fixes as the main code.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>dist_kit file</th><th>Comes from</th><th>Holds</th></tr></thead>
+      <tbody>
+        <tr><td><code>config.py</code></td><td><code>utils.build_args</code></td><td><code>DistConfig</code> dataclass + validation</td></tr>
+        <tr><td><code>dist_setup.py</code></td><td><code>distributed_utils</code></td><td>process group, barriers, rank-aware printing</td></tr>
+        <tr><td><code>strategies.py</code></td><td><code>distributed_utils</code></td><td><code>apply_solo/ddp/fsdp</code>, meta init, buffers, PEFT</td></tr>
+        <tr><td><code>checkpoint.py</code></td><td><code>checkpoint.py</code></td><td><code>Checkpointer</code> (DCP and DTensor)</td></tr>
+        <tr><td><code>data.py</code></td><td><code>data.py</code></td><td>text-only dataloader with label masking</td></tr>
+        <tr><td><code>train.py</code></td><td><code>train.py</code></td><td>minimal reference loop with autocast and LR schedule</td></tr>
+      </tbody>
+    </table>
+  </div>
+<pre><code>bash dist_kit/launch.sh              <span class="c"># reads strategy + num_gpus, picks python or torchrun</span>
+python -m dist_kit                   <span class="c"># solo</span>
+torchrun --nproc_per_node=2 -m dist_kit.train
+<span class="c"># config lookup order: $DIST_CONFIG → ./config.yaml → dist_kit/config.yaml</span></code></pre>
+</section>
+
+<!-- 19 ------------------------------------------------------------------ -->
+<section id="glossary">
+  <h2><span class="n">19</span>Glossary</h2>
+  <div class="tablewrap">
+    <table>
+      <tbody>
+        <tr><td><b>all-reduce</b></td><td>every rank contributes a tensor; every rank receives the sum (DDP gradients)</td></tr>
+        <tr><td><b>all-gather</b></td><td>every rank contributes a slice; every rank receives the whole (FSDP before compute)</td></tr>
+        <tr><td><b>reduce-scatter</b></td><td>sum across ranks, each rank keeps one slice (FSDP gradients)</td></tr>
+        <tr><td><b>DTensor</b></td><td>a tensor that knows how it is split across a device mesh, e.g. <code>Shard(0)</code></td></tr>
+        <tr><td><b>meta device</b></td><td>tensors with shape and dtype but no storage</td></tr>
+        <tr><td><b>non-persistent buffer</b></td><td>module state not saved in <code>state_dict()</code>, e.g. RoPE <code>inv_freq</code></td></tr>
+        <tr><td><b>autocast</b></td><td>runs selected ops (matmuls) in bf16/fp16 while weights stay fp32</td></tr>
+        <tr><td><b>GradScaler</b></td><td>multiplies the loss before backward so fp16 gradients don't underflow</td></tr>
+        <tr><td><b>LoRA rank r</b></td><td>inner size of the adapter matrices; trainable params grow linearly with r</td></tr>
+        <tr><td><b>NF4</b></td><td>4-bit format with levels placed for normally distributed weights</td></tr>
+        <tr><td><b>-100</b></td><td>the label value cross-entropy ignores (padding, prompts, image tokens)</td></tr>
+        <tr><td><b>barrier</b></td><td>every rank waits here until all ranks arrive</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>Written against the omni-train repository after commit 74e79c1 (October 2026). File and function names match the code; the charts are computed from the formulas the code uses.</footer>
+</main>
+</div>
+
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  // Generic line chart: one linear x scale, one linear y scale, labels only at values drawn.
+  function lineChart(svg, o) {
+    var W = 860, H = o.height, L = 74, R = 24, T = 40, B = 46;
+    var pw = W - L - R, ph = H - T - B;
+    var sx = function (x) { return L + (x - o.xMin) / (o.xMax - o.xMin) * pw; };
+    var sy = function (y) { return T + (o.yMax - y) / (o.yMax - o.yMin) * ph; };
+    o.yTicks.forEach(function (t) {
+      el("path", { d: "M" + L + "," + sy(t.v) + " H" + (W - R), "class": "grid" }, svg);
+      el("text", { x: L - 8, y: sy(t.v) + 4, "text-anchor": "end", "class": "tm" }, svg, t.label);
+    });
+    o.xTicks.forEach(function (t) {
+      el("text", { x: sx(t), y: H - B + 18, "text-anchor": "middle", "class": "tm" }, svg, String(t));
+    });
+    el("text", { x: L + pw / 2, y: H - 8, "text-anchor": "middle", "class": "tm" }, svg, o.xLabel);
+    el("text", { x: 14, y: T + ph / 2, "text-anchor": "middle", "class": "tm",
+                 transform: "rotate(-90 14 " + (T + ph / 2) + ")" }, svg, o.yLabel);
+    var lx = L + 4;
+    o.series.forEach(function (s) {
+      var d = s.pts.map(function (p, i) { return (i ? "L" : "M") + sx(p[0]).toFixed(1) + "," + sy(p[1]).toFixed(1); }).join(" ");
+      var path = el("path", { d: d, fill: "none", "stroke-width": s.width || 2.2 }, svg);
+      path.style.stroke = "var(" + s.color + ")";
+      if (s.dash) path.setAttribute("stroke-dasharray", s.dash);
+      var sw = el("path", { d: "M" + lx + ",22 h22", "stroke-width": 2.4 }, svg);
+      sw.style.stroke = "var(" + s.color + ")";
+      if (s.dash) sw.setAttribute("stroke-dasharray", s.dash);
+      el("text", { x: lx + 28, y: 26 }, svg, s.name);
+      lx += 34 + s.name.length * 7.3 + 18;
+    });
+  }
+
+  // RoPE inv_freq, head_dim 128: theta^(-2i/d), plus Llama 3 frequency scaling.
+  var d = 128, half = d / 2;
+  function invFreq(theta) { var a = []; for (var i = 0; i < half; i++) a.push(Math.pow(theta, -2 * i / d)); return a; }
+  function llama3(inv) {
+    var factor = 8, lo = 1, hi = 4, origMax = 8192;
+    var loWave = origMax / lo, hiWave = origMax / hi;
+    return inv.map(function (f) {
+      var wave = 2 * Math.PI / f;
+      if (wave < hiWave) return f;
+      if (wave > loWave) return f / factor;
+      var s = (origMax / wave - lo) / (hi - lo);
+      return (1 - s) * f / factor + s * f;
+    });
+  }
+  function toPts(arr) { return arr.map(function (v, i) { return [i, Math.log10(v)]; }); }
+  var t10k = invFreq(1e4), t500k = invFreq(5e5);
+  lineChart(document.getElementById("ropeChart"), {
+    height: 330, xMin: 0, xMax: 63, yMin: -7, yMax: 0,
+    xTicks: [0, 16, 32, 48, 63], xLabel: "dimension pair i (of 64)",
+    yLabel: "inv_freq (log scale)",
+    yTicks: [{ v: 0, label: "1" }, { v: -2, label: "1e-2" }, { v: -4, label: "1e-4" }, { v: -6, label: "1e-6" }, { v: -7, label: "1e-7" }],
+    series: [
+      { name: "θ=10,000 (old recompute)", pts: toPts(t10k), color: "--muted", dash: "6 5" },
+      { name: "θ=500,000", pts: toPts(t500k), color: "--acc" },
+      { name: "θ=500,000 + llama3 scaling (Llama 3)", pts: toPts(llama3(t500k)), color: "--amber" }
+    ]
+  });
+
+  // LR multiplier: warmup 10, total 156 — same formula as train.py _lr_lambda.
+  var total = 156, warm = 10;
+  function lr(step, kind) {
+    if (step < warm) return (step + 1) / warm;
+    if (kind === "constant") return 1;
+    var p = Math.min(1, (step - warm) / Math.max(1, total - warm));
+    return kind === "linear" ? 1 - p : 0.5 * (1 + Math.cos(Math.PI * p));
+  }
+  function series(kind) { var a = []; for (var s = 0; s < total; s++) a.push([s, lr(s, kind)]); return a; }
+  lineChart(document.getElementById("lrChart"), {
+    height: 300, xMin: 0, xMax: 155, yMin: 0, yMax: 1.05,
+    xTicks: [0, 10, 40, 80, 120, 155], xLabel: "optimizer step",
+    yLabel: "LR multiplier",
+    yTicks: [{ v: 0, label: "0" }, { v: 0.25, label: "0.25" }, { v: 0.5, label: "0.5" }, { v: 0.75, label: "0.75" }, { v: 1, label: "1.0" }],
+    series: [
+      { name: "constant", pts: series("constant"), color: "--muted", dash: "6 5" },
+      { name: "linear", pts: series("linear"), color: "--amber" },
+      { name: "cosine (default)", pts: series("cosine"), color: "--acc" }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
