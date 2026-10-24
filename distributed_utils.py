@@ -1227,7 +1227,7 @@ def _apply_fsdp_meta_init(local_rank, rank, device, args):
     # Parameters go on meta (no memory); buffers are still computed for real on CPU so
     # non-persistent ones (RoPE inv_freq, position_ids, …) keep the exact values the
     # HF constructor produced — see _snapshot_buffers / _restore_buffers below.
-    from accelerate import init_empty_weights
+    from accelerate import init_empty_weights  # type: ignore[import-untyped]
     with init_empty_weights(include_buffers=False):
         model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
             config,

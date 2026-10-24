@@ -62,7 +62,7 @@ nav.toc {
   font-size: 13.5px; padding-right: 8px;
 }
 .toc .brand { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .01em; margin-bottom: 14px; }
-.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s -1; }
 .toc li { counter-increment: s; }
 .toc a {
   display: grid; grid-template-columns: 26px 1fr; color: var(--muted);
@@ -70,6 +70,13 @@ nav.toc {
 }
 .toc a::before { content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 11.5px; padding-top: 2px; }
 .toc a:hover, .toc a:focus-visible { color: var(--fg); background: var(--acc-soft); outline: none; }
+/* The part currently on screen (set by the scroll tracker at the bottom of the page) */
+.toc a[aria-current="location"] {
+  color: var(--acc); font-weight: 600; background: var(--acc-soft);
+  box-shadow: inset 3px 0 0 var(--acc); border-radius: 0 4px 4px 0;
+}
+.toc a[aria-current="location"]::before { color: var(--acc); font-weight: 500; }
+@media (prefers-reduced-motion: no-preference) { .toc a { transition: background-color .15s, color .15s; } }
 
 main { min-width: 0; }
 header.hero { padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
@@ -162,6 +169,8 @@ td code { white-space: nowrap; }
 .d .tg { fill: var(--green); }
 .d .tam { fill: var(--amber); }
 .d .th { font-family: var(--display); font-weight: 600; font-size: 14px; }
+.d .halo { paint-order: stroke; stroke: var(--panel); stroke-width: 5px; stroke-linejoin: round; }
+.d .lblbg { fill: var(--panel); }
 .d .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
 .d .bacc { fill: var(--acc-soft); stroke: var(--acc); stroke-width: 1.3; }
 .d .bam { fill: var(--amber-soft); stroke: var(--amber); stroke-width: 1.2; }
@@ -222,6 +231,7 @@ body { margin: 0; }
 <nav class="toc" aria-label="Steps">
   <div class="brand">OMNI-Train</div>
   <ol>
+    <li><a href="#why">Why distributed?</a></li>
     <li><a href="#overview">The whole run</a></li>
     <li><a href="#launch">launch.sh &amp; torchrun</a></li>
     <li><a href="#config">Config &amp; utils</a></li>
@@ -248,7 +258,7 @@ body { margin: 0; }
 <header class="hero">
   <div class="eyebrow">Field guide · follows one training run from start to finish</div>
   <h1>OMNI-Train, step by step</h1>
-  <p class="lede">OMNI-Train fine-tunes Hugging Face models (LLMs, vision, detection, VLMs, encoders) on one GPU or many. This guide follows a single run from <code>bash scripts/launch.sh</code> to the saved checkpoint. Each step shows the file it lives in and the PyTorch idea behind it.</p>
+  <p class="lede">OMNI-Train fine-tunes Hugging Face models (LLMs, vision, detection, VLMs, encoders) on one GPU or many. Part 00 explains why training needs so much GPU memory, and why that forces it across several GPUs. The rest follows a single run from <code>bash scripts/launch.sh</code> to the saved checkpoint. Each step shows the file it lives in and the PyTorch idea behind it.</p>
   <div class="legend-row" aria-label="Diagram colour key">
     <span><i class="sw" style="background:var(--acc-soft);border-color:var(--acc)"></i>model / weights</span>
     <span><i class="sw" style="background:var(--amber-soft);border-color:var(--amber)"></i>memory / shards</span>
@@ -256,6 +266,108 @@ body { margin: 0; }
     <span><i class="sw" style="background:var(--rose-soft);border-color:var(--rose)"></i>masked / ignored</span>
   </div>
 </header>
+
+<!-- 00 ------------------------------------------------------------------ -->
+<section id="why">
+  <h2><span class="n">00</span>Why distributed training?</h2>
+  <p class="where">utils.estimate_training_vram() · distributed_utils.print_training_vram_estimate()</p>
+  <p>Running a model only needs its weights in memory. Training needs much more: for every weight it updates, the GPU also keeps a gradient and the optimizer's running statistics, plus the intermediate results of the forward pass. For most models worth fine-tuning, that total is larger than one GPU. Splitting the work across GPUs is how you make it fit, and how you make it finish in reasonable time.</p>
+
+  <h3>Where training memory goes</h3>
+  <div class="grid2">
+    <div class="card"><h4>Parameters</h4><p>The weights themselves. 4 bytes each in fp32, 2 in bf16, 1 in int8, about 0.5 in NF4. OMNI-Train keeps trainable weights in fp32.</p></div>
+    <div class="card"><h4>Gradients</h4><p>One per trainable weight, same size as the weight, written by <code>backward()</code>. Frozen weights (the LoRA base) have none.</p></div>
+    <div class="card"><h4>Optimizer states</h4><p>AdamW keeps two fp32 running averages per trainable weight: the mean of the gradient (<code>exp_avg</code>) and of its square (<code>exp_avg_sq</code>). That is 8 bytes, twice the weight itself.</p></div>
+    <div class="card"><h4>Activations</h4><p>Every layer's outputs from the forward pass, kept until <code>backward()</code> uses them. They grow with batch size × sequence length × hidden size × layers, not with parameter count.</p></div>
+  </div>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 860 200" role="img" aria-label="One trainable parameter costs 16 bytes: 4 weight, 4 gradient, 4 Adam exp_avg, 4 Adam exp_avg_sq">
+        <!-- scale: 40 px per byte from x=110 -->
+        <text class="th" x="20" y="28">One trainable parameter, full fine-tuning with AdamW</text>
+        <rect class="bacc" x="110" y="50" width="160" height="46"/><text x="124" y="70">weight</text><text class="tm" x="124" y="87">fp32 · 4 B</text>
+        <rect class="bam" x="270" y="50" width="160" height="46"/><text x="284" y="70">gradient</text><text class="tm" x="284" y="87">fp32 · 4 B</text>
+        <rect class="box" x="430" y="50" width="160" height="46"/><text x="444" y="70">Adam exp_avg</text><text class="tm" x="444" y="87">fp32 · 4 B</text>
+        <rect class="box" x="590" y="50" width="160" height="46"/><text x="604" y="70">Adam exp_avg_sq</text><text class="tm" x="604" y="87">fp32 · 4 B</text>
+        <path class="ln" d="M110,108 V116 H750 V108"/>
+        <text x="430" y="136" text-anchor="middle">16 bytes per parameter = 16 GB per billion parameters, before activations</text>
+        <text class="tm" x="20" y="170">A frozen parameter (the base model under LoRA) costs only its weight:</text>
+        <rect class="bacc" x="110" y="180" width="80" height="12"/><text class="tm" x="196" y="191">bf16 · 2 B</text>
+        <rect class="bgr" x="300" y="180" width="20" height="12"/><text class="tm" x="326" y="191">NF4 · ≈0.5 B</text>
+      </svg>
+    </div>
+    <figcaption>Drawn to scale, 40 px per byte. This 16-byte rule is the same one <code>estimate_training_vram()</code> uses for the VRAM banner printed at the start of every run.</figcaption>
+  </figure>
+
+  <h3>How fast that outgrows a GPU</h3>
+  <figure>
+    <div class="fig">
+      <svg class="d" id="sizeChart" viewBox="0 0 860 360" role="img" aria-label="Training memory against model size on a log scale for full fine-tuning, LoRA and QLoRA, with 6, 24 and 80 GB GPU lines"></svg>
+    </div>
+    <figcaption>Model states only (weights, gradients, optimizer), activations excluded. Full fine-tuning costs 16 B per parameter. LoRA keeps a frozen bf16 base (2 B per parameter) plus tiny adapters, and QLoRA a 4-bit base (about 0.55 B). The dashed lines are the 6 GB laptop RTX 4050 this repo is tested on, a 24 GB RTX 4090, and an 80 GB A100/H100. Full fine-tuning of a 7B model needs 112 GB, more than any single card.</figcaption>
+  </figure>
+
+  <h3>Activations: the part that grows with your data</h3>
+  <p>Parameter memory is fixed by the model. Activation memory depends on what you feed it, and grows linearly with sequence length and batch size. <b>Gradient checkpointing</b> (<code>training.gradient_checkpointing: true</code>) stores only some layer outputs and recomputes the rest during backward. OMNI-Train's estimator counts that as roughly half the memory, for about 33% more compute.</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" id="actChart" viewBox="0 0 860 320" role="img" aria-label="Activation memory for a 7B model, batch 1, rising linearly with sequence length, halved by gradient checkpointing"></svg>
+    </div>
+    <figcaption>A 7B Llama-style model (32 layers, hidden size 4096), batch size 1, bf16 activations, using the repo's estimate of 10 × batch × sequence × hidden × layers values. At a batch of 8 the numbers are 8× larger.</figcaption>
+  </figure>
+
+  <h3>One model, four ways to train it</h3>
+  <p>Full fine-tuning of a 7B model, sequence length 2048, batch 1, gradient checkpointing on:</p>
+  <figure>
+    <div class="fig">
+      <svg class="d" viewBox="0 0 860 300" role="img" aria-label="7B model memory: about 115 GB full fine-tune on one GPU, 31 GB per GPU with FSDP on four GPUs, 17 GB with LoRA, 7 GB with QLoRA">
+        <!-- scale: 4 px per GB from x=230 -->
+        <path class="ln dash" d="M254,40 V262 M326,40 V262 M550,40 V262"/>
+        <text class="tm" x="254" y="32" text-anchor="middle">6 GB</text>
+        <text class="tm" x="326" y="32" text-anchor="middle">24 GB</text>
+        <text class="tm" x="550" y="32" text-anchor="middle">80 GB</text>
+        <text x="220" y="70" text-anchor="end">Full fine-tune, 1 GPU</text>
+        <rect class="bacc" x="230" y="52" width="112" height="28"/><rect class="bam" x="342" y="52" width="112" height="28"/><rect class="box" x="454" y="52" width="224" height="28"/><rect class="bro" x="678" y="52" width="11" height="28"/>
+        <text class="halo" x="696" y="71">≈115 GB · no GPU fits</text>
+        <text x="220" y="120" text-anchor="end">Full fine-tune, FSDP ×4</text>
+        <text class="tm" x="220" y="135" text-anchor="end">per GPU</text>
+        <rect class="bacc" x="230" y="102" width="28" height="28"/><rect class="bam" x="258" y="102" width="28" height="28"/><rect class="box" x="286" y="102" width="56" height="28"/><rect class="bro" x="342" y="102" width="11" height="28"/>
+        <text class="halo" x="360" y="121">≈31 GB · fits 4× 80 GB</text>
+        <text x="220" y="170" text-anchor="end">LoRA r=16, 1 GPU</text>
+        <rect class="bacc" x="230" y="152" width="56" height="28"/><rect class="bgr" x="286" y="152" width="2" height="28"/><rect class="bro" x="288" y="152" width="11" height="28"/>
+        <rect class="lblbg" x="302" y="157" width="196" height="19"/><text class="halo" x="306" y="171">≈17 GB · fits a 24 GB card</text>
+        <text x="220" y="220" text-anchor="end">QLoRA (NF4), 1 GPU</text>
+        <rect class="bacc" x="230" y="202" width="16" height="28"/><rect class="bgr" x="246" y="202" width="2" height="28"/><rect class="bro" x="248" y="202" width="11" height="28"/>
+        <rect class="lblbg" x="262" y="207" width="188" height="19"/><text class="halo" x="266" y="221">≈7 GB · fits an 8 GB card</text>
+        <rect class="bacc" x="20" y="278" width="12" height="12"/><text x="38" y="289">weights</text>
+        <rect class="bam" x="112" y="278" width="12" height="12"/><text x="130" y="289">gradients</text>
+        <rect class="box" x="222" y="278" width="12" height="12"/><text x="240" y="289">Adam states</text>
+        <rect class="bgr" x="346" y="278" width="12" height="12"/><text x="364" y="289">LoRA adapters + their grads/Adam (≈0.3 GB)</text>
+        <rect class="bro" x="680" y="278" width="12" height="12"/><text x="698" y="289">activations</text>
+      </svg>
+    </div>
+    <figcaption>Drawn to scale, 4 px per GB. Full fine-tune: 28 GB weights + 28 GB gradients + 56 GB Adam + ≈2.7 GB activations. FSDP over four GPUs divides the first three by four. LoRA (r=16 on the attention projections, about 17M trainable parameters) keeps the base frozen in bf16, so it has no gradients or Adam state. QLoRA stores that base in about 3.9 GB of NF4. DDP isn't shown: it copies the whole 115 GB to every GPU, so it doesn't help with memory.</figcaption>
+  </figure>
+
+  <h3>The second reason: time</h3>
+  <p>Training costs about <b>6 × parameters × tokens</b> floating-point operations: forward, backward through the activations, and backward to the weights. Fine-tuning a 7B model on 1 billion tokens is 6 × 7·10⁹ × 10⁹ ≈ 4.2·10¹⁹ FLOPs. One A100 peaks at 312 TFLOPS in bf16, and real training reaches maybe 40% of that, so the run takes <b>about 93 hours</b>. Spread over 8 GPUs it is <b>about 12 hours</b>. Even a model that fits on one GPU is often trained on several for this reason.</p>
+
+  <h3>What each part of OMNI-Train fixes</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Problem</th><th>Fix</th><th>See</th></tr></thead>
+      <tbody>
+        <tr><td>Weights + gradients + Adam don't fit on one GPU</td><td><b>FSDP</b> shards all three across N GPUs, so each holds 1/N</td><td><a href="#strategies">05</a>, <a href="#fsdp">07</a></td></tr>
+        <tr><td>Even the model alone doesn't fit when it is first built</td><td><b>Meta-device init</b>: each rank only ever allocates its own slice</td><td><a href="#meta">08</a></td></tr>
+        <tr><td>Only a small change to the model is needed</td><td><b>LoRA</b>: about 1% trainable, no gradients or Adam for the base</td><td><a href="#peft">12</a></td></tr>
+        <tr><td>Even the frozen base is too big</td><td><b>4-bit / 8-bit quantization</b> of the base (QLoRA)</td><td><a href="#quant">13</a></td></tr>
+        <tr><td>Activations blow up at long sequences or big batches</td><td><b>Gradient checkpointing</b>, smaller batch or <code>max_length</code></td><td><a href="#loop">15</a></td></tr>
+        <tr><td>It fits but takes days</td><td><b>DDP</b> (or FSDP) over more GPUs</td><td><a href="#ddp">06</a></td></tr>
+        <tr><td>bf16 weights lose small updates</td><td><b>fp32 weights + bf16 compute</b> (autocast / MixedPrecisionPolicy)</td><td><a href="#precision">11</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
 
 <!-- 01 ------------------------------------------------------------------ -->
 <section id="overview">
@@ -921,7 +1033,7 @@ torchrun --nproc_per_node=2 -m dist_kit.train
 
   // Generic line chart: one linear x scale, one linear y scale, labels only at values drawn.
   function lineChart(svg, o) {
-    var W = 860, H = o.height, L = 74, R = 24, T = 40, B = 46;
+    var W = 860, H = o.height, L = 74, R = o.right || 24, T = 40, B = 46;
     var pw = W - L - R, ph = H - T - B;
     var sx = function (x) { return L + (x - o.xMin) / (o.xMax - o.xMin) * pw; };
     var sy = function (y) { return T + (o.yMax - y) / (o.yMax - o.yMin) * ph; };
@@ -930,7 +1042,12 @@ torchrun --nproc_per_node=2 -m dist_kit.train
       el("text", { x: L - 8, y: sy(t.v) + 4, "text-anchor": "end", "class": "tm" }, svg, t.label);
     });
     o.xTicks.forEach(function (t) {
-      el("text", { x: sx(t), y: H - B + 18, "text-anchor": "middle", "class": "tm" }, svg, String(t));
+      var v = typeof t === "object" ? t.v : t, label = typeof t === "object" ? t.label : String(t);
+      el("text", { x: sx(v), y: H - B + 18, "text-anchor": "middle", "class": "tm" }, svg, label);
+    });
+    (o.refs || []).forEach(function (r) {
+      el("path", { d: "M" + L + "," + sy(r.v) + " H" + (W - R + 6), "class": "ln dash" }, svg);
+      el("text", { x: W - R + 12, y: sy(r.v) + 4, "class": "tm" }, svg, r.label);
     });
     el("text", { x: L + pw / 2, y: H - 8, "text-anchor": "middle", "class": "tm" }, svg, o.xLabel);
     el("text", { x: 14, y: T + ph / 2, "text-anchor": "middle", "class": "tm",
@@ -948,6 +1065,36 @@ torchrun --nproc_per_node=2 -m dist_kit.train
       lx += 34 + s.name.length * 7.3 + 18;
     });
   }
+
+
+  // Part 00: model-state memory vs model size (log scale), 16 / 2 / 0.55 bytes per parameter.
+  var sizes = [0.125, 1, 3, 7, 13, 70], sizeLabels = ["125M", "1B", "3B", "7B", "13B", "70B"];
+  function gbPts(bytesPerParam) { return sizes.map(function (b, i) { return [i, Math.log10(b * bytesPerParam)]; }); }
+  lineChart(document.getElementById("sizeChart"), {
+    height: 360, right: 150, xMin: 0, xMax: 5, yMin: Math.log10(0.05), yMax: Math.log10(2000),
+    xTicks: sizeLabels.map(function (l, i) { return { v: i, label: l }; }), xLabel: "model size (parameters)",
+    yLabel: "GB (log scale)",
+    yTicks: [{ v: -1, label: "0.1" }, { v: 0, label: "1" }, { v: 1, label: "10" }, { v: 2, label: "100" }, { v: 3, label: "1000" }],
+    refs: [{ v: Math.log10(6), label: "6 GB RTX 4050" }, { v: Math.log10(24), label: "24 GB RTX 4090" }, { v: Math.log10(80), label: "80 GB A100/H100" }],
+    series: [
+      { name: "full fine-tune · 16 B/param", pts: gbPts(16), color: "--rose" },
+      { name: "LoRA · ≈2 B/param", pts: gbPts(2), color: "--acc" },
+      { name: "QLoRA · ≈0.55 B/param", pts: gbPts(0.55), color: "--green" }
+    ]
+  });
+
+  // Part 00: activation memory, 7B (32 layers, hidden 4096), batch 1, bf16: 10*seq*hidden*layers*2 bytes.
+  function actPts(scale) { var a = []; for (var q = 0; q <= 8192; q += 512) a.push([q, 10 * q * 4096 * 32 * 2 / 1e9 * scale]); return a; }
+  lineChart(document.getElementById("actChart"), {
+    height: 320, xMin: 0, xMax: 8192, yMin: 0, yMax: 23,
+    xTicks: [0, 2048, 4096, 6144, 8192], xLabel: "sequence length (tokens)",
+    yLabel: "activation GB",
+    yTicks: [{ v: 0, label: "0" }, { v: 5, label: "5" }, { v: 10, label: "10" }, { v: 15, label: "15" }, { v: 20, label: "20" }],
+    series: [
+      { name: "no checkpointing", pts: actPts(1), color: "--rose" },
+      { name: "gradient checkpointing", pts: actPts(0.5), color: "--acc" }
+    ]
+  });
 
   // RoPE inv_freq, head_dim 128: theta^(-2i/d), plus Llama 3 frequency scaling.
   var d = 128, half = d / 2;
@@ -997,6 +1144,78 @@ torchrun --nproc_per_node=2 -m dist_kit.train
       { name: "cosine (default)", pts: series("cosine"), color: "--acc" }
     ]
   });
+
+  // Highlight the menu entry for the part currently on screen.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a[href^="#"]'));
+    var nav = document.querySelector("nav.toc");
+    var byId = {}, sections = [];
+    links.forEach(function (a) {
+      var sec = document.getElementById(a.getAttribute("href").slice(1));
+      if (sec) { byId[sec.id] = a; sections.push(sec); }
+    });
+    if (!sections.length) return;
+
+    var current = null, pinned = null, pinTimer = null, ticking = false;
+
+    function setActive(id) {
+      if (id === current) return;
+      if (current && byId[current]) byId[current].removeAttribute("aria-current");
+      current = id;
+      var link = byId[id];
+      if (!link) return;
+      link.setAttribute("aria-current", "location");
+      // Keep the entry in view when the sticky menu itself scrolls (short screens).
+      if (nav && nav.scrollHeight > nav.clientHeight + 1 && getComputedStyle(nav).position === "sticky") {
+        var top = link.getBoundingClientRect().top - nav.getBoundingClientRect().top + nav.scrollTop;
+        var bottom = top + link.offsetHeight;
+        if (top < nav.scrollTop + 8) nav.scrollTop = Math.max(0, top - 8);
+        else if (bottom > nav.scrollTop + nav.clientHeight - 8) nav.scrollTop = bottom - nav.clientHeight + 8;
+      }
+    }
+
+    function sectionOnScreen() {
+      var line = Math.min(160, window.innerHeight * 0.3);
+      var id = sections[0].id;
+      for (var i = 0; i < sections.length; i++) {
+        if (sections[i].getBoundingClientRect().top <= line) id = sections[i].id; else break;
+      }
+      // At the very bottom, the last parts can't reach the line, so the last one wins.
+      var doc = document.documentElement;
+      if (window.innerHeight + window.scrollY >= doc.scrollHeight - 2) id = sections[sections.length - 1].id;
+      return id;
+    }
+
+    function update() {
+      ticking = false;
+      setActive(pinned || sectionOnScreen());
+    }
+
+    window.addEventListener("scroll", function () {
+      // A clicked entry stays selected until the scroll it started has finished.
+      if (pinned) {
+        clearTimeout(pinTimer);
+        pinTimer = setTimeout(function () { pinned = null; }, 250);
+      }
+      if (!ticking) { ticking = true; requestAnimationFrame(update); }
+    }, { passive: true });
+    window.addEventListener("resize", function () { setActive(sectionOnScreen()); });
+
+    links.forEach(function (a) {
+      a.addEventListener("click", function () {
+        var id = a.getAttribute("href").slice(1);
+        if (!byId[id]) return;
+        pinned = id;
+        clearTimeout(pinTimer);
+        // If the page doesn't need to scroll at all, release the pin shortly anyway.
+        pinTimer = setTimeout(function () { pinned = null; }, 1200);
+        setActive(id);
+      });
+    });
+
+    var start = location.hash.slice(1);
+    setActive(byId[start] ? start : sectionOnScreen());
+  })();
 })();
 </script>
 </body>
