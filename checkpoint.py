@@ -54,9 +54,6 @@ class Checkpointer:
             f"{folder}/fsdp/{'dcp_api' if dcp_api else 'dtensor_api'}"
         )
 
-    def is_empty(self):
-        return self.last_training_time is None
-
     def load_model(self, model: FSDPModule):
         last_model_checkpoint = (
             f"{self.folder}/fsdp/{'dcp_api' if self.dcp_api else 'dtensor_api'}"

@@ -39,13 +39,11 @@ ui/_torchelastic_error.json
 nul
 .DS_Store
 
-# Work-in-progress modules (not part of the public release yet)
-hybrid/
-parallelism.py
-parallelism_test.py
-
 # Local scratch / private docs (never publish)
 docs/Directions OMNI-Train.txt
 docs/Steps to clone and run omni-train.txt
 docs/presentation.pptx
 docs/presentation*.html
+
+# Type-checker caches
+.mypy_cache/

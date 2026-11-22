@@ -107,10 +107,9 @@ Context / Seq →  shards the sequence itself           (the seq-dependent activ
 - **FlashAttention** — available via HuggingFace `attn_implementation`. These two alone get a
   moderate model to 16K on a single 80GB A100.
 - **FSDP** ✅ — handles the param / grad / optimizer axis.
-- The genuinely missing axis for "shard the sequence" is **context / sequence parallelism**.
-  `parallelism.py` is currently an experimental **3D** mesh (data × tensor × pipeline) —
-  context parallelism would be the **4th** dimension to add there, and it's the one
-  specifically built for this problem.
+- **Context parallelism** ✅ — the axis built for "shard the sequence". With `strategy: 5d`,
+  `parallelism.cp: N` splits every sequence over N GPUs with ring attention, and `sp: true`
+  also splits the norm activations over the TP ranks. See `configs/llm_5d_long_context_cp.yaml`.
 
 ---
 
@@ -130,6 +129,5 @@ different parallelism axis.
 
 ## See also
 
-- [`3d_parallelism_guide.md`](3d_parallelism_guide.md) — the data × tensor × pipeline mesh
-- [`3d_parallelism_research.md`](3d_parallelism_research.md) — background research
+- [`5D_PARALLELISM.md`](5D_PARALLELISM.md) — `strategy: 5d` (DP, TP+SP, CP, PP, EP)
 - [`TECHNICAL.md`](TECHNICAL.md) — architecture internals

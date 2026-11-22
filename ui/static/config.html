@@ -340,12 +340,11 @@
         </div>
         <div class="form-grid">
           <div class="form-group">
-            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel. hybrid: 2D/3D parallelism (DP × TP × PP) — not available yet.">?</span></label>
+            <label>Strategy <span class="required-star" aria-hidden="true">*</span> <span class="tooltip" data-tip="solo: single GPU. ddp: data parallel. fsdp: fully sharded data parallel.">?</span></label>
             <select id="f-strategy" onchange="onStrategyChange()">
               <option value="none">Solo (Single GPU)</option>
               <option value="ddp">DDP (Data Parallel)</option>
               <option value="fsdp">FSDP (Fully Sharded Data Parallel)</option>
-              <option value="hybrid" disabled>Hybrid (2D / 3D Parallelism) — coming soon</option>
             </select>
           </div>
           <div class="form-group">
@@ -370,37 +369,6 @@
             </select>
           </div>
           <div class="strategy-warning" id="strategy-gpu-warning"></div>
-        </div>
-
-        <!-- Multi-Dimensional Topology (shown only when strategy = hybrid) -->
-        <div id="topology-section" style="display:none;">
-          <div class="form-section-subtitle">Multi Dimensional Topology <span class="tooltip" data-tip="dp × tp × pp must equal GPU Count. Keep tp intra-node (NVLink). pp=1 disables pipeline stages.">?</span></div>
-          <div class="form-grid">
-            <div class="form-group">
-              <label>Parallelism Mode <span class="tooltip" data-tip="2d: DP × TP. 3d: DP × TP × PP.">?</span></label>
-              <select id="f-parallelism-mode" onchange="onParallelismModeChange()">
-                <option value="2d" selected>2D (DP × TP)</option>
-                <option value="3d">3D (DP × TP × PP)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Data Parallel Size <span class="tooltip" data-tip="Number of data-parallel replicas">?</span></label>
-              <input type="number" id="f-dp-size" value="2" min="1" onchange="onTopologyChange()">
-            </div>
-            <div class="form-group">
-              <label>Tensor Parallel Size <span class="tooltip" data-tip="Number of tensor-parallel shards per replica (keep intra-node)">?</span></label>
-              <input type="number" id="f-tp-size" value="2" min="1" onchange="onTopologyChange()">
-            </div>
-            <div class="form-group" id="fg-pp-size">
-              <label>Pipeline Parallel Size <span class="tooltip" data-tip="Number of pipeline stages. 1 = disabled. Use PP to split model layers across nodes over slow inter-node links.">?</span></label>
-              <input type="number" id="f-pp-size" value="1" min="1" onchange="onTopologyChange()">
-            </div>
-            <div class="form-group full" id="fg-topology-hint" style="display:none;">
-              <div class="fsdp-check-result" style="display:block; margin:0;">
-                <p class="fsdp-reason" id="topology-hint-text"></p>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- SLURM Options (shown only when launch_mode = slurm) -->

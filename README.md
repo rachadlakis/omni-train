@@ -12,7 +12,7 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 
 ## Highlights
 
-- **Three execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), and `fsdp` (Fully Sharded Data Parallel).
+- **Four execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), `fsdp` (Fully Sharded Data Parallel), and `5d`: any mix of data, tensor (+sequence), context, pipeline and expert parallelism, set in YAML.
 - **Parameter-efficient fine-tuning** — LoRA and QLoRA with 4-bit (NF4) / 8-bit quantization via `bitsandbytes`.
 - **Memory-efficient FSDP2** — parameter, gradient, and optimizer-state sharding with meta-device initialization to avoid CPU RAM spikes.
 - **Distributed checkpointing** — both DCP and DTensor APIs.
@@ -123,7 +123,7 @@ Open `config.yaml`, pick your model, dataset, number of GPUs, and training param
 bash scripts/launch.sh
 ```
 
-`launch.sh` reads `strategy` and `num_gpus` from the config and decides whether to run `python train.py` (solo) or `torchrun --nproc_per_node=N train.py` (ddp/fsdp).
+`launch.sh` reads `strategy` and `num_gpus` from the config and decides whether to run `python train.py` (solo) or `torchrun --nproc_per_node=N train.py` (ddp/fsdp/5d).
 
 **Other ways to launch:**
 
@@ -179,6 +179,10 @@ Ready-made configs live in [`configs/`](configs/) — use them as starting point
 | `embedding_bert_lora_triplet.yaml` | Embedding model with LoRA |
 | `detection_yolo_single_gpu.yaml` | YOLO object detection |
 | `vlm_llava_lora_single_gpu.yaml` | Vision-language model |
+| `llm_5d_tp_pp_dp_8gpu.yaml` | 5D: TP=2 (+SP) × PP=2 × DP=2 + ZeRO-1, Llama-family full fine-tune, 8 GPUs |
+| `llm_5d_long_context_cp.yaml` | 5D: 16K-token sequences with context parallelism (CP=4) × TP=2 |
+| `custom_5d_moe_16gpu.yaml` | 5D: all five dimensions (DP, TP+SP, CP, PP, EP) on 2 × 8 GPUs, MoE |
+| `custom_5d_cpu_demo.yaml` | 5D on a laptop: 4 CPU processes, TP=2 × PP=2 |
 
 See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 
@@ -191,6 +195,31 @@ See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 | `solo` | Single GPU | No torchrun, no process group |
 | `ddp` | Model fits in one GPU; scale throughput | Every GPU holds a full model replica; gradients synced via all-reduce |
 | `fsdp` | Large models, limited GPU memory | Parameters, gradients, and optimizer states sharded across GPUs |
+| `5d` | Very large models, long sequences, MoE, many nodes | Any mix of DP (+ZeRO-1), TP (+SP), CP, PP and EP from the `parallelism:` block |
+
+### 5D parallelism (`strategy: 5d`)
+
+Pick the size of each dimension in YAML; `dp × tp × cp × pp` must equal `num_gpus`:
+
+```yaml
+strategy: 5d
+num_gpus: 8
+parallelism:
+  tp: 2              # tensor parallel (split heads / MLP), keep within a node
+  sp: true           # sequence parallel on top of TP
+  cp: 1              # context parallel: ring attention over the sequence
+  pp: 2              # pipeline stages
+  pp_schedule: 1f1b
+  micro_batches: 8   # global batch = batch_size × micro_batches × dp
+  ep: 1              # expert parallel (MoE models)
+  zero1: true        # shard AdamW states over DP
+  dp: auto           # = num_gpus / (tp × cp × pp) = 2
+```
+
+Works with Hugging Face **Llama, Mistral and Qwen2** models (`model_type: llm`, full fine-tune,
+weights loaded shard by shard, exported back to HF format after training) and with
+`model_type: custom_transformer` (including Mixture-of-Experts). Every layout is tested to give the
+same losses and gradients as a single process. Details: [`docs/5D_PARALLELISM.md`](docs/5D_PARALLELISM.md).
 
 > **Constraint:** `bitsandbytes` quantization (4-bit / 8-bit) is **incompatible with FSDP**. Use `strategy: ddp` or `strategy: solo` when quantization is enabled.
 
@@ -294,6 +323,9 @@ python -m pytest tests/test_config_validation.py -v
 
 # GPU smoke tests (require a GPU, ~30–60s each)
 python -m pytest -m smoke
+
+# 5D layout equivalence on CPU (multi-process, no GPU, a few minutes)
+python -m pytest -m dist
 ```
 
 ---
@@ -306,14 +338,15 @@ omni-train/
 ├── config.yaml             # active configuration
 ├── distributed_utils.py    # solo / ddp / fsdp model setup
 ├── checkpoint.py           # distributed checkpointing
-├── parallelism.py          # experimental 3D parallelism
 ├── data.py                 # dataloaders per model type
 ├── utils.py                # config parsing + validation
 ├── model.py                # custom_transformer toy model
+├── parallelism/            # strategy: 5d — DP, TP+SP, CP, PP, EP, ZeRO-1
 ├── configs/                # ready-made example configs
 ├── scripts/                # launch + SLURM utilities
 ├── tests/                  # unit and smoke tests
 ├── ui/                     # FastAPI web UI
+├── dist_kit/               # standalone solo/DDP/FSDP kit to copy into other projects
 └── docs/                   # guides and technical reference
 ```
 
@@ -325,6 +358,7 @@ omni-train/
 | --- | --- |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | Beginner setup and usage |
 | [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | Distributed internals and architecture |
+| [`docs/5D_PARALLELISM.md`](docs/5D_PARALLELISM.md) | `strategy: 5d`: layouts, rules, how each dimension works |
 
 ---
 
@@ -342,10 +376,9 @@ omni-train/
 
 ## Roadmap
 
-- [ ] DeviceMesh parallelism
-- [ ] Tensor parallelism
-- [ ] Pipeline parallelism
-- [ ] Expert parallelism (MoE)
+- [ ] `strategy: 5d`: LoRA/QLoRA, more architectures (Qwen3, Gemma, MoE checkpoints such as Mixtral),
+      vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules
+- [ ] `strategy: 5d` in the web UI
 
 ---
 

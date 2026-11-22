@@ -1,0 +1,26 @@
+# All five dimensions on 2 nodes x 8 GPUs = 16: DP=2 x TP=2 (+SP) x CP=2 x PP=2, with the
+# MoE experts spread over EP=2 of the DP ranks, plus ZeRO-1. Custom Llama-style MoE model
+# on synthetic data (no downloads). Launch on each node, or use scripts/launch_slurm.py:
+#   torchrun --nnodes 2 --nproc_per_node 8 --rdzv_backend c10d --rdzv_endpoint $MASTER_ADDR:29500 train.py
+#   (with CONFIG_PATH=configs/custom_5d_moe_16gpu.yaml)
+model_type: custom_transformer
+dataset: {name: synthetic, subset: null, split: train}
+training: {epochs: 1, batch_size: 2, max_length: 512, learning_rate: 0.0003, gradient_checkpointing: false,
+  warmup_steps: 20, lr_scheduler: cosine, weight_decay: 0.0, grad_clip: 1.0}
+strategy: 5d
+num_gpus: 16
+checkpoint_dir: checkpoints/custom_5d_moe
+save: true
+parallelism: {dp: auto, tp: 2, sp: true, cp: 2, pp: 2, pp_schedule: 1f1b, micro_batches: 4,
+  ep: 2, zero1: true}
+custom_transformer_args: {n_layers: 8, vocab_size: 1024, max_seq_len: 512, dim: 256,
+  n_heads: 8, n_kv_heads: 4, dropout_p: 0.0, num_experts: 8, top_k: 2}
+dist_parameters: {mixed_precision: true, param_dtype: bfloat16, reduce_dtype: float32,
+  output_dtype: bfloat16, cast_forward_inputs: false, distribute_api: dcp_api}
+save_load: {resume: false, resume_path: '', load_model_from_hf: true}
+prefetch: {explicit: true, forward: 2, backward: 2}
+peft: {enabled: false, type: lora, r: 8, alpha: 16, dropout: 0.05, target_modules: all-linear,
+  bias: none}
+quantization: {enabled: false, bits: 8, quant_type: nf4, compute_dtype: bfloat16,
+  double_quant: true}
+wandb: {wandb_log_with_train: false, wandb_entity: '', wandb_project: omni-train}

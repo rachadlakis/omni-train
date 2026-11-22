@@ -820,7 +820,7 @@ async def api_estimate_training_time(payload: ConfigPayload):
 
 @app.post("/api/fsdp-check")
 async def fsdp_check(payload: ConfigPayload):
-    """Check if distributed training (FSDP / 3D parallelism) is needed based on estimated VRAM vs available GPU memory."""
+    """Check if distributed training (FSDP) is needed based on estimated VRAM vs available GPU memory."""
     config = payload.config
     model_cfg = config.get("model", {})
     training_cfg = config.get("training", {})
@@ -933,7 +933,7 @@ async def fsdp_check(payload: ConfigPayload):
         reason = (
             f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
             f"({gpu_memory_gb:.1f} GB on {gpu_name}), but sharding across {num_gpus} GPU(s) "
-            f"(FSDP or 3D parallelism) reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
+            f"with FSDP reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
         )
     else:
         fsdp_needed = True
@@ -943,7 +943,7 @@ async def fsdp_check(payload: ConfigPayload):
         reason = (
             f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
             f"({gpu_memory_gb:.1f} GB on {gpu_name}), and sharding across {num_gpus} GPU(s) "
-            f"(FSDP or 3D parallelism) still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
+            f"with FSDP still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
         )
 
     return {
@@ -1009,7 +1009,7 @@ async def start_training(payload: ConfigPayload):
         state.status = "running"
 
     strategy = str(mini_cfg.get("strategy", "solo")).lower()
-    strategy = strategy if strategy in {"solo", "ddp", "fsdp", "hybrid"} else "solo"
+    strategy = strategy if strategy in {"solo", "ddp", "fsdp"} else "solo"
     gpu_count = int(mini_cfg.get("num_gpus", 1) or 1)
     if strategy == "solo":
         gpu_count = 1
@@ -1038,7 +1038,7 @@ async def start_training(payload: ConfigPayload):
     elif strategy == "solo":
         cmd = [sys.executable, "-u", "train.py"]
     else:
-        # ddp, fsdp, hybrid all use torchrun
+        # ddp and fsdp use torchrun
         cmd = [
             sys.executable,
             "-u",

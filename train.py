@@ -14,7 +14,6 @@ import traceback
 # import argparse
 # import yaml
 # import time
-import math
 import warnings
 from contextlib import nullcontext
 from transformers import AutoTokenizer
@@ -47,14 +46,10 @@ from distributed_utils import (
 )
 import wandb
 
-from utils import build_args, load_config, dist_barrier
+from utils import build_args, load_config, dist_barrier, lr_multiplier
 
 import transformers
 transformers.logging.disable_progress_bar()
-
-## If 3d parallelism is enabled
-# from parallelism import ParallelismArgs, setup_device_mesh
-# from parallelism import ParallelismArgs
 
 ## -------------------------------
 # wandb 
@@ -121,7 +116,13 @@ def main(args):
     Initializes distributed environment, loads model and data, and runs training epochs."""
     try:
         checkpointer = None
-       
+
+        ## 5D parallelism (DP, TP+SP, CP, PP, EP) has its own model and loop.
+        if args.strategy == "5d":
+            from parallelism.trainer import train_5d
+            train_5d(args)
+            return
+
         ## 1. SETUP DISTRIBUTED ENVIRONMENT
         if args.strategy in ["ddp", "fsdp"]:
             local_rank = setup_dist_process_group()
@@ -280,16 +281,7 @@ def main(args):
             warmup_steps = min(args.warmup_steps, total_steps)
 
             def _lr_lambda(step_idx: int) -> float:
-                # Linear warmup, then decay to 0 over the remaining steps (or hold for "constant").
-                if step_idx < warmup_steps:
-                    return float(step_idx + 1) / float(max(1, warmup_steps))
-                if args.lr_scheduler == "constant":
-                    return 1.0
-                progress = (step_idx - warmup_steps) / float(max(1, total_steps - warmup_steps))
-                progress = min(1.0, progress)
-                if args.lr_scheduler == "linear":
-                    return 1.0 - progress
-                return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine
+                return lr_multiplier(step_idx, warmup_steps, total_steps, args.lr_scheduler)
 
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
             print_on_rank_0(rank, f"LR schedule: {args.lr_scheduler} | warmup_steps={warmup_steps} | total_steps={total_steps}", "📈")

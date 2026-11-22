@@ -458,7 +458,6 @@ const templateDisplayNames = {
   'llm_lora_ddp': 'LLM Fine Tune with LoRA',
   'llm_lora_local_file': 'LLM Fine Tune with LoRA',
   'llm_lora_quantized_single_gpu': 'LLM Fine Tune with QLoRA',
-  'llm_hybrid_2d_dp_tp': 'LLM Hybrid 2D (DP+TP)',
   'llm_fsdp_mini_project_style': 'LLM FSDP Example Small Model',
   // VLM
   'vlm_llava_lora_single_gpu': 'VLM Fine Tune with LoRA',
@@ -568,7 +567,9 @@ const extraTemplates = [
   { name: 'embedding_imagebind', display: 'ImageBind (Meta)', type: 'embedding', desc: 'Multi-modal joint embedding' },
 ];
 
-const hiddenTemplates = ['llm_lora_s3', 'config', 'llm_hybrid_2d_dp_tp'];
+// strategy: 5d templates are YAML/CLI only: the UI form has no parallelism block yet.
+const hiddenTemplates = ['llm_lora_s3', 'config', 'llm_5d_tp_pp_dp_8gpu', 'llm_5d_long_context_cp',
+  'custom_5d_moe_16gpu', 'custom_5d_cpu_demo'];
 
 async function loadTemplatesForModal() {
   try {
@@ -869,7 +870,7 @@ function syncGpuOptionsWithStrategy() {
   const gpuInput = document.getElementById('f-gpu-count');
   if (!gpuInput) return;
 
-  const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp' || strategy === 'hybrid';
+  const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp';
 
   // Solo runs on exactly one GPU — lock the field to 1. Multi-GPU strategies
   // leave it free for any positive count the user types.
@@ -1576,17 +1577,6 @@ function applyConfigToForm(cfg) {
     setVal('f-slurm-time', cfg.slurm.time || '');
   }
 
-  // 3D topology
-  const topo = cfg.topology || {};
-  if (topo.parallelism_mode) {
-    setVal('f-parallelism-mode', topo.parallelism_mode);
-    onParallelismModeChange();
-  }
-  if (topo.data_parallel_size) setVal('f-dp-size', topo.data_parallel_size);
-  if (topo.tensor_parallel_size) setVal('f-tp-size', topo.tensor_parallel_size);
-  if (topo.pipeline_parallel_size) setVal('f-pp-size', topo.pipeline_parallel_size);
-  if (dist.strategy === 'hybrid') onTopologyChange();
-
   // Training settings
   setVal('f-epochs', t.epochs || 3);
   setVal('f-batch-size', t.batch_size || 8);
@@ -1738,18 +1728,6 @@ function buildConfigFromForm() {
       gpus_per_node: parseInt(getVal('f-slurm-gpus-per-node')) || 4,
       partition: getVal('f-slurm-partition') || 'gpu',
       time: getVal('f-slurm-time') || '2:00:00',
-    };
-  }
-
-  // 3D topology (hybrid strategy only)
-  if (cfg.distributed.strategy === 'hybrid') {
-    const ppMode = getVal('f-parallelism-mode') || '2d';
-    cfg.topology = {
-      parallelism_mode: ppMode,
-      data_parallel_size: parseInt(getVal('f-dp-size')) || 2,
-      tensor_parallel_size: parseInt(getVal('f-tp-size')) || 2,
-      pipeline_parallel_size: ppMode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1,
-      tensor_parallel_auto_plan: true,
     };
   }
 
@@ -3631,16 +3609,10 @@ function onStrategyChange() {
 
   syncGpuOptionsWithStrategy();
 
-  // Solo always forces 1 GPU; hybrid starts at 1 (topology product drives it from there).
-  // DDP and FSDP leave the count unchanged so the user stays in control.
-  if (strategy === 'none' || strategy === 'hybrid') {
+  // Solo always forces 1 GPU. DDP and FSDP leave the count unchanged so the user stays in control.
+  if (strategy === 'none') {
     if (gpuInput) gpuInput.value = '1';
   }
-
-  // Show / hide 3D topology section
-  const topoSection = document.getElementById('topology-section');
-  if (topoSection) topoSection.style.display = strategy === 'hybrid' ? '' : 'none';
-  if (strategy === 'hybrid') onTopologyChange();
 
   // Solo needs no launch mode — hide it (and SLURM sub-section)
   const launchModeGroup = document.getElementById('f-launch-mode')?.closest('.form-group');
@@ -3664,59 +3636,6 @@ function onLaunchModeChange() {
   if (slurmSection) slurmSection.style.display = mode === 'slurm' ? '' : 'none';
 }
 
-function onParallelismModeChange() {
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const ppGroup = document.getElementById('fg-pp-size');
-  if (ppGroup) ppGroup.style.display = mode === '3d' ? '' : 'none';
-  // Force pp=1 in 2D mode so the mesh math and hint don't carry a stale value
-  if (mode !== '3d') {
-    const ppInput = document.getElementById('f-pp-size');
-    if (ppInput) ppInput.value = '1';
-  }
-  onTopologyChange();
-}
-
-function onTopologyChange() {
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const dp = parseInt(getVal('f-dp-size')) || 1;
-  const tp = parseInt(getVal('f-tp-size')) || 1;
-  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
-  const total = dp * tp * pp;
-
-  // Mirror the topology product (dp × tp × pp) straight into GPU Count so the
-  // mesh stays consistent — any positive total is now a valid entry.
-  const gpuInput = document.getElementById('f-gpu-count');
-  if (gpuInput && total >= 1) gpuInput.value = String(total);
-
-  updateTopologyHint();
-}
-
-function updateTopologyHint() {
-  const mode = getVal('f-parallelism-mode') || '2d';
-  const dp = parseInt(getVal('f-dp-size')) || 1;
-  const tp = parseInt(getVal('f-tp-size')) || 1;
-  const pp = mode === '3d' ? (parseInt(getVal('f-pp-size')) || 1) : 1;
-  const total = dp * tp * pp;
-  const selected = parseInt(getVal('f-gpu-count')) || 1;
-
-  const hintEl = document.getElementById('fg-topology-hint');
-  const hintText = document.getElementById('topology-hint-text');
-  if (!hintEl || !hintText) return;
-
-  const meshStr = mode === '3d'
-    ? `${dp} DP × ${tp} TP × ${pp} PP`
-    : `${dp} DP × ${tp} TP`;
-
-  hintEl.style.display = '';
-  if (selected === total) {
-    hintText.textContent = `✓ Mesh: ${meshStr} = ${total} GPUs — matches GPU Count.`;
-    hintText.style.color = 'var(--green)';
-  } else {
-    hintText.textContent = `⚠️ Mesh: ${meshStr} = ${total} GPUs, but GPU Count is set to ${selected}. Update one to match.`;
-    hintText.style.color = 'var(--orange)';
-  }
-}
-
 /**
  * Handle GPU count change
  */
@@ -3724,9 +3643,6 @@ function onGpuCountChange() {
   syncGpuOptionsWithStrategy();
   updateGpuAvailability();
   checkStrategyGpuCompatibility();
-  // Refresh topology hint if hybrid strategy is active
-  const strategy = getVal('f-strategy');
-  if (strategy === 'hybrid') updateTopologyHint();
 }
 
 function classifyLogLine(line) {

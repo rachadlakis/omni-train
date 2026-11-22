@@ -1,5 +1,4 @@
 
-from math import sqrt
 
 import plotext as plt   
 import os
@@ -101,6 +100,7 @@ def print_config(args):
         "Precision":       ["mixed_precision", "param_dtype", "reduce_dtype", "output_dtype", "cast_forward_inputs"],
         "PEFT":            ["peft_enabled", "peft_type", "peft_r", "peft_alpha", "peft_dropout", "peft_target_modules", "peft_bias"],
         "Quantization":    ["quantization_enabled", "quantization_bits", "quantization_type", "quantization_compute_dtype", "quantization_double_quant"],
+        "Parallelism (5d)": ["par_dp", "par_tp", "par_sp", "par_cp", "par_pp", "par_pp_schedule", "par_micro_batches", "par_ep", "par_zero1"],
         "Checkpoint":      ["distribute_api", "resume", "resume_path", "load_model_from_hf"],
         "Prefetch":        ["explicit_prefetching", "forward_prefetch", "backward_prefetch"],
         "Wandb":           ["wandb_log_with_train", "wandb_entity", "wandb_project", "wandb_run_name"],
@@ -123,6 +123,9 @@ def print_config(args):
 
     seen = set()
     for group, keys in groups.items():
+        if group == "Parallelism (5d)" and cfg.get("strategy") != "5d":
+            seen.update(keys)
+            continue
         present = [k for k in keys if k in cfg]
         if not present:
             continue
@@ -214,7 +217,7 @@ class Args:
         self.dataset_full_name = None
         self.dataset_split = None
 
-        self.strategy = None # fsdp, ddp, or solo
+        self.strategy = None # fsdp, ddp, solo, or 5d
         self.checkpoint_dir = None
         self.save: bool 
 
@@ -268,6 +271,22 @@ class Args:
         self.custom_dim: int = 16
         self.custom_n_heads: int = 4
         self.custom_dropout_p: float = 0.1
+        self.custom_n_kv_heads = None   # None = n_heads (5d only: grouped-query attention)
+        self.custom_ffn_hidden = None   # None = ~8/3 * dim (5d only)
+        self.custom_num_experts: int = 0  # >0 = Mixture-of-Experts (5d only)
+        self.custom_top_k: int = 2
+
+        # 5D parallelism (only used when strategy == "5d")
+        self.par_dp = None              # None = auto: world_size / (tp * cp * pp)
+        self.par_tp: int = 1
+        self.par_sp: bool = False
+        self.par_cp: int = 1
+        self.par_pp: int = 1
+        self.par_pp_schedule: str = "1f1b"
+        self.par_micro_batches: int = 1
+        self.par_ep: int = 1
+        self.par_zero1: bool = False
+        self.seed: int = 0
 
         self.wandb_log_with_train: bool
         self.wandb_entity: str
@@ -305,8 +324,9 @@ def build_args(cfg):
     args.checkpoint_dir = cfg["checkpoint_dir"]
     args.save = to_bool(cfg["save"])
 
-    if args.strategy not in {"solo", "ddp", "fsdp"}:
-        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: solo, ddp, fsdp")
+    if args.strategy not in {"solo", "ddp", "fsdp", "5d"}:
+        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: solo, ddp, fsdp, 5d")
+    args.seed = int(cfg.get("seed", 0))
 
     # --------------------------------------------------
     # TRAINING
@@ -475,6 +495,20 @@ def build_args(cfg):
             raise ValueError(
                 f"custom_transformer: dim ({args.custom_dim}) must be divisible by n_heads ({args.custom_n_heads})"
             )
+        args.custom_n_kv_heads = int(cta["n_kv_heads"]) if cta.get("n_kv_heads") else None
+        args.custom_ffn_hidden = int(cta["ffn_hidden"]) if cta.get("ffn_hidden") else None
+        args.custom_num_experts = int(cta.get("num_experts", 0) or 0)
+        args.custom_top_k = int(cta.get("top_k", 2))
+        if args.strategy != "5d" and (args.custom_num_experts or args.custom_n_kv_heads):
+            raise ValueError("custom_transformer_args.num_experts / n_kv_heads need strategy: 5d")
+        if args.custom_num_experts and not 1 <= args.custom_top_k <= args.custom_num_experts:
+            raise ValueError("custom_transformer_args.top_k must be between 1 and num_experts")
+
+    # --------------------------------------------------
+    # 5D PARALLELISM
+    # --------------------------------------------------
+    if args.strategy == "5d":
+        _parse_5d(cfg, args)
 
     # --------------------------------------------------
     # WANDB
@@ -486,6 +520,66 @@ def build_args(cfg):
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
     return args
+
+def _parse_5d(cfg, args):
+    """Read and check the `parallelism:` block (strategy: 5d)."""
+    par = cfg.get("parallelism") or {}
+    known = {"dp", "tp", "sp", "cp", "pp", "pp_schedule", "micro_batches", "ep", "zero1"}
+    unknown = set(par) - known
+    if unknown:
+        raise ValueError(f"Unknown parallelism option(s) {sorted(unknown)}. Known: {sorted(known)}")
+    dp = par.get("dp", "auto")
+    args.par_dp = None if dp in (None, "auto") else int(dp)
+    args.par_tp = int(par.get("tp", 1))
+    args.par_sp = to_bool(par.get("sp", False))
+    args.par_cp = int(par.get("cp", 1))
+    args.par_pp = int(par.get("pp", 1))
+    args.par_pp_schedule = str(par.get("pp_schedule", "1f1b")).lower()
+    args.par_micro_batches = int(par.get("micro_batches", 1))
+    args.par_ep = int(par.get("ep", 1))
+    args.par_zero1 = to_bool(par.get("zero1", False))
+
+    sizes = {"tp": args.par_tp, "cp": args.par_cp, "pp": args.par_pp, "ep": args.par_ep,
+             "micro_batches": args.par_micro_batches}
+    if args.par_dp is not None:
+        sizes["dp"] = args.par_dp
+    for name, value in sizes.items():
+        if value < 1:
+            raise ValueError(f"parallelism.{name} must be at least 1 (got {value})")
+    if args.par_pp_schedule not in {"1f1b", "afab"}:
+        raise ValueError(f"parallelism.pp_schedule must be 1f1b or afab (got {args.par_pp_schedule})")
+    if args.par_sp and args.par_tp == 1:
+        raise ValueError("parallelism.sp (sequence parallelism) needs tp > 1")
+
+    model_par = args.par_tp * args.par_cp * args.par_pp
+    if args.num_gpus % model_par:
+        raise ValueError(f"num_gpus ({args.num_gpus}) must be divisible by tp*cp*pp ({model_par})")
+    dp = args.par_dp or args.num_gpus // model_par
+    if dp * model_par != args.num_gpus:
+        raise ValueError(f"dp*tp*cp*pp = {dp * model_par} must equal num_gpus ({args.num_gpus})")
+    if dp % args.par_ep:
+        raise ValueError(f"parallelism.ep ({args.par_ep}) must divide dp ({dp}): experts are spread over DP ranks")
+
+    if args.model_type not in {"llm", "custom_transformer"}:
+        raise ValueError(f"strategy: 5d supports model_type llm (Llama/Mistral/Qwen2) and "
+                         f"custom_transformer, not '{args.model_type}'. Use ddp or fsdp.")
+    if args.peft_enabled or args.quantization_enabled:
+        raise ValueError("strategy: 5d does not support PEFT or quantization yet. Use ddp/fsdp for LoRA/QLoRA.")
+    if args.par_ep > 1 and not (args.model_type == "custom_transformer" and args.custom_num_experts):
+        raise ValueError("parallelism.ep > 1 needs a Mixture-of-Experts model "
+                         "(model_type: custom_transformer with custom_transformer_args.num_experts > 0)")
+
+    seq = args.custom_max_seq_len if args.model_type == "custom_transformer" else args.max_length
+    if seq % args.par_cp:
+        raise ValueError(f"sequence length {seq} must be divisible by cp ({args.par_cp})")
+    if args.par_sp and (seq // args.par_cp) % args.par_tp:
+        raise ValueError(f"with sp, sequence length {seq} must be divisible by cp*tp ({args.par_cp * args.par_tp})")
+    if args.par_pp > 1 and args.par_micro_batches < args.par_pp:
+        import warnings
+        warnings.warn(f"parallelism.micro_batches ({args.par_micro_batches}) < pp ({args.par_pp}): "
+                      f"the pipeline bubble is (pp-1)/micro_batches, so use micro_batches >= {args.par_pp}",
+                      UserWarning, stacklevel=3)
+
 
 def estimate_training_vram(
     model_type: str,               # llm, seq2seq, vision, yolo, vlm, encoder
@@ -716,6 +810,20 @@ def estimate_training_time(
         "total_days": round(total_days, 3),
         "human_readable": human_readable,
     }
+
+
+def lr_multiplier(step_idx: int, warmup_steps: int, total_steps: int, kind: str) -> float:
+    """LR factor for one optimizer step: linear warmup, then decay to 0 over the
+    remaining steps (cosine / linear) or hold (constant)."""
+    import math
+    if step_idx < warmup_steps:
+        return float(step_idx + 1) / float(max(1, warmup_steps))
+    if kind == "constant":
+        return 1.0
+    progress = min(1.0, (step_idx - warmup_steps) / float(max(1, total_steps - warmup_steps)))
+    if kind == "linear":
+        return 1.0 - progress
+    return 0.5 * (1.0 + math.cos(math.pi * progress))  # cosine
 
 
 def dist_barrier(local_rank: int) -> None:

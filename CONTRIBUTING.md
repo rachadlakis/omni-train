@@ -47,7 +47,7 @@ If you're not sure where to start, these are well-scoped and genuinely useful:
 - **Improve the Web UI** — `ui/static/app.js` and `ui/static/styles.css`. The UI is functional but there is room to improve the job history view and error display.
 
 **Advanced:**
-- **3D hybrid parallelism** (`hybrid/`) — the module exists and is tested in isolation but is not yet integrated into the main training loop. This is the highest-impact open task and the most complex.
+- **Extend `strategy: 5d`** (`parallelism/`) — LoRA under TP, more HF architectures (Qwen3, Gemma, Mixtral MoE checkpoints), vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules. Any change to gradient sync must keep `python -m pytest -m dist` green; it compares every parameter's gradient against a 1-process run.
 
 ---
 

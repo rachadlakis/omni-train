@@ -13,8 +13,6 @@ import re
 import argparse
 import os
 
-from sympy import python
-
 
 # Maps detected CUDA major.minor to the closest available PyTorch wheel tag.
 # Add newer entries here as PyTorch releases them.

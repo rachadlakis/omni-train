@@ -19,8 +19,8 @@ training:
   lr_scheduler: cosine          ## LR after warmup: cosine | linear (decay to 0 by the last step) | constant
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: fsdp              ## choose from {ddp, fsdp, solo}
-num_gpus: 1                 ## number of GPUs to launch with torchrun for ddp/fsdp
+strategy: fsdp              ## choose from {solo, ddp, fsdp, 5d}  (5d: see the parallelism block below)
+num_gpus: 1                 ## number of GPUs to launch with torchrun (ddp / fsdp / 5d)
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 
@@ -63,26 +63,30 @@ wandb:
   wandb_entity: ""                    ## your W&B entity (username or team); blank = your default entity
   wandb_project: "omni-train" ## your W&B project name
 
+## Only used when strategy: 5d — any mix of the 5 parallelism dimensions.
+## dp * tp * cp * pp must equal num_gpus. Works with model_type: llm (Llama / Mistral / Qwen2
+## Hugging Face models) and model_type: custom_transformer (also MoE). See docs/5D_PARALLELISM.md.
+parallelism:
+  dp: auto            ## data-parallel replicas; auto = num_gpus / (tp * cp * pp)
+  tp: 1               ## tensor parallel: split attention heads / MLP inside each layer (keep within a node)
+  sp: false           ## sequence parallel: also split norms/dropout activations over the TP ranks (needs tp > 1)
+  cp: 1               ## context parallel: split the sequence over GPUs, ring attention (max_length % cp == 0)
+  pp: 1               ## pipeline parallel: split the layers into pp stages
+  pp_schedule: 1f1b   ## 1f1b (less activation memory) | afab (all-forward-all-backward)
+  micro_batches: 1    ## micro-batches per step (gradient accumulation); with pp > 1 use >= pp
+  ep: 1               ## expert parallel: spread MoE experts over DP ranks (must divide dp; needs num_experts)
+  zero1: false        ## ZeRO-1: shard AdamW states over the DP ranks
+## global batch = training.batch_size x micro_batches x dp
+
 custom_transformer_args:
   n_layers: 2           ## number of transformer layers (required if model_type=custom_transformer)
   vocab_size: 1024      ## vocabulary size (required if model_type=custom_transformer)
   max_seq_len: 102      ## maximum sequence length (required if model_type=custom_transformer)
   dim: 512              ## hidden dimension (required if model_type=custom_transformer)
   n_heads: 4            ## number of attention heads (required if model_type=custom_transformer)
-  dropout_p: 0.1        ## dropout probability (required if model_type=custom_transformer)
+  dropout_p: 0.1        ## dropout probability (required if model_type=custom_transformer; ignored by 5d)
+  # n_kv_heads: 2       ## 5d only: grouped-query attention (default = n_heads)
+  # ffn_hidden: 1408    ## 5d only: MLP width (default ~8/3 * dim)
+  # num_experts: 8      ## 5d only: Mixture-of-Experts in every layer (enables parallelism.ep)
+  # top_k: 2            ## 5d only: experts per token
 
-
-## ------------------------------------ In progress  ------------------------------------ ##
-## To add multi-dimensional parallelism (data parallelism, tensor parallelism and/or pipeline parallelism)
-multi_dimensional_parallelism:  
-  enabled: false                   ## whether to use multi-dimensional parallelism (tensor parallelism and/or pipeline parallelism)
-  dp_enabled: false   ## whether to use data parallelism (FSDP/DDP) — must be enabled for TP and PP
-  tp_enabled: false   ## whether to use tensor parallelism
-  pp_enabled: false   ## whether to use pipeline parallelism
-  dp_size: 0        ## number of data parallel shards (e.g. 2, 4, 8)
-  tp_size: 0        ## number of tensor parallel shards (e.g. 2, 4, 8)
-  pp_size: 0        ## number of pipeline stages (e.g. 2, 4)
-  device_mesh_shape: [2, 2, 2]        ## shape of the device mesh for 3D parallelism (e.g. [dp, tp, pp] = [4, 2, 2])
-  n_microbatches: 4   ## number of micro-batches per global step (only relevant when pp_size > 1)
-  pp_schedule: 1f1b   ## pipeline schedule: gpipe or 1f1b
-## -----------------------------------------------------------------------------------####
