@@ -135,3 +135,19 @@ loss-only test passes even when a gradient is 2× too large.
 - Full logits are gathered for the loss (no vocab-parallel cross-entropy), which costs memory for
   large vocabularies.
 - No dropout in the 5D model.
+- Ring attention does not overlap communication with compute: each step computes, then passes
+  K/V on and waits.
+- Activations sent between pipeline stages are fp32 (bf16 would halve that traffic).
+- DP gradient buckets are built with `torch.cat` and copied back per parameter, not kept in
+  preallocated contiguous buffers.
+- Experts are spread over the DP axis only (`ep` must divide `dp`). The MoE layer runs outside
+  the TP region, so expert weights are copied on every TP and CP rank, and without SP every TP
+  rank computes the same expert work. torchtitan instead folds DP, CP and TP into the expert
+  dimension and gives experts their own mesh, which also lets experts use a different TP size.
+- No HSDP (replicate across nodes, shard inside a node) and no Ulysses-style sequence parallelism.
+- Gradient checkpointing recomputes whole layers; with SP that repeats the activation
+  all-gathers in the backward pass (selective checkpointing would avoid it).
+
+See the [Ultra-Scale Playbook](https://huggingface.co/spaces/nanotron/ultrascale-playbook) and
+[The Parallelism Mesh Zoo](https://blog.ezyang.com/2025/08/the-parallelism-mesh-zoo/) for the full
+versions of these techniques.
