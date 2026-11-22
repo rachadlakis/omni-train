@@ -59,7 +59,7 @@ python -m pytest tests/test_config_validation.py::TestFoo::test_bar -v
 # GPU smoke tests (require GPU, ~30-60s each)
 python -m pytest -m smoke
 
-# strategy: 5d layout equivalence (multi-process on CPU/gloo, no GPU, ~5 min)
+# multi-process equivalence: strategy 5d layouts + post-training under DDP (CPU/gloo, ~5 min)
 python -m pytest -m dist
 ```
 
@@ -100,6 +100,7 @@ utils.load_config() → utils.build_args()   # parses + validates YAML into Args
     ▼
 train.py main()
     ├── strategy: 5d → parallelism.trainer.train_5d(args)   # own model + loop, returns
+    ├── algorithm: sft|dpo|simpo|orpo → post_training data + objective (same model setup/loop)
     ├── distributed_utils.apply_solo/ddp/fsdp()   # model setup
     ├── data.get_dataloader()                       # HF dataset + DistributedSampler
     └── checkpoint.Checkpointer                    # FSDP save/load
@@ -164,6 +165,7 @@ Two FSDP checkpoint APIs:
 - `strategy: fsdp` + `quantization.enabled: true` → hard error
 - `training.lr_scheduler` must be `cosine` (default), `linear` or `constant` — applied after the linear warmup
 - `peft.enabled=true` only supports model types: `llm, seq2seq, encoder, vlm, vision`
+- `algorithm:` (`post_training.config.parse_algorithm`): `type` ∈ pretrain (default) | sft | dpo | simpo | orpo; `grpo`/`ppo` → "planned" error; unknown keys are errors; non-pretrain needs `model_type: llm` and strategy solo | ddp | fsdp; `dpo_loss` ∈ sigmoid | ipo | hinge; `label_smoothing` only for dpo+sigmoid; `max_prompt_length` < `max_length`. `dataset.subset` is optional
 - `strategy: 5d` (`_parse_5d`): `dp*tp*cp*pp == num_gpus` (`dp: auto` infers it), `ep` divides dp and needs `custom_transformer_args.num_experts`, `sp` needs tp>1, sequence length divisible by cp (by cp*tp with sp), only `model_type: llm | custom_transformer`, no PEFT/quantization, unknown `parallelism` keys are errors. Model-shape checks (heads/kv heads/ffn divisible by tp, layers ≥ pp) run at startup in `parallelism.model.check_divisibility`
 
 ### Model Types
@@ -210,6 +212,16 @@ Trainable weights are always fp32 (`_load_dtype()`), because bf16 rounds most fi
 
 FastAPI server (`ui/app.py`) with a REST API. Requests must carry a Host header that is `localhost`, an IP address, this machine's hostname, or a name in `OMNI_UI_ALLOWED_HOSTS` (blocks DNS rebinding). Every torchrun launch, manual or queued, gets a free `--master_port`, and ddp/fsdp jobs always go through torchrun, even on 1 GPU. The UI has its own config schema; `ui/config_adapter.py` converts it to the `config.yaml` format before launching. `ui/queue.py` manages a SQLite-backed job queue with priority scheduling. Active config is written to `ui/_active_config.yaml` before each run.
 
+### Post-training (`algorithm:` block, `post_training/`)
+
+SFT and preference optimisation reuse the normal solo/DDP/FSDP setup (LoRA/QLoRA included) and the normal loop. `train.py` swaps in `post_training.data.get_post_training_data` for the dataloader and calls `objective(model, batch, device) -> (loss, metrics)` instead of the model-type branch.
+
+- **Data** (`post_training/data.py`): SFT takes `messages` | `prompt`+`completion` | Alpaca `instruction`(+`input`)+`output` | `text`. Preference takes `prompt`+`chosen`+`rejected`, chosen/rejected conversations (last turn is the answer), or hh-rlhf strings. With a chat template the prompt is rendered with `add_generation_prompt=True` and must be a string prefix of the full conversation. Prompt and answer are tokenised separately so the mask boundary is exact. Without a template: BOS + prompt + answer + EOS. Preference batches are `[2B, T]` (chosen rows then rejected) so one forward covers both, which FSDP needs. Local `.json/.jsonl/.csv/.parquet` files work as `dataset.name`.
+- **DPO reference:** the policy at step 0 is the reference, so `PreferenceObjective.precompute_reference` scores every pair once (eval mode, no grad, all ranks, all-gathered) and caches `[N, 2]` floats. No second model is kept, for every strategy. Online methods (GRPO/PPO) will need an on-the-fly reference instead (LoRA: adapters disabled).
+- **Losses** (`post_training/losses.py`) return per-example values and are averaged over pairs, so DDP/FSDP gradients equal one process on the global batch. SFT uses HF's per-rank token mean (the standard convention, not world-size invariant). `sequence_logps` goes one row at a time in fp32 to avoid a `[B, T, V]` fp32 log-softmax.
+- **Testing rule:** `tests/test_post_training_dist.py -m dist` compares losses AND every parameter's gradient to 1 process. DDP runs on CPU. FSDP cases need ≥ 2 GPUs (FSDP2 has no CPU support in torch 2.6) and are skipped otherwise.
+- **Not supported yet:** GRPO/PPO, KTO, reward models, packing, 5d, the web UI.
+
 ### 5D Parallelism (`strategy: 5d`, `parallelism/`)
 
 `train.py` hands 5d runs to `parallelism.trainer.FiveDRun`, which has its own Llama-style model (`parallelism/model.py`), not the HF/`model.py` classes. Plain `torch.distributed`; no Megatron/DeepSpeed.
@@ -242,6 +254,8 @@ Pre-built configs cover common scenarios. Use them as starting points:
 | `llm_5d_long_context_cp.yaml` | 5D: 16K-token sequences with context parallelism (CP=4) × TP=2 |
 | `custom_5d_moe_16gpu.yaml` | 5D: all five dimensions (DP, TP+SP, CP, PP, EP) on 2 × 8 GPUs, MoE |
 | `custom_5d_cpu_demo.yaml` | 5D on a laptop: 4 CPU processes, TP=2 × PP=2 |
+| `llm_sft_lora_single_gpu.yaml` | SFT + LoRA on chat data, Qwen2.5-0.5B-Instruct, 6 GB GPU |
+| `llm_dpo_lora_single_gpu.yaml` | DPO + LoRA on UltraFeedback pairs, Qwen2.5-0.5B-Instruct, 6 GB GPU |
 
 ---
 

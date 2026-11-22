@@ -262,19 +262,26 @@ def main(args):
         
         ## Load the dataset and create the dataloader with DistributedSampler for sharding across GPUs
         print_banner_on_rank_0(rank, "PREPARING DATA")
-        dataloader = get_dataloader(
-            args.dataset, 
-            args.dataset_full_name, 
-            args.dataset_split, 
-            tokenizer, 
-            rank, 
-            world_size, 
-            batch_size=args.batch_size,
-            max_length=args.max_length, 
-            model_type=args.model_type,
-            vocab_size=getattr(args, "custom_vocab_size", None),
-            custom_max_seq_len=getattr(args, "custom_max_seq_len", None),
-        )
+        objective = None   # post-training (sft/dpo/...) replaces the per-step loss
+        if args.algorithm != "pretrain":
+            from post_training.data import get_post_training_data
+            from post_training.objectives import build_objective
+            objective = build_objective(args)
+            pt_dataset, pt_collate, dataloader = get_post_training_data(args, tokenizer, rank, world_size)
+        else:
+            dataloader = get_dataloader(
+                args.dataset, 
+                args.dataset_full_name, 
+                args.dataset_split, 
+                tokenizer, 
+                rank, 
+                world_size, 
+                batch_size=args.batch_size,
+                max_length=args.max_length, 
+                model_type=args.model_type,
+                vocab_size=getattr(args, "custom_vocab_size", None),
+                custom_max_seq_len=getattr(args, "custom_max_seq_len", None),
+            )
 
         if hasattr(dataloader, "__len__"):
             total_steps = max(1, len(dataloader) * args.epochs)
@@ -322,6 +329,17 @@ def main(args):
         def autocast_ctx():
             return torch.autocast(device_type=device.type, dtype=amp_dtype) if use_autocast else nullcontext()
 
+        if objective is not None and objective.prepare(model):
+            print_on_rank_0(rank, "Dropout disabled for preference training (noisy log-probs otherwise)", "🔇")
+        if objective is not None and objective.needs_reference:
+            print_banner_on_rank_0(rank, "REFERENCE LOG-PROBS")
+            print_on_rank_0(rank, "Scoring every pair with the initial model (= the DPO reference); "
+                                  "no second model is kept in memory", "🧮")
+            objective.precompute_reference(model, pt_dataset, pt_collate, rank, world_size,
+                                           args.batch_size, device, autocast_ctx,
+                                           log=lambda m: print_on_rank_0(rank, m))
+            print_on_rank_0(rank, f"Reference log-probs ready for {len(pt_dataset)} pairs ✓")
+
         print_banner_on_rank_0(rank, "TRAINING")
         model.train()
         losses = []
@@ -344,8 +362,11 @@ def main(args):
                     #     model.unshard() # type: ignore
 
                     optimizer.zero_grad()
+                    metrics = {}
                     with autocast_ctx():
-                        if args.model_type == "custom_transformer":
+                        if objective is not None:
+                            loss, metrics = objective(model, batch, device)
+                        elif args.model_type == "custom_transformer":
                             import torch.nn.functional as F
                             tokens = batch[0].to(device)    ## TensorDataset yields (tensor,) tuples
                             logits = model(tokens)          ## [bsz, seq_len, vocab_size]
@@ -420,6 +441,7 @@ def main(args):
                             f"   Epoch {epoch+1}/{args.epochs} [{bar}] {pct:5.1f}% | "
                             f"step {step+1:>{step_w}}/{num_batches} | "
                             f"loss: {loss.item():.4f} | avg: {avg_loss:.4f}"
+                            + "".join(f" | {k}: {v:.3f}" for k, v in metrics.items())
                         )
                         print(f"\r{line}\033[K", end="", flush=True)
                         

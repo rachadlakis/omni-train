@@ -13,6 +13,7 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 ## Highlights
 
 - **Four execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), `fsdp` (Fully Sharded Data Parallel), and `5d`: any mix of data, tensor (+sequence), context, pipeline and expert parallelism, set in YAML.
+- **Post-training** — SFT and preference optimisation (DPO, IPO, hinge, SimPO, ORPO), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA. GRPO and PPO are next.
 - **Parameter-efficient fine-tuning** — LoRA and QLoRA with 4-bit (NF4) / 8-bit quantization via `bitsandbytes`.
 - **Memory-efficient FSDP2** — parameter, gradient, and optimizer-state sharding with meta-device initialization to avoid CPU RAM spikes.
 - **Distributed checkpointing** — both DCP and DTensor APIs.
@@ -183,6 +184,8 @@ Ready-made configs live in [`configs/`](configs/) — use them as starting point
 | `llm_5d_long_context_cp.yaml` | 5D: 16K-token sequences with context parallelism (CP=4) × TP=2 |
 | `custom_5d_moe_16gpu.yaml` | 5D: all five dimensions (DP, TP+SP, CP, PP, EP) on 2 × 8 GPUs, MoE |
 | `custom_5d_cpu_demo.yaml` | 5D on a laptop: 4 CPU processes, TP=2 × PP=2 |
+| `llm_sft_lora_single_gpu.yaml` | SFT with LoRA on chat data (Qwen2.5-0.5B-Instruct, fits 6 GB) |
+| `llm_dpo_lora_single_gpu.yaml` | DPO with LoRA on UltraFeedback pairs (Qwen2.5-0.5B-Instruct, fits 6 GB) |
 
 See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 
@@ -232,6 +235,23 @@ same losses and gradients as a single process. Details: [`docs/5D_PARALLELISM.md
 | Full fine-tuning | Highest | Small models |
 | LoRA | Medium | Most fine-tuning |
 | QLoRA | Lowest | 7B+ models on consumer GPUs |
+
+### Post-training (`algorithm:` block)
+
+| `algorithm.type` | What it does | Data |
+| --- | --- | --- |
+| `pretrain` (default) | next-token loss on raw text | `text` |
+| `sft` | supervised fine-tuning, loss on the answer tokens only | `messages`, `prompt`/`completion`, Alpaca |
+| `dpo` | DPO (`dpo_loss: sigmoid`), IPO (`ipo`) or SLiC (`hinge`) | `prompt`/`chosen`/`rejected` or chosen/rejected chats |
+| `simpo` / `orpo` | reference-free preference optimisation | same as DPO |
+
+```bash
+CONFIG_PATH=configs/llm_sft_lora_single_gpu.yaml bash scripts/launch.sh
+CONFIG_PATH=configs/llm_dpo_lora_single_gpu.yaml bash scripts/launch.sh
+```
+
+DPO's reference log-probs are computed once before training, so no second model is kept in
+memory. Details and dataset formats: [`docs/POST_TRAINING.md`](docs/POST_TRAINING.md).
 
 ---
 

@@ -1,0 +1,53 @@
+"""Post-training under DDP and FSDP (2 CPU processes, gloo) must give the same
+loss AND the same gradient for every parameter as 1 process on the whole batch.
+DDP runs on CPU (gloo). FSDP2 needs CUDA, so its cases need >= 2 GPUs.
+
+Per-parameter gradients are compared on purpose: AdamW cancels a per-tensor
+gradient scale, so a loss-only check would miss e.g. a gradient 2x too large.
+
+Run with:  python -m pytest -m dist tests/test_post_training_dist.py
+"""
+
+import os
+import random
+import subprocess
+import sys
+
+import pytest
+import torch
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WORKER = os.path.join(ROOT, "tests", "post_training_dist_worker.py")
+
+CASES = [
+    ("ddp", 0, "dpo"), ("ddp", 1, "dpo"), ("ddp", 0, "simpo"), ("ddp", 0, "orpo"),
+    ("fsdp", 0, "dpo"), ("fsdp", 1, "dpo"), ("fsdp", 0, "simpo"),
+]
+
+
+def _run(tmp_path, nproc, strategy, lora, algo):
+    out = str(tmp_path / f"{strategy}_{lora}_{algo}_{nproc}")
+    env = dict(os.environ, OMP_NUM_THREADS="1", PYTHONPATH=ROOT)
+    if strategy == "ddp":
+        env["CUDA_VISIBLE_DEVICES"] = ""
+    cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(nproc),
+           "--master_port", str(random.randint(20000, 29999)), WORKER, strategy, str(lora), algo, out]
+    res = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
+    assert res.returncode == 0, res.stdout[-3000:] + res.stderr[-3000:]
+    return torch.load(out + ".pt")
+
+
+@pytest.mark.dist
+@pytest.mark.parametrize("strategy,lora,algo", CASES)
+def test_matches_single_process(tmp_path, strategy, lora, algo):
+    if strategy == "fsdp" and torch.cuda.device_count() < 2:
+        pytest.skip("FSDP2 needs CUDA (no CPU support in torch 2.6) and one GPU per rank: needs >= 2 GPUs")
+    ref = _run(tmp_path, 1, strategy, lora, algo)
+    got = _run(tmp_path, 2, strategy, lora, algo)
+    assert got["losses"] == pytest.approx(ref["losses"], rel=1e-5, abs=1e-6)
+    assert set(got["grads"]) == set(ref["grads"]) and ref["grads"]
+    if lora:
+        assert all("lora_" in n for n in ref["grads"])
+    for name, g in ref["grads"].items():
+        assert g.abs().sum() > 0, f"{name}: zero gradient, the test would prove nothing"
+        torch.testing.assert_close(got["grads"][name], g, rtol=1e-4, atol=1e-6, msg=name)

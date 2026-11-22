@@ -100,6 +100,7 @@ def print_config(args):
         "Precision":       ["mixed_precision", "param_dtype", "reduce_dtype", "output_dtype", "cast_forward_inputs"],
         "PEFT":            ["peft_enabled", "peft_type", "peft_r", "peft_alpha", "peft_dropout", "peft_target_modules", "peft_bias"],
         "Quantization":    ["quantization_enabled", "quantization_bits", "quantization_type", "quantization_compute_dtype", "quantization_double_quant"],
+        "Algorithm":       ["algorithm", "algo_beta", "algo_dpo_loss", "algo_label_smoothing", "algo_simpo_gamma", "algo_max_prompt_length", "algo_completion_only"],
         "Parallelism (5d)": ["par_dp", "par_tp", "par_sp", "par_cp", "par_pp", "par_pp_schedule", "par_micro_batches", "par_ep", "par_zero1"],
         "Checkpoint":      ["distribute_api", "resume", "resume_path", "load_model_from_hf"],
         "Prefetch":        ["explicit_prefetching", "forward_prefetch", "backward_prefetch"],
@@ -123,7 +124,8 @@ def print_config(args):
 
     seen = set()
     for group, keys in groups.items():
-        if group == "Parallelism (5d)" and cfg.get("strategy") != "5d":
+        if (group == "Parallelism (5d)" and cfg.get("strategy") != "5d") or \
+                (group == "Algorithm" and cfg.get("algorithm", "pretrain") == "pretrain"):
             seen.update(keys)
             continue
         present = [k for k in keys if k in cfg]
@@ -288,6 +290,15 @@ class Args:
         self.par_zero1: bool = False
         self.seed: int = 0
 
+        # Post-training (`algorithm:` block, parsed by post_training.config)
+        self.algorithm: str = "pretrain"  # pretrain | sft | dpo | simpo | orpo
+        self.algo_beta: float = 0.1
+        self.algo_dpo_loss: str = "sigmoid"
+        self.algo_label_smoothing: float = 0.0
+        self.algo_simpo_gamma: float = 0.5
+        self.algo_max_prompt_length: int = 0
+        self.algo_completion_only: bool = True
+
         self.wandb_log_with_train: bool
         self.wandb_entity: str
         self.wandb_project: str
@@ -313,7 +324,7 @@ def build_args(cfg):
 
     dataset = cfg["dataset"]
     args.dataset = dataset["name"]
-    args.dataset_full_name = dataset["subset"]
+    args.dataset_full_name = dataset.get("subset")  # None for datasets without subsets
     args.dataset_split = dataset.get("split", "train")
 
     # --------------------------------------------------
@@ -509,6 +520,12 @@ def build_args(cfg):
     # --------------------------------------------------
     if args.strategy == "5d":
         _parse_5d(cfg, args)
+
+    # --------------------------------------------------
+    # POST-TRAINING (SFT / DPO / SimPO / ORPO)
+    # --------------------------------------------------
+    from post_training.config import parse_algorithm
+    parse_algorithm(cfg, args)
 
     # --------------------------------------------------
     # WANDB

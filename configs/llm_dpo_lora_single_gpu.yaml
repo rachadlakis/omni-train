@@ -1,0 +1,74 @@
+## DPO with LoRA on one small GPU (fits a 6 GB card).
+## Before training, one no-grad pass scores every pair with the initial model:
+## that is the DPO reference, so no second model is kept in memory.
+## Dataset shapes accepted: prompt+chosen+rejected, or chosen/rejected conversations.
+model_name: Qwen/Qwen2.5-0.5B-Instruct
+model_type: llm
+
+dataset:
+  name: trl-lib/ultrafeedback_binarized   ## chosen/rejected conversations
+  split: train[:2000]
+
+algorithm:
+  type: dpo             ## dpo | simpo | orpo (simpo/orpo need no reference pass)
+  beta: 0.1             ## dpo: KL strength (simpo default 2.0, orpo: lambda 0.1)
+  dpo_loss: sigmoid     ## sigmoid | ipo | hinge
+  label_smoothing: 0.0  ## sigmoid only: assumed fraction of flipped labels
+  # simpo_gamma: 0.5    ## simpo only: target reward margin
+  max_prompt_length: 256
+
+training:
+  epochs: 1
+  batch_size: 2         ## pairs per step (each step runs 2 x batch_size sequences)
+  max_length: 512
+  learning_rate: 5e-5   ## DPO wants a lower LR than SFT: LoRA ~1e-5 to 1e-4, full fine-tune ~5e-7 to 5e-6
+  gradient_checkpointing: true
+  warmup_steps: 20
+  lr_scheduler: cosine
+  weight_decay: 0.0
+  grad_clip: 1.0
+
+strategy: solo    ## solo | ddp | fsdp (post-training does not support 5d yet)
+num_gpus: 1
+checkpoint_dir: checkpoints
+save: true
+
+dist_parameters:
+  mixed_precision: true         ## bf16 autocast, fp32 weights
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  distribute_api: dcp_api
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: false
+  forward: 1
+  backward: 1
+
+peft:
+  enabled: true
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: all-linear
+  bias: none
+
+quantization:                   ## set enabled: true + peft.type: qlora for QLoRA (solo/ddp only)
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: ""
+  wandb_project: "omni-train"
+  wandb_run_name: ""
