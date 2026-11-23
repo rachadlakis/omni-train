@@ -40,6 +40,10 @@ python -m pytest -m dist
 
 # GPU smoke tests (~30-60s each, requires a GPU) — not run in CI
 python -m pytest -m smoke
+
+# Everything GPU-only in one go, e.g. on a rented multi-GPU pod (logs in gpu_check_logs/)
+bash scripts/gpu_check.sh --setup   # first run on a fresh machine
+bash scripts/gpu_check.sh           # quick: NCCL + dist on GPUs + curated smoke
 ```
 
 ---

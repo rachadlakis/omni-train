@@ -48,6 +48,8 @@ python train.py
 
 CI (`.github/workflows/tests.yml`, GitHub's CPU runners, offline: `HF_HUB_OFFLINE=1`) runs the unit suite on every push and the `-m dist` suite on PRs, pushes to `main` and manual runs. Only the GPU tests need a local machine: `-m smoke` and the FSDP cases of `test_post_training_dist.py` (≥ 2 GPUs). Tests in the CI suites must not download anything: build tiny models from configs (see `tests/post_training_helpers.py`).
 
+On a rented GPU machine, `bash scripts/gpu_check.sh [--setup] [--full]` runs everything CI can't: an NCCL check (`scripts/nccl_check.py`), `-m dist` on GPUs over NCCL (`OMNI_DIST_DEVICE=cuda`, see `tests/dist_device.py`; cases needing more GPUs than present are skipped), and the curated smoke set (multi-GPU `min_gpus` cases, post-training, save/resume, QLoRA, vision/detection/VLM). Logs go to `gpu_check_logs/<ts>/`.
+
 ```bash
 # Unit tests (no GPU required) — default
 python -m pytest

@@ -47,3 +47,6 @@ docs/presentation*.html
 
 # Type-checker caches
 .mypy_cache/
+
+# GPU check logs (scripts/gpu_check.sh)
+gpu_check_logs/

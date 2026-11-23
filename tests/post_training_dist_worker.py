@@ -32,7 +32,7 @@ class Args:
 def main():
     strategy, lora, algo, out = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4]
     # FSDP2 needs CUDA (torch 2.6 has no CPU stream support); DDP runs on CPU/gloo.
-    if strategy == "fsdp":
+    if strategy == "fsdp" or os.environ.get("OMNI_DIST_DEVICE", "cpu").lower() == "cuda":
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         dist.init_process_group("nccl")
@@ -57,7 +57,7 @@ def main():
 
     if strategy == "ddp":
         from torch.nn.parallel import DistributedDataParallel as DDP
-        model = DDP(model)
+        model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
         named = lambda: model.module.named_parameters()  # noqa: E731
     else:
         from torch.distributed._composable.fsdp import fully_shard

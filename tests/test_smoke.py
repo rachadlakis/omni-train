@@ -104,11 +104,11 @@ def _apply_overrides(cfg: dict, overrides: dict) -> dict:
       - a plain string  → top-level field, e.g. "strategy"
       - a tuple         → nested path,     e.g. ("peft", "enabled")
 
-    Reserved keys ("id", "phases", "min_gpus") are silently ignored.
+    Reserved keys ("id", "phases", "min_gpus", "data") are silently ignored.
     """
     import copy
     cfg = copy.deepcopy(cfg)
-    _reserved = {"id", "phases", "min_gpus"}
+    _reserved = {"id", "phases", "min_gpus", "data"}
     for key, value in overrides.items():
         if key in _reserved:
             continue
@@ -204,6 +204,12 @@ def _run_case(case: dict, timeout: int = 300) -> subprocess.CompletedProcess:
         for i, phase_overrides in enumerate(phases):
             cfg = _apply_overrides(BASE_SMOKE_CFG, phase_overrides)
             cfg["checkpoint_dir"] = tmpdir
+            if case.get("data"):  # inline rows -> local .jsonl dataset
+                import json
+                path = os.path.join(tmpdir, "data.jsonl")
+                with open(path, "w") as f:
+                    f.writelines(json.dumps(r) + "\n" for r in case["data"])
+                cfg["dataset"] = {"name": path, "split": "train"}
 
             # Auto-inject resume_path when this phase is a resume phase.
             if cfg["save_load"].get("resume"):
@@ -365,6 +371,55 @@ SMOKE_EXTRA_CASES = [
         ("dataset",): {"name": "ybelkada/football-dataset", "subset": None, "split": "train"},
         ("training", "batch_size"): 1,
     },
+]
+
+# ── Multi-GPU and post-training cases ─────────────────────────────────────────
+#
+# min_gpus cases are skipped on smaller machines. scripts/gpu_check.sh runs them
+# on a rented multi-GPU box. Post-training cases use inline string data (opt-125m
+# has no chat template), written to a .jsonl per test.
+
+_PREF_ROWS = [{"prompt": f"Question: what is {a} plus {b}?\nAnswer:", "chosen": f" {a + b}.",
+               "rejected": f" {a + b + 1}, I think."} for a in range(8) for b in range(4)]
+_SFT_ROWS = [{"prompt": r["prompt"], "completion": r["chosen"]} for r in _PREF_ROWS]
+
+
+def _algo(type_, **kw):
+    return {"type": type_, "max_prompt_length": 16, **kw}
+
+
+SMOKE_EXTRA_CASES += [
+    # Same code paths as the 1-GPU grid, but with real gradient sync / sharding.
+    {"id": "ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2},
+    {"id": "fsdp_2gpu", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2},
+    {"id": "fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, ("peft", "enabled"): True},
+    {"id": "ddp_2gpu_qlora", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2, ("peft", "enabled"): True,
+     ("peft", "type"): "qlora", ("quantization", "enabled"): True, ("quantization", "bits"): 4},
+    {"id": "fsdp_2gpu_mixed_precision", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
+     ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16"},
+    {"id": "ddp_2gpu_save_resume", "min_gpus": 2, "phases": [
+        {"strategy": "ddp", "num_gpus": 2, "save": True},
+        {"strategy": "ddp", "num_gpus": 2, ("save_load", "resume"): True}]},
+    {"id": "fsdp_2gpu_save_resume", "min_gpus": 2, "phases": [
+        {"strategy": "fsdp", "num_gpus": 2, "save": True},
+        {"strategy": "fsdp", "num_gpus": 2, ("save_load", "resume"): True}]},
+    {"id": "fsdp_4gpu", "min_gpus": 4, "strategy": "fsdp", "num_gpus": 4},
+    # Post-training (algorithm:) through train.py.
+    {"id": "post_sft_solo", "strategy": "solo", "algorithm": _algo("sft"), "data": _SFT_ROWS},
+    {"id": "post_dpo_solo_lora", "strategy": "solo", "algorithm": _algo("dpo"), "data": _PREF_ROWS,
+     ("peft", "enabled"): True},
+    {"id": "post_dpo_ddp_qlora", "strategy": "ddp", "algorithm": _algo("dpo", dpo_loss="ipo"),
+     "data": _PREF_ROWS, ("peft", "enabled"): True, ("peft", "type"): "qlora",
+     ("quantization", "enabled"): True, ("quantization", "bits"): 4},
+    {"id": "post_simpo_fsdp_lora", "strategy": "fsdp", "algorithm": _algo("simpo"), "data": _PREF_ROWS,
+     ("peft", "enabled"): True},
+    {"id": "post_orpo_fsdp", "strategy": "fsdp", "algorithm": _algo("orpo"), "data": _PREF_ROWS},
+    {"id": "post_sft_ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2,
+     "algorithm": _algo("sft"), "data": _SFT_ROWS},
+    {"id": "post_dpo_ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2,
+     "algorithm": _algo("dpo"), "data": _PREF_ROWS},
+    {"id": "post_dpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
+     "algorithm": _algo("dpo"), "data": _PREF_ROWS, ("peft", "enabled"): True},
 ]
 
 # ── Grid expansion ────────────────────────────────────────────────────────────

@@ -5,7 +5,8 @@ Default suite (fast, in-process):
     * the 5D model loaded from tiny random Llama / Qwen2 / Mistral checkpoints gives
       the SAME logits as the Hugging Face model, and export_hf round-trips
 
-`python -m pytest -m dist` (multi-process on CPU with gloo, a few minutes):
+`python -m pytest -m dist` (multi-process on CPU with gloo, a few minutes; with
+OMNI_DIST_DEVICE=cuda on GPUs over NCCL, see tests/dist_device.py):
     * every layout (DP, ZeRO-1, TP, SP, CP, PP 1F1B/AFAB, EP, and mixes up to
       8 processes) reproduces the 1-process run: losses, global grad norm AND
       every parameter's gradient. Comparing gradients matters: AdamW cancels a
@@ -32,6 +33,7 @@ WORKER = os.path.join(ROOT, "tests", "dist5d_worker.py")
 sys.path.insert(0, ROOT)
 
 from utils import build_args  # noqa: E402
+from tests.dist_device import dist_env, require_ranks  # noqa: E402
 
 STEPS = 3
 BATCH = 2          # micro-batch size
@@ -188,13 +190,14 @@ def test_hf_export_roundtrip(tiny_models, single_process_group, tmp_path):
 
 # ------------------------------------------------------ multi-process layouts
 def _run(cfg, nproc, tmp, tag, steps=STEPS, check=True):
+    require_ranks(nproc)
     path = os.path.join(tmp, f"{tag}.yaml")
     with open(path, "w") as f:
         yaml.safe_dump(cfg, f)
     out = os.path.join(tmp, tag)
     cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(nproc),
            "--master_port", str(random.randint(20000, 29999)), WORKER, path, out, str(steps)]
-    env = dict(os.environ, OMP_NUM_THREADS="1", CUDA_VISIBLE_DEVICES="", PYTHONPATH=ROOT)
+    env = dist_env(PYTHONPATH=ROOT)
     res = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
     if check and res.returncode != 0:
         raise AssertionError(f"{tag} failed:\n{res.stdout[-2000:]}\n{res.stderr[-4000:]}")
@@ -271,6 +274,7 @@ def refs(tmp_path_factory):
 @pytest.mark.dist
 @pytest.mark.parametrize("name,nproc,par", DENSE, ids=[c[0] for c in DENSE])
 def test_dense_layout(refs, tmp_path, name, nproc, par):
+    require_ranks(nproc)  # before the reference run, which is wasted otherwise
     ref = refs("dense", make_cfg())
     _compare(ref, _run(make_cfg(par=par, nproc=nproc), nproc, str(tmp_path), name), tol=1e-4)
 
@@ -278,6 +282,7 @@ def test_dense_layout(refs, tmp_path, name, nproc, par):
 @pytest.mark.dist
 @pytest.mark.parametrize("name,nproc,par", MOE, ids=[c[0] for c in MOE])
 def test_moe_layout(refs, tmp_path, name, nproc, par):
+    require_ranks(nproc)
     ref = refs("moe", make_cfg(moe=True))
     _compare(ref, _run(make_cfg(par=par, moe=True, nproc=nproc), nproc, str(tmp_path), name), tol=1e-4)
 
@@ -285,6 +290,7 @@ def test_moe_layout(refs, tmp_path, name, nproc, par):
 @pytest.mark.dist
 @pytest.mark.parametrize("kind,name,nproc,par", HF, ids=[f"{c[0]}_{c[1]}" for c in HF])
 def test_hf_layout(refs, tiny_models, tmp_path, kind, name, nproc, par):
+    require_ranks(nproc)
     base = dict(model_type="llm", model_name=tiny_models[kind])
     ref = refs(kind, make_cfg(**base))
     _compare(ref, _run(make_cfg(par=par, nproc=nproc, **base), nproc, str(tmp_path), name), tol=1e-4)
@@ -292,6 +298,7 @@ def test_hf_layout(refs, tiny_models, tmp_path, kind, name, nproc, par):
 
 @pytest.mark.dist
 def test_gradient_checkpointing_matches(refs, tmp_path):
+    require_ranks(4)
     ref = refs("dense", make_cfg())
     cfg = make_cfg(par={"cp": 2, "tp": 2, "sp": True}, nproc=4, gradient_checkpointing=True)
     _compare(ref, _run(cfg, 4, str(tmp_path), "ckpt"), tol=1e-4)
@@ -299,6 +306,7 @@ def test_gradient_checkpointing_matches(refs, tmp_path):
 
 @pytest.mark.dist
 def test_bf16_autocast_close(refs, tmp_path):
+    require_ranks(4)
     ref = refs("dense_bf16", make_cfg(mixed_precision=True))
     m, _ = _run(make_cfg(par={"tp": 2, "sp": True, "pp": 2}, nproc=4, mixed_precision=True), 4,
                 str(tmp_path), "bf16")
@@ -321,7 +329,8 @@ def test_save_resume_export(tiny_models, tmp_path):
         path = str(tmp_path / f"{tag}.yaml")
         with open(path, "w") as f:
             yaml.safe_dump(c, f)
-        env = dict(os.environ, OMP_NUM_THREADS="1", CUDA_VISIBLE_DEVICES="", CONFIG_PATH=path)
+        require_ranks(nproc)
+        env = dist_env(CONFIG_PATH=path)
         cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(nproc),
                "--master_port", str(random.randint(20000, 29999)), "train.py"]
         return subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)

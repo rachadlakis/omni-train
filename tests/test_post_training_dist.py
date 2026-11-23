@@ -16,6 +16,8 @@ import sys
 import pytest
 import torch
 
+from tests.dist_device import ON_GPU, dist_env, require_ranks
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(ROOT, "tests", "post_training_dist_worker.py")
 
@@ -27,9 +29,10 @@ CASES = [
 
 def _run(tmp_path, nproc, strategy, lora, algo):
     out = str(tmp_path / f"{strategy}_{lora}_{algo}_{nproc}")
-    env = dict(os.environ, OMP_NUM_THREADS="1", PYTHONPATH=ROOT)
-    if strategy == "ddp":
-        env["CUDA_VISIBLE_DEVICES"] = ""
+    if strategy == "fsdp":  # FSDP2 always needs CUDA
+        env = dict(os.environ, OMP_NUM_THREADS="1", PYTHONPATH=ROOT)
+    else:
+        env = dist_env(PYTHONPATH=ROOT)
     cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(nproc),
            "--master_port", str(random.randint(20000, 29999)), WORKER, strategy, str(lora), algo, out]
     res = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
@@ -42,12 +45,16 @@ def _run(tmp_path, nproc, strategy, lora, algo):
 def test_matches_single_process(tmp_path, strategy, lora, algo):
     if strategy == "fsdp" and torch.cuda.device_count() < 2:
         pytest.skip("FSDP2 needs CUDA (no CPU support in torch 2.6) and one GPU per rank: needs >= 2 GPUs")
+    require_ranks(2)  # checked before the 1-process reference run
+    cuda = strategy == "fsdp" or ON_GPU
+    # GPU reductions are not bitwise reproducible; a scale bug is still off by >= 2x.
+    rtol, atol = (1e-3, 1e-5) if cuda else (1e-4, 1e-6)
     ref = _run(tmp_path, 1, strategy, lora, algo)
     got = _run(tmp_path, 2, strategy, lora, algo)
-    assert got["losses"] == pytest.approx(ref["losses"], rel=1e-5, abs=1e-6)
+    assert got["losses"] == pytest.approx(ref["losses"], rel=rtol / 10, abs=atol)
     assert set(got["grads"]) == set(ref["grads"]) and ref["grads"]
     if lora:
         assert all("lora_" in n for n in ref["grads"])
     for name, g in ref["grads"].items():
         assert g.abs().sum() > 0, f"{name}: zero gradient, the test would prove nothing"
-        torch.testing.assert_close(got["grads"][name], g, rtol=1e-4, atol=1e-6, msg=name)
+        torch.testing.assert_close(got["grads"][name], g, rtol=rtol, atol=atol, msg=name)
