@@ -34,9 +34,11 @@ from pydantic import BaseModel
 try:
     from .queue import QueueManager, JobStatus, find_free_port, summarize_metrics
     from .config_adapter import adapt_ui_config_to_mini, validate_mini_config
+    from . import launchers
 except ImportError:
     from ui.queue import QueueManager, JobStatus, find_free_port, summarize_metrics
     from ui.config_adapter import adapt_ui_config_to_mini, validate_mini_config
+    from ui import launchers
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -1017,12 +1019,47 @@ async def catalog():
 # Routes: Validation
 # ---------------------------------------------------------------------------
 
+class LaunchPayload(BaseModel):
+    config: dict
+    target: str = "local"            # local | remote | slurm
+    hardware: Optional[dict] = None  # nodes, gpus_per_node; remote: host, port; slurm: partition, time, cpus, mem
+    file: str = "configs/my_run.yaml"
+    name: Optional[str] = None
+
+
+@app.post("/api/launch/commands")
+def api_launch_commands(payload: LaunchPayload):
+    """The exact commands for a run on this machine, on other machines (torchrun, no scheduler) or on SLURM."""
+    try:
+        mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+        return launchers.launch_commands(mini_cfg, payload.target, payload.hardware, payload.file)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/slurm/status")
+def api_slurm_status():
+    """Whether a SLURM controller answers (not merely whether sbatch is installed)."""
+    return launchers.slurm_status()
+
+
+@app.post("/api/slurm/submit")
+def api_slurm_submit(payload: LaunchPayload):
+    """Submit a run with sbatch. Refused when no SLURM controller answers."""
+    mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+    try:
+        validate_mini_config(mini_cfg, PROJECT_ROOT)
+        return launchers.submit_slurm(mini_cfg, payload.hardware, PROJECT_ROOT, UI_DIR / "runs" / "slurm", payload.name or "")
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
 class YamlPayload(BaseModel):
     yaml: str
 
 
 @app.post("/api/config/render")
-async def render_config(payload: ConfigPayload):
+def render_config(payload: ConfigPayload):
     """The full training YAML (config.yaml schema) this config launches with."""
     mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
     for key in ("launch_mode", "slurm"):
@@ -1043,7 +1080,7 @@ async def parse_config(payload: YamlPayload):
 
 
 @app.post("/api/config/validate")
-async def validate_config(payload: ConfigPayload):
+def validate_config(payload: ConfigPayload):
     """Validate a config dict against the schema."""
     try:
         mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
@@ -1079,8 +1116,12 @@ async def start_training(payload: ConfigPayload):
             validate_mini_config(mini_cfg, PROJECT_ROOT)
         except Exception as e:
             raise HTTPException(400, f"Invalid training config: {e}")
-        with open(tmp_config, "w") as f:
-            yaml.dump(mini_cfg, f, default_flow_style=False)
+        if str(mini_cfg.get("launch_mode", "")).lower() == "slurm":
+            # a SLURM job reads its config when it starts: a shared file could hold a later run's config by then
+            tmp_config = launchers.write_slurm_config(mini_cfg, UI_DIR / "runs" / "slurm")
+        else:
+            with open(tmp_config, "w") as f:
+                yaml.dump(mini_cfg, f, default_flow_style=False)
 
         state.reset()
         state.config = mini_cfg
@@ -1273,7 +1314,7 @@ async def queue_submit(payload: QueueSubmitPayload):
         raise HTTPException(
             400,
             f"This machine has {total} GPU(s) but the run asks for {requested_gpus}. Lower num_gpus, "
-            f"or launch it on a cluster (python scripts/launch_slurm.py --config <yaml>).",
+            f"or pick other machines (torchrun) or a SLURM cluster as the place it runs.",
         )
 
     # Calculate estimated training time

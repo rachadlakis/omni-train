@@ -588,3 +588,10 @@ input:disabled { opacity: .5; }
   table.runs td[data-l="Goal"], table.runs td[data-l="Strategy"], table.runs td[data-l="Duration"], table.runs td[data-l="Created"] { display: none; }
   table.runs td[data-l="Result"] { grid-column: 2 / -1; min-width: 0; }
 }
+
+/* ---------- where it runs ---------- */
+.fixed { display: flex; align-items: center; min-height: 40px; color: var(--ink-2); font-size: .875rem; }
+.cmd + .cmd { margin-top: 14px; }
+.cmd-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; font-size: .84rem; font-weight: 500; }
+.cmd-notes { margin: 12px 0 0; padding-left: 18px; color: var(--ink-2); font-size: .82rem; display: grid; gap: 6px; max-width: 80ch; }
+.step-section h3 + .segmented { margin-top: 8px; }

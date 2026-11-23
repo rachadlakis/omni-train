@@ -316,7 +316,8 @@ large models; for most fine-tuning, `fsdp` + LoRA is the recommended path.
 
 ## Web UI
 
-The console plans, launches and monitors runs on this machine's GPUs (or submits them to SLURM):
+The console plans, launches and monitors runs on this machine's GPUs. It also gives you the commands for other
+machines (plain `torchrun`, no scheduler) and for SLURM clusters, and submits to SLURM when a controller answers:
 
 ```bash
 bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)

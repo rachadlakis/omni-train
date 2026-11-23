@@ -823,10 +823,24 @@ function wizardState() {
   return {
     step: (draft && draft.step) || 0,
     cfg,
-    ui: deepMerge({ name: '', target: 'local', slurm: { nodes: 2, gpus_per_node: 8, partition: 'gpu', time: '24:00:00', gpu: 'h100' }, algo: 'dpo' }, (draft && draft.ui) || {}),
+    ui: deepMerge({ name: '', target: 'local', hw: defaultHw(), algo: 'dpo' }, draftUi(draft)),
     plan: null, planSeq: 0, spec: null, specFor: null, validation: null, yaml: null, editingYaml: false,
   };
 }
+
+function defaultHw() {
+  return { gpu: 'h100', nodes: 1, gpus_per_node: 1, host: '', port: 29500, partition: 'gpu', time: '24:00:00', cpus: 8, mem: '64G' };
+}
+/** Stored drafts from before "Other machines" kept their hardware under `slurm`. */
+function draftUi(draft) {
+  const ui = clone((draft && draft.ui) || {});
+  if (ui.slurm) { ui.hw = { ...ui.slurm, ...(ui.hw || {}) }; delete ui.slurm; }
+  return ui;
+}
+/** Machines and GPUs per machine for a GPU count, as a starting point the user can change. */
+function hwFor(gpus) { return gpus <= 8 ? { nodes: 1, gpus_per_node: gpus } : { nodes: Math.ceil(gpus / 8), gpus_per_node: 8 }; }
+const isLocal = () => W.ui.target === 'local';
+const gpusHere = () => (W.cfg.strategy === 'solo' ? 1 : +W.ui.hw.nodes * +W.ui.hw.gpus_per_node || 1);
 
 function saveDraft() { store.set('omni-draft', { cfg: W.cfg, ui: W.ui, step: W.step }); }
 
@@ -909,7 +923,7 @@ function normalise() {
   const c = W.cfg;
   const avail = strategyAvailability();
   if (avail[c.strategy]) c.strategy = c.num_gpus > 1 && !avail.fsdp ? 'fsdp' : (c.num_gpus > 1 ? 'ddp' : 'solo');
-  if (W.ui.target === 'slurm') c.num_gpus = Math.max(1, (+W.ui.slurm.nodes || 1) * (+W.ui.slurm.gpus_per_node || 1));
+  if (!isLocal()) c.num_gpus = gpusHere();
   if (c.model_type === 'custom_transformer') { setMethod(c, 'full'); c.training.max_length = +c.custom_transformer_args.max_seq_len; }
   if (!PEFT_TYPES.has(c.model_type)) setMethod(c, 'full');
   if (!QLORA_TYPES.has(c.model_type) && c.quantization.enabled) setMethod(c, 'lora');
@@ -922,7 +936,7 @@ function drawStep() {
   panel.innerHTML = `<div class="step-body">${body}
     <div class="step-nav">
       <button class="btn" type="button" id="step-back" ${W.step === 0 ? 'disabled' : ''}>Back</button>
-      ${W.step < STEPS.length - 1 ? `<button class="btn primary" type="button" id="step-next">Continue to ${STEPS[W.step + 1].toLowerCase()}</button>` : `<button class="btn primary" type="button" id="launch">${W.ui.target === 'slurm' ? 'Submit to SLURM' : 'Launch run'}</button>`}
+      ${W.step < STEPS.length - 1 ? `<button class="btn primary" type="button" id="step-next">Continue to ${STEPS[W.step + 1].toLowerCase()}</button>` : `<button class="btn primary" type="button" id="launch">${launchLabel()}</button>`}
     </div></div>`;
   $('#step-back').onclick = () => goStep(W.step - 1);
   const next = $('#step-next');
@@ -931,6 +945,7 @@ function drawStep() {
   if (W.step === 5) loadReview();
 }
 
+let nameTimer = null;
 function bindStep(panel) {
   const onInput = (e) => {
     const el = e.target;
@@ -943,6 +958,10 @@ function bindStep(panel) {
     el.classList.remove('invalid');
     if (el.dataset.bind.startsWith('ui.')) setPath(W, el.dataset.bind, v); else setPath(W.cfg, el.dataset.bind, v);
     if (e.type === 'input' && el.tagName === 'SELECT') return;
+    if (el.dataset.bind === 'ui.name') {                 // only names the file: the config and its YAML are unchanged
+      saveDraft(); clearTimeout(nameTimer); nameTimer = setTimeout(() => { const f = $('#run-file'); if (f) f.textContent = runFile(); loadCommands(); }, 300);
+      return;
+    }
     onCfgChange(el.hasAttribute('data-rerender') && e.type === 'change');
     if (el.dataset.bind === 'model_name') inspectModelSoon();
   };
@@ -1087,7 +1106,9 @@ async function applyTemplate(name) {
     const t = await api(`/api/configs/${encodeURIComponent(name)}`);
     W.cfg = loadConfig(t.config);
     W.ui.name = name.replace(/_/g, '-');
-    W.ui.target = 'local';
+    const need = W.cfg.strategy === 'solo' ? 1 : +W.cfg.num_gpus || 1;
+    W.ui.target = need <= W.local.gpus_per_node ? 'local' : 'remote';
+    if (!isLocal()) Object.assign(W.ui.hw, hwFor(need));
     toast(`Loaded ${name}.yaml`);
     onCfgChange(true);
   } catch (e) { toast(e.message, 'error'); }
@@ -1245,11 +1266,31 @@ function stepData() {
 // Step 4: compute
 // ---------------------------------------------------------------------------
 
+function uiField(label, path, value, { type = 'str', hint = '', placeholder = '', rerender = false } = {}) {
+  const id = `f-${path.replace(/\./g, '-')}`;
+  return `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type === 'int' ? 'number' : 'text'}" ${type === 'int' ? 'min="1"' : ''} data-bind="${path}" data-type="${type}" value="${esc(value)}" placeholder="${esc(placeholder)}" ${rerender ? 'data-rerender' : ''}>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+}
+function uiSelect(label, path, options, value) {
+  const id = `f-${path.replace(/\./g, '-')}`;
+  return `<div class="field"><label for="${id}">${label}</label><select id="${id}" data-bind="${path}" data-type="str" data-rerender>${options.map(([v, t]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`;
+}
+async function loadSlurm() {
+  const here = stillHere();
+  try { S.slurm = await api('/api/slurm/status'); } catch (e) { S.slurm = { available: false, reason: e.message, partitions: [] }; }
+  if (!here() || !W) return;
+  if (S.slurm.partitions.length && !S.slurm.partitions.includes(W.ui.hw.partition)) { W.ui.hw.partition = S.slurm.partitions[0]; saveDraft(); }
+  if (W.ui.target === 'slurm' && W.step >= 3) drawStep();
+}
+function launchLabel() {
+  if (isLocal()) return 'Launch run';
+  return W.ui.target === 'slurm' && S.slurm && S.slurm.available ? 'Submit to SLURM' : 'Copy launch command';
+}
+
 function stepCompute() {
   const c = W.cfg;
   const avail = strategyAvailability();
   const local = W.local;
-  const isSlurm = W.ui.target === 'slurm';
+  const target = W.ui.target, hw = W.ui.hw, slurm = S.slurm || { available: false, reason: 'Checking SLURM…', partitions: [] };
   const names = { solo: 'Single GPU', ddp: 'DDP', fsdp: 'FSDP', '5d': '5D parallel' };
   const desc = {
     solo: 'One process, one GPU.',
@@ -1260,11 +1301,18 @@ function stepCompute() {
   setTimeout(() => {
     $$('.choice[data-strategy]').forEach((b) => { b.onclick = () => {
       c.strategy = b.dataset.strategy;
-      if (c.strategy !== 'solo' && c.num_gpus < 2 && !isSlurm) c.num_gpus = Math.max(1, Math.min(2, local.gpus_per_node));
+      if (c.strategy !== 'solo' && c.num_gpus < 2 && isLocal()) c.num_gpus = Math.max(1, Math.min(2, local.gpus_per_node));
       onCfgChange(true);
     }; });
-    const seg = $('[data-seg="target"]');
-    seg.onclick = (e) => { const b = e.target.closest('button'); if (b) { W.ui.target = b.dataset.val; if (b.dataset.val === 'local') c.num_gpus = Math.min(c.num_gpus, local.gpus_per_node); onCfgChange(true); } };
+    $('[data-seg="target"]').onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b || b.dataset.val === W.ui.target) return;
+      if (isLocal() && c.num_gpus > 1) Object.assign(W.ui.hw, hwFor(+c.num_gpus));
+      W.ui.target = b.dataset.val;
+      if (isLocal()) c.num_gpus = Math.max(1, Math.min(c.num_gpus, local.gpus_per_node));
+      onCfgChange(true);
+    };
+    if (target === 'slurm' && !S.slurm) loadSlurm();
   });
   const p = c.parallelism;
   const five = c.strategy === '5d' ? fiveDErrors(c) : null;
@@ -1272,16 +1320,23 @@ function stepCompute() {
   return `
     <section class="step-section">
       <h3>Where it runs</h3>
-      <p>${local.detected ? `This machine has ${local.gpus_per_node} × ${esc(local.gpu_name)} (${fmt.gb(local.gpu_mem_gb)}).` : 'No CUDA GPU was detected on this machine.'} Runs on this machine go through the job queue.</p>
-      ${segmented('target', [['local', 'This machine'], ['slurm', 'SLURM cluster']], W.ui.target)}
-      ${isSlurm ? `<div class="grid" style="margin-top:16px">
-        <div class="field"><label for="f-ui-slurm-gpu">GPU type</label><select id="f-ui-slurm-gpu" data-bind="ui.slurm.gpu" data-type="str" data-rerender>
-          ${gpuOpts.map(([v, t]) => `<option value="${v}" ${v === W.ui.slurm.gpu ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
-        <div class="field"><label for="f-ui-nodes">Nodes</label><input id="f-ui-nodes" type="number" min="1" data-bind="ui.slurm.nodes" data-type="int" value="${W.ui.slurm.nodes}" data-rerender></div>
-        <div class="field"><label for="f-ui-gpn">GPUs per node</label><input id="f-ui-gpn" type="number" min="1" data-bind="ui.slurm.gpus_per_node" data-type="int" value="${W.ui.slurm.gpus_per_node}" data-rerender></div>
-        <div class="field"><label for="f-ui-part">Partition</label><input id="f-ui-part" type="text" data-bind="ui.slurm.partition" data-type="str" value="${esc(W.ui.slurm.partition)}"></div>
-        <div class="field"><label for="f-ui-time">Time limit</label><input id="f-ui-time" type="text" data-bind="ui.slurm.time" data-type="str" value="${esc(W.ui.slurm.time)}" placeholder="HH:MM:SS"></div>
+      ${segmented('target', [['local', 'This machine'], ['remote', 'Other machines'], ['slurm', 'SLURM cluster']], target)}
+      <p style="margin-top:12px">${{
+        local: `${local.detected ? `${local.gpus_per_node} × ${esc(local.gpu_name)}, ${fmt.gb(local.gpu_mem_gb)} each.` : 'No CUDA GPU was detected.'} The run joins this machine's queue and you follow it here.`,
+        remote: 'Any GPU server, rented machine or group of machines, with no scheduler. You get the YAML and the exact commands; plain torchrun connects the machines.',
+        slurm: 'For clusters that schedule jobs with SLURM. If yours does not, use Other machines.' }[target]}</p>
+      ${target === 'local' && c.strategy !== 'solo' && +c.num_gpus > local.gpus_per_node ? `<div class="notice warn" style="margin-top:12px"><div>This run wants ${c.num_gpus} GPUs and this machine has ${local.gpus_per_node}. Lower the count, or pick Other machines.</div></div>` : ''}
+      ${target !== 'local' ? `<div class="grid" style="margin-top:4px">
+        ${uiSelect('GPU type', 'ui.hw.gpu', gpuOpts, hw.gpu)}
+        ${c.strategy === 'solo' ? '<div class="field"><span class="label">GPUs</span><div class="fixed">1, single-GPU run</div></div>' : `
+        ${uiField('Machines', 'ui.hw.nodes', hw.nodes, { type: 'int', rerender: true })}
+        ${uiField('GPUs per machine', 'ui.hw.gpus_per_node', hw.gpus_per_node, { type: 'int', rerender: true })}`}
+        ${target === 'remote' && c.strategy !== 'solo' && +hw.nodes > 1 ? `${uiField('First machine', 'ui.hw.host', hw.host, { placeholder: 'host name or IP', hint: 'All machines connect to it' })}${uiField('Port', 'ui.hw.port', hw.port, { type: 'int' })}` : ''}
+        ${target === 'slurm' ? `${slurm.partitions.length ? uiSelect('Partition', 'ui.hw.partition', slurm.partitions.map((x) => [x, x]), hw.partition) : uiField('Partition', 'ui.hw.partition', hw.partition)}
+        ${uiField('Time limit', 'ui.hw.time', hw.time, { placeholder: 'HH:MM:SS' })}${uiField('CPUs per machine', 'ui.hw.cpus', hw.cpus, { type: 'int' })}${uiField('Memory per machine', 'ui.hw.mem', hw.mem, { placeholder: '64G' })}` : ''}
       </div>` : ''}
+      ${target === 'slurm' && !slurm.available ? `<div class="notice warn" style="margin-top:14px"><div><strong>Cannot submit from here.</strong> ${esc(slurm.reason)} You still get the command to run on a login node.</div></div>` : ''}
+      ${target === 'remote' && c.strategy === 'fsdp' && +hw.nodes > 1 ? '<div class="notice" style="margin-top:14px"><div>FSDP across machines needs the checkpoint folder on storage all machines share.</div></div>' : ''}
     </section>
     <section class="step-section">
       <h3>Strategy</h3>
@@ -1292,8 +1347,8 @@ function stepCompute() {
           ${avail[s] ? `<span class="choice-meta">${esc(avail[s])}</span>` : ''}
         </button>`).join('')}</div>
       <div class="grid" style="margin-top:16px">
-        ${c.strategy !== 'solo' ? (isSlurm
-          ? `<div class="field"><span class="label">GPUs</span><div class="v num" style="padding-top:6px">${c.num_gpus} (${W.ui.slurm.nodes} × ${W.ui.slurm.gpus_per_node})</div></div>`
+        ${c.strategy !== 'solo' ? (target !== 'local'
+          ? `<div class="field"><span class="label">GPUs</span><div class="fixed">${c.num_gpus}, ${hw.nodes} × ${hw.gpus_per_node}</div></div>`
           : field('GPUs', 'num_gpus', { type: 'int', min: 1, hint: `Up to ${local.gpus_per_node} on this machine`, rerender: true })) : ''}
         ${check('Mixed precision (bf16)', 'dist_parameters.mixed_precision', 'fp32 weights, bf16 compute')}
       </div>
@@ -1317,7 +1372,7 @@ function stepCompute() {
       </div>
       ${five.errs.length ? `<div class="notice error" style="margin-top:14px"><div>${five.errs.map(esc).join('<br>')}</div></div>` : ''}
       ${five.warns.length ? `<div class="notice warn" style="margin-top:14px"><div>${five.warns.map(esc).join('<br>')}</div></div>` : ''}
-      ${!five.errs.length ? `<div style="margin-top:16px">${rankGrid({ ...p, dp: p.dp === 'auto' ? 'auto' : +p.dp }, +c.num_gpus, isSlurm ? +W.ui.slurm.gpus_per_node : Math.max(1, local.gpus_per_node))}</div>` : ''}
+      ${!five.errs.length ? `<div style="margin-top:16px">${rankGrid({ ...p, dp: p.dp === 'auto' ? 'auto' : +p.dp }, +c.num_gpus, target !== 'local' ? +hw.gpus_per_node : Math.max(1, local.gpus_per_node))}</div>` : ''}
     </section>` : ''}`;
 }
 
@@ -1377,16 +1432,11 @@ function stepTraining() {
 
 function stepReview() {
   const c = W.cfg;
-  const isSlurm = W.ui.target === 'slurm';
-  const file = `configs/${(W.ui.name || 'my_run').replace(/[^\w.-]+/g, '_')}.yaml`;
-  const cmds = isSlurm
-    ? `python scripts/launch_slurm.py --config ${file} \\\n    --nodes ${W.ui.slurm.nodes} --gpus ${W.ui.slurm.gpus_per_node} --partition ${W.ui.slurm.partition} --time ${W.ui.slurm.time}`
-    : `CONFIG_PATH=${file} bash scripts/launch.sh`;
-  const planCmd = `python planner.py --config ${file} --gpus ${isSlurm ? W.ui.slurm.gpus_per_node : W.local.gpus_per_node}${isSlurm ? ` --nodes ${W.ui.slurm.nodes} --gpu ${W.ui.slurm.gpu}` : ''}`;
+  const file = runFile();
+  if (W.ui.target === 'slurm' && !S.slurm) loadSlurm();
   setTimeout(() => {
     $('#launch').onclick = launch;
-    $('#dl-yaml').onclick = () => W.yaml && download(file.split('/').pop(), W.yaml);
-    $('#copy-cmd').onclick = () => copyText(`${cmds}\n`);
+    $('#dl-yaml').onclick = () => W.yaml && download(runFile().split('/').pop(), W.yaml);
     $('#edit-yaml').onclick = () => { W.editingYaml = !W.editingYaml; drawYaml(); };
   });
   return `
@@ -1400,7 +1450,7 @@ function stepReview() {
       <div class="model-card">${[
         ['Goal', ALGO_LABEL[c.algorithm.type]], ['Model', c.model_type === 'custom_transformer' ? 'custom transformer' : c.model_name.split('/').pop()],
         ['Method', { full: 'Full fine-tune', lora: 'LoRA', qlora: `QLoRA ${c.quantization.bits}-bit` }[methodOf(c)]],
-        ['Data', `${c.dataset.name} ${c.dataset.split}`], ['Strategy', strategyLabel(c)], ['GPUs', c.strategy === 'solo' ? 1 : c.num_gpus],
+        ['Data', `${c.dataset.name} ${c.dataset.split}`], ['Strategy', strategyLabel(c)], ['Runs on', { local: 'This machine', remote: +W.ui.hw.nodes > 1 && c.strategy !== 'solo' ? `${W.ui.hw.nodes} machines` : 'Another machine', slurm: 'SLURM' }[W.ui.target]], ['GPUs', c.strategy === 'solo' ? 1 : c.num_gpus],
         ['Batch', `${c.training.batch_size} × ${c.model_type === 'custom_transformer' ? c.custom_transformer_args.max_seq_len : c.training.max_length} tokens`],
         ['Learning rate', fmt.lr(c.training.learning_rate)],
       ].map(([k, v]) => `<div><div class="k">${k}</div><div class="v" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v)}">${esc(v)}</div></div>`).join('')}</div>
@@ -1416,10 +1466,9 @@ function stepReview() {
       <div id="yaml-box"><div class="skeleton"></div></div>
     </section>
     <section class="step-section">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
-        <h3>Run it from a terminal</h3><button class="btn small" id="copy-cmd">Copy command</button>
-      </div>
-      <pre class="code">${esc(`# save the YAML above as ${file}, then\n${cmds}\n\n# capacity check from the CLI\n${planCmd}`)}</pre>
+      <h3>${isLocal() ? 'Or run it from a terminal' : 'How to start it'}</h3>
+      <p>Save the YAML above as <code id="run-file">${esc(file)}</code>, then run:</p>
+      <div id="cmd-box"><div class="skeleton"></div></div>
     </section>`;
 }
 
@@ -1479,7 +1528,28 @@ function defaultRunName() {
   return `${c.algorithm.type}-${model}`.toLowerCase().replace(/[^\w.-]+/g, '-');
 }
 
+const runFile = () => `configs/${(W.ui.name || defaultRunName()).replace(/[^\w.-]+/g, '_')}.yaml`;
+
+async function loadCommands() {
+  const box = $('#cmd-box');
+  if (!box) return;
+  const here = stillHere();
+  try {
+    const r = await api('/api/launch/commands', { json: { config: exportConfig(W.cfg), target: W.ui.target, hardware: W.ui.hw, file: runFile() } });
+    if (!here() || !box.isConnected) return;
+    W.commands = r.commands;
+    box.innerHTML = r.commands.map((c, i) => `<div class="cmd"><div class="cmd-head"><span>${esc(c.title)}</span><button class="btn small" data-cmd="${i}">Copy</button></div><pre class="code">${esc(c.command)}</pre></div>`).join('')
+      + (r.notes.length ? `<ul class="cmd-notes">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '');
+    $$('[data-cmd]', box).forEach((b) => { b.onclick = () => copyText(r.commands[+b.dataset.cmd].command); });
+  } catch (e) {
+    if (!here() || !box.isConnected) return;
+    W.commands = null;
+    box.innerHTML = `<div class="notice error"><div>${esc(e.message)}</div></div>`;
+  }
+}
+
 async function loadReview() {
+  loadCommands();
   const cfg = exportConfig(W.cfg);
   const [val, ren] = await Promise.allSettled([
     api('/api/config/validate', { json: { config: cfg } }),
@@ -1523,12 +1593,13 @@ async function launch() {
   const cfg = exportConfig(W.cfg);
   const name = W.ui.name || defaultRunName();
   try {
-    if (W.ui.target === 'slurm') {
-      const s = W.ui.slurm;
-      await api('/api/train/start', { json: { config: { ...cfg, launch_mode: 'slurm', slurm: { nodes: s.nodes, gpus_per_node: s.gpus_per_node, partition: s.partition, time: s.time } } } });
-      let st = null;
-      for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 1000)); st = await api('/api/train/status'); if (st.status !== 'running') break; }
-      dialog({ title: st && st.status === 'finished' ? 'Submitted to SLURM' : 'SLURM submission', body: `<pre class="code">${esc((st ? st.logs : []).join('\n') || 'No output yet.')}</pre>` });
+    if (!isLocal() && launchLabel() === 'Copy launch command') {
+      if (!W.commands) throw new Error('Fix the hardware options first: see the message under "How to start it".');
+      await copyText(W.commands[0].command);
+    } else if (W.ui.target === 'slurm') {
+      const r = await api('/api/slurm/submit', { json: { config: cfg, hardware: W.ui.hw, name } });
+      dialog({ title: r.job_id ? `Submitted as SLURM job ${r.job_id}` : 'Submitted to SLURM',
+        body: `<p class="muted">Follow it with <code>squeue</code> and the files in <code>logs/</code>.</p><pre class="code">${esc(r.output)}</pre>` });
     } else {
       const r = await api('/api/queue/submit', { json: { config: cfg, name } });
       toast(r.status === 'running' ? 'Run started' : `Run queued at position ${r.queue_position}`);
@@ -1551,9 +1622,9 @@ function schedulePlan(delay = 450) {
 }
 
 function wizardCluster() {
-  if (W.ui.target === 'slurm') {
-    const g = S.catalog.gpus.find((x) => x.id === W.ui.slurm.gpu) || S.catalog.gpus[0];
-    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: +W.ui.slurm.gpus_per_node, nodes: +W.ui.slurm.nodes };
+  if (!isLocal()) {
+    const hw = W.ui.hw, g = S.catalog.gpus.find((x) => x.id === hw.gpu) || S.catalog.gpus[0];
+    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: Math.max(1, +hw.gpus_per_node || 1), nodes: Math.max(1, +hw.nodes || 1) };
   }
   return { gpu_mem_gb: W.local.gpu_mem_gb, gpu_name: W.local.gpu_name, gpus_per_node: W.local.gpus_per_node, nodes: 1 };
 }
@@ -1692,7 +1763,8 @@ async function renderPlanner(main) {
         }
         c.strategy = rec.strategy; c.num_gpus = rec.gpus;
         if (rec.parallelism) c.parallelism = { ...c.parallelism, ...rec.parallelism };
-        const ui = P.gpu === 'local' && P.nodes === 1 ? { target: 'local' } : { target: 'slurm', slurm: { nodes: P.nodes, gpus_per_node: P.gpus, gpu: P.gpu === 'local' ? 'h100' : P.gpu, partition: 'gpu', time: '24:00:00' } };
+        const here = P.gpu === 'local' && P.nodes === 1 && P.gpus <= local.gpus_per_node;
+        const ui = here ? { target: 'local' } : { target: 'remote', hw: { nodes: P.nodes, gpus_per_node: P.gpus, ...(P.gpu === 'local' ? {} : { gpu: P.gpu }) } };
         store.set('omni-draft', { cfg: c, ui, step: 1 });
         location.hash = '#/new';
       };
