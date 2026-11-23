@@ -382,6 +382,8 @@ SMOKE_EXTRA_CASES = [
 _PREF_ROWS = [{"prompt": f"Question: what is {a} plus {b}?\nAnswer:", "chosen": f" {a + b}.",
                "rejected": f" {a + b + 1}, I think."} for a in range(8) for b in range(4)]
 _SFT_ROWS = [{"prompt": r["prompt"], "completion": r["chosen"]} for r in _PREF_ROWS]
+_GRPO_ROWS = [{"prompt": r["prompt"], "answer": str(a + b)}
+              for r, (a, b) in zip(_PREF_ROWS, [(a, b) for a in range(8) for b in range(4)])]
 
 
 def _algo(type_, **kw):
@@ -420,6 +422,16 @@ SMOKE_EXTRA_CASES += [
      "algorithm": _algo("dpo"), "data": _PREF_ROWS},
     {"id": "post_dpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
      "algorithm": _algo("dpo"), "data": _PREF_ROWS, ("peft", "enabled"): True},
+    # GRPO: generation inside the step (prompt 16 + completion 16 = max_length 32).
+    {"id": "post_grpo_solo_lora_kl", "strategy": "solo", "data": _GRPO_ROWS, ("peft", "enabled"): True,
+     "algorithm": _algo("grpo", max_completion_length=16, beta=0.04, rewards={"accuracy": 1.0, "length": 0.1})},
+    {"id": "post_grpo_ddp_qlora", "strategy": "ddp", "data": _GRPO_ROWS, ("peft", "enabled"): True,
+     ("peft", "type"): "qlora", ("quantization", "enabled"): True, ("quantization", "bits"): 4,
+     "algorithm": _algo("grpo", max_completion_length=16)},
+    {"id": "post_grpo_fsdp_dapo", "strategy": "fsdp", "data": _GRPO_ROWS,
+     "algorithm": _algo("grpo", max_completion_length=16, loss_type="dapo", epsilon_high=0.28)},
+    {"id": "post_grpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
 ]
 
 # ── Grid expansion ────────────────────────────────────────────────────────────

@@ -968,8 +968,13 @@ ALGORITHM_CATALOG = [
      "data": "prompt + chosen + rejected", "status": "ready", "strategies": ["solo", "ddp", "fsdp"],
      "lr": {"full": 5e-6, "lora": 8e-5}, "beta": 0.1,
      "example_dataset": {"name": "trl-lib/ultrafeedback_binarized", "split": "train[:2000]"}},
-    {"id": "grpo", "stage": "rl", "title": "GRPO", "summary": "Online RL with group-relative advantages and verifiable rewards.",
-     "data": "prompts + reward function", "status": "planned", "strategies": []},
+    {"id": "grpo", "stage": "rl", "title": "GRPO",
+     "summary": "Online RL: sample a group of answers per prompt, score them with reward functions, "
+                "reinforce the ones that beat the group average. No reward model or value model.",
+     "data": "prompt | question | problem | messages, plus an optional reference answer (answer | solution | ...)",
+     "status": "ready", "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 2e-5}, "beta": 0.04,
+     "rewards": ["accuracy", "format", "exact_match", "contains", "length"],
+     "example_dataset": {"name": "openai/gsm8k", "subset": "main", "split": "train[:1000]"}},
     {"id": "ppo", "stage": "rl", "title": "PPO (RLHF)", "summary": "Online RL with a reward model and value head.",
      "data": "prompts + reward model", "status": "planned", "strategies": []},
 ]

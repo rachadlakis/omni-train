@@ -1,4 +1,4 @@
-"""Post-training (algorithm: sft | dpo | simpo | orpo): config rules, loss
+"""Post-training (algorithm: sft | dpo | simpo | orpo; GRPO: test_grpo.py): config rules, loss
 formulas, data masking, and objectives on a tiny random Llama. All offline, CPU.
 The multi-process gradient checks live in test_post_training_dist.py (-m dist)."""
 
@@ -40,7 +40,7 @@ class TestConfig:
     def test_default_max_prompt_length(self, cfg):
         assert build_args(_with_algo(cfg, type="dpo")).algo_max_prompt_length == 16  # max_length 32
 
-    @pytest.mark.parametrize("algo", ["grpo", "ppo"])
+    @pytest.mark.parametrize("algo", ["ppo"])
     def test_planned_algorithms_rejected(self, cfg, algo):
         with pytest.raises(ValueError, match="planned"):
             build_args(_with_algo(cfg, type=algo))

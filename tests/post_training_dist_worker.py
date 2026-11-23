@@ -1,10 +1,12 @@
 """Worker for tests/test_post_training_dist.py. Launched on CPU/gloo (ddp) or CUDA/nccl (fsdp):
 
     python -m torch.distributed.run --nproc_per_node N tests/post_training_dist_worker.py \
-        STRATEGY(ddp|fsdp) LORA(0|1) ALGO(dpo|simpo|orpo) OUT
+        STRATEGY(ddp|fsdp) LORA(0|1) ALGO(dpo|simpo|orpo|grpo|grpo_dapo|grpo_dr|grpo_kl) OUT
 
 Runs the real objective (reference precompute included) on a tiny Llama wrapped
 the way train.py wraps it, and writes OUT.pt on rank 0 with:
+(GRPO: sampling is random, so the rollout is built from FIXED completions and rewards
+with the objective's own build_rollout / attach_reference / loss; G = 2 per prompt.)
   grads: full (unsharded) gradient of every trainable parameter after step 1
   losses: global mean loss of steps 1 and 2 (step 2 runs after one SGD update,
           so it uses the cached reference with policy != reference)
@@ -21,6 +23,7 @@ import torch.distributed as dist  # noqa: E402
 from datasets import Dataset  # noqa: E402
 
 from post_training.data import collate_preference, make_loader, tokenize_preference  # noqa: E402
+from post_training.grpo import GRPOObjective, build_rollout, completion_mask_from  # noqa: E402
 from post_training.objectives import PreferenceObjective  # noqa: E402
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama  # noqa: E402
 
@@ -68,6 +71,9 @@ def main():
         fully_shard(model)
         named = model.named_parameters
 
+    if algo.startswith("grpo"):
+        return run_grpo(model, named, tok, algo, rank, world, device, out)
+
     args = Args()
     args.algorithm = algo
     obj = PreferenceObjective(args)
@@ -93,6 +99,66 @@ def main():
                     g = p.grad.full_tensor() if hasattr(p.grad, "full_tensor") else p.grad
                     grads[n] = g.detach().cpu().clone()
         opt.step()
+        global_loss = loss.detach().clone()
+        dist.all_reduce(global_loss)
+        losses.append(global_loss.item() / world)
+    if rank == 0:
+        torch.save({"grads": grads, "losses": losses}, out + ".pt")
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def run_grpo(model, named, tok, algo, rank, world, device, out):
+    import types
+    loss_type = {"grpo_dapo": "dapo", "grpo_dr": "dr_grpo"}.get(algo, "grpo")
+    args = types.SimpleNamespace(
+        algo_num_generations=2, algo_max_completion_length=8, algo_temperature=0.7, algo_top_p=1.0,
+        algo_top_k=0, algo_beta=0.1 if algo == "grpo_kl" else 0.0, algo_epsilon=0.2, algo_epsilon_high=0.28,
+        algo_loss_type=loss_type, algo_scale_rewards=True, algo_rewards=["contains"], strategy="ddp")
+    obj = GRPOObjective(args, tok)
+    obj.prepare(model)
+    # global batch: every PAIRS prompt with 2 completions (chosen, rejected) of DIFFERENT
+    # lengths (so the token normalisations differ), rewards 1 / 0.2 / ...
+    prompts, comps, rewards = [], [], []
+    eos = tok.eos_token_id
+    for i, p in enumerate(PAIRS):
+        pid = tok(tok.apply_chat_template([{"role": "user", "content": p["prompt"]}], tokenize=False,
+                                          add_generation_prompt=True), add_special_tokens=False)["input_ids"]
+        for j, ans in enumerate((p["chosen"], p["rejected"])):
+            prompts.append(pid)
+            comps.append(tok(ans, add_special_tokens=False)["input_ids"] + [eos])
+            rewards.append(1.0 if j == 0 else 0.2 * i)
+    per_rank = len(prompts) // world
+    sl = slice(rank * per_rank, (rank + 1) * per_rank)   # whole groups (G = 2) per rank
+    prompts, comps, rewards = prompts[sl], comps[sl], rewards[sl]
+    P = max(len(x) for x in prompts)
+    C = max(len(x) for x in comps)
+    pid = torch.tensor([[tok.pad_token_id] * (P - len(x)) + x for x in prompts], device=device)
+    pmask = torch.tensor([[0] * (P - len(x)) + [1] * len(x) for x in prompts], device=device)
+    cid = torch.tensor([x + [eos] * (C - len(x)) for x in comps], device=device)
+    cmask = completion_mask_from(cid, [eos])
+    roll = build_rollout(pid, pmask, cid, cmask, torch.tensor(rewards, device=device), 2)
+    if args.algo_beta > 0:
+        obj.attach_reference(model, roll)
+        with torch.no_grad():  # move the policy away from the reference so KL matters
+            for n, p in named():
+                if "lora_A" in n:
+                    p.mul_(1.5)
+    model.train()
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.SGD(params, lr=0.5)
+    losses, grads = [], {}
+    for step in range(2):
+        opt.zero_grad()
+        loss, _ = obj.loss(model, roll)
+        loss.backward()
+        if step == 0:
+            for n, p in named():
+                if p.requires_grad:
+                    g = p.grad.full_tensor() if hasattr(p.grad, "full_tensor") else p.grad
+                    grads[n] = g.detach().cpu().clone()
+        opt.step()
+        # the global loss of DAPO is the SUM of per-rank losses (each divides by global/world)
         global_loss = loss.detach().clone()
         dist.all_reduce(global_loss)
         losses.append(global_loss.item() / world)

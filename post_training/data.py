@@ -1,4 +1,4 @@
-"""Datasets for SFT and preference training (DPO / SimPO / ORPO).
+"""Datasets for SFT, preference training (DPO / SimPO / ORPO) and GRPO.
 
 Accepted dataset shapes
 -----------------------
@@ -13,6 +13,11 @@ Preference (one of):
   * ``chosen`` + ``rejected`` only, as full conversations whose last message
     is the answer (e.g. trl-lib/ultrafeedback_binarized), or as strings that
     share a prompt ending in "\\n\\nAssistant:" (Anthropic/hh-rlhf).
+GRPO (prompts only; the model writes the answers):
+  * a prompt from ``prompt`` (string or messages) | ``question`` | ``problem`` |
+    ``messages`` (trailing assistant turns dropped), and
+  * optionally a reference answer for the rewards from ``answer`` | ``solution`` |
+    ``ground_truth`` | ``target`` | ``final_answer`` (e.g. openai/gsm8k ``main``).
 
 With a chat template (instruct models) prompts are framed by the template;
 without one the text is concatenated as is (BOS + prompt + answer + EOS).
@@ -206,6 +211,56 @@ def collate_preference(rows, pad_id: int) -> dict:
 
 
 # ----------------------------------------------------------------------
+# GRPO prompts
+# ----------------------------------------------------------------------
+
+PROMPT_COLUMNS = ("prompt", "question", "problem")
+ANSWER_COLUMNS = ("answer", "solution", "ground_truth", "target", "final_answer")
+
+
+def split_grpo_row(row):
+    """(prompt as a string or message list, reference answer or None)."""
+    prompt = next((row[c] for c in PROMPT_COLUMNS if row.get(c) is not None), None)
+    if prompt is None and row.get("messages") is not None:
+        msgs = list(row["messages"])
+        while msgs and msgs[-1]["role"] == "assistant":
+            msgs.pop()
+        prompt = msgs or None
+    if prompt is None:
+        raise ValueError(f"GRPO row has no prompt: needs one of {PROMPT_COLUMNS} or messages (got {sorted(row)})")
+    answer = next((row[c] for c in ANSWER_COLUMNS if row.get(c) is not None), None)
+    return prompt, (None if answer is None else str(answer))
+
+
+def tokenize_grpo(row, tokenizer, max_prompt_length: int, system_prompt: str | None = None) -> dict:
+    prompt, answer = split_grpo_row(row)
+    if has_chat_template(tokenizer):
+        msgs = _as_messages(prompt, "user")
+        if system_prompt and not any(m["role"] == "system" for m in msgs):
+            msgs = [{"role": "system", "content": system_prompt}] + msgs
+        ids = _ids(tokenizer, _render(tokenizer, msgs, add_generation_prompt=True))
+    else:
+        if not isinstance(prompt, str):
+            raise ValueError("conversational (message-list) prompts need a tokenizer with a chat template")
+        text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        ids = _ids(tokenizer, text, special=True)
+    return {"prompt_ids": ids[-max_prompt_length:], "answer": answer}
+
+
+def collate_grpo(rows, pad_id: int) -> dict:
+    """Prompts LEFT-padded (generation appends on the right)."""
+    width = max(len(r["prompt_ids"]) for r in rows)
+    ids = torch.full((len(rows), width), pad_id, dtype=torch.long)
+    mask = torch.zeros((len(rows), width), dtype=torch.long)
+    for i, r in enumerate(rows):
+        n = len(r["prompt_ids"])
+        ids[i, width - n:] = torch.tensor(r["prompt_ids"])
+        mask[i, width - n:] = 1
+    return {"input_ids": ids, "attention_mask": mask, "answers": [r["answer"] for r in rows],
+            "idx": torch.tensor([r["idx"] for r in rows], dtype=torch.long)}
+
+
+# ----------------------------------------------------------------------
 # Loading
 # ----------------------------------------------------------------------
 
@@ -226,6 +281,11 @@ def build_dataset(raw, tokenizer, args):
         ds = raw.map(lambda r: tokenize_sft(r, tokenizer, args.max_length, args.algo_completion_only),
                      remove_columns=raw.column_names)
         return ds.filter(lambda r: any(t != IGNORE_INDEX for t in r["labels"][1:]))
+    if args.algorithm == "grpo":
+        ds = raw.map(lambda r: tokenize_grpo(r, tokenizer, args.algo_max_prompt_length, args.algo_system_prompt),
+                     remove_columns=raw.column_names)
+        ds = ds.filter(lambda r: len(r["prompt_ids"]) > 0)
+        return ds.map(lambda r, i: {"idx": i}, with_indices=True)
     ds = raw.map(lambda r: tokenize_preference(r, tokenizer, args.max_length, args.algo_max_prompt_length),
                  remove_columns=raw.column_names)
     ds = ds.filter(lambda r: len(r["chosen_ids"]) > 0 and len(r["rejected_ids"]) > 0)
@@ -236,6 +296,8 @@ def collate_fn_for(args, tokenizer):
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     if args.algorithm == "sft":
         return lambda rows: collate_sft(rows, pad)
+    if args.algorithm == "grpo":
+        return lambda rows: collate_grpo(rows, pad)
     return lambda rows: collate_preference(rows, pad)
 
 

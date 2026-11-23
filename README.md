@@ -15,7 +15,7 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 ## Highlights
 
 - **Four execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), `fsdp` (Fully Sharded Data Parallel), and `5d`: any mix of data, tensor (+sequence), context, pipeline and expert parallelism, set in YAML.
-- **Post-training** — SFT and preference optimisation (DPO, IPO, hinge, SimPO, ORPO), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA. GRPO and PPO are next.
+- **Post-training** — SFT, preference optimisation (DPO, IPO, hinge, SimPO, ORPO) and online RL with **GRPO** (verifiable rewards, DAPO / Dr. GRPO variants), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA. PPO is next.
 - **Parameter-efficient fine-tuning** — LoRA and QLoRA with 4-bit (NF4) / 8-bit quantization via `bitsandbytes`.
 - **Memory-efficient FSDP2** — parameter, gradient, and optimizer-state sharding with meta-device initialization to avoid CPU RAM spikes.
 - **Distributed checkpointing** — both DCP and DTensor APIs.
@@ -310,7 +310,7 @@ The console plans, launches and monitors runs on this machine's GPUs (or submits
 bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)
 ```
 
-- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO; GRPO and PPO are listed as planned), a model,
+- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO, or GRPO reinforcement learning; PPO is listed as planned), a model,
   data, a strategy (solo, DDP, FSDP or a 5D layout with a live rank map) and hyperparameters. A plan panel
   re-estimates memory as you edit and offers its recommended strategy in one click.
 - **Runs**: a queue with live progress, loss curves and logs; logs persist in `ui/runs/` across restarts.
@@ -423,7 +423,8 @@ omni-train/
 - [ ] `strategy: 5d`: LoRA/QLoRA, more architectures (Qwen3, Gemma, MoE checkpoints such as Mixtral),
       vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules
 - [x] `strategy: 5d`, SFT and preference optimisation in the web UI
-- [ ] GRPO / PPO (shown in the UI as planned)
+- [x] GRPO (online RL with reward functions), in the trainer and the web UI
+- [ ] PPO (reward model + value head)
 
 ---
 

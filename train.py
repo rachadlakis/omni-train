@@ -266,7 +266,7 @@ def main(args):
         if args.algorithm != "pretrain":
             from post_training.data import get_post_training_data
             from post_training.objectives import build_objective
-            objective = build_objective(args)
+            objective = build_objective(args, tokenizer)
             pt_dataset, pt_collate, dataloader = get_post_training_data(args, tokenizer, rank, world_size)
         else:
             dataloader = get_dataloader(
@@ -330,7 +330,7 @@ def main(args):
             return torch.autocast(device_type=device.type, dtype=amp_dtype) if use_autocast else nullcontext()
 
         if objective is not None and objective.prepare(model):
-            print_on_rank_0(rank, "Dropout disabled for preference training (noisy log-probs otherwise)", "🔇")
+            print_on_rank_0(rank, f"Dropout disabled for {args.algorithm.upper()} (noisy log-probs otherwise)", "🔇")
         if objective is not None and objective.needs_reference:
             print_banner_on_rank_0(rank, "REFERENCE LOG-PROBS")
             print_on_rank_0(rank, "Scoring every pair with the initial model (= the DPO reference); "

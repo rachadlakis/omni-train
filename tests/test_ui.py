@@ -81,10 +81,10 @@ def test_plan_endpoint_evaluates_selected_5d_layout(client):
     assert j["selected"]["strategy"] == "5d" and "EP2" in j["selected"]["label"]
 
 
-def test_catalog_lists_algorithms_and_rl_as_planned(client):
+def test_catalog_lists_algorithms_grpo_ready_ppo_planned(client):
     j = client.get("/api/catalog").json()
     status = {a["id"]: a["status"] for a in j["algorithms"]}
-    assert status["sft"] == status["dpo"] == "ready" and status["grpo"] == status["ppo"] == "planned"
+    assert status["sft"] == status["dpo"] == status["grpo"] == "ready" and status["ppo"] == "planned"
     assert any(m["five_d_ready"] for m in j["models"]) and j["gpus"]
 
 
@@ -160,3 +160,11 @@ def test_parse_metrics_downsamples():
     lines = [f"Epoch 1/1 [x] 1% | step {i}/5000 | loss: {5 - i / 5000:.4f} | avg: 1.0" for i in range(1, 5001)]
     m = parse_metrics(lines, max_points=500)
     assert len(m["points"]) <= 501 and m["points"][-1]["step"] == 5000
+
+
+def test_grpo_example_config_plans_and_validates(client):
+    cfg = yaml.safe_load(open("configs/llm_grpo_lora_single_gpu.yaml"))
+    assert client.post("/api/config/validate", json={"config": cfg}).json()["valid"]
+    j = client.post("/api/plan", json={"config": cfg, "cluster": {"gpu_mem_gb": 6, "gpus_per_node": 1, "gpu_name": "4050"}}).json()
+    assert j["workload"]["algorithm"] == "grpo" and j["workload"]["num_generations"] == 4
+    assert j["selected"]["fits"] and j["selected"]["perf"]["generation_seconds"] > 0

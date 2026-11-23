@@ -238,3 +238,35 @@ def test_cli_runs(capsys):
     P.main(["--model", "meta-llama/Llama-3.1-8B", "--gpus", "8", "--gpu", "h100", "--seq", "4096"])
     out = capsys.readouterr().out
     assert "FSDP x8" in out and "Recommended" in out
+
+
+def test_grpo_rows_and_sampling_phase():
+    qwen = P.PRESETS["qwen/qwen2.5-0.5b-instruct"]
+    w = P.Workload(algorithm="grpo", method="lora", batch_size=2, num_generations=8, seq_len=512, completion_len=320)
+    assert w.rows == 16
+    lay = P.Layout("solo", 1)
+    small = P.memory_per_gpu(qwen, P.Workload(algorithm="grpo", method="lora", batch_size=2, num_generations=2,
+                                              seq_len=512, completion_len=320), lay)
+    assert P.memory_per_gpu(qwen, w, lay)["activations"] > small["activations"]
+    c = P.Cluster(gpu_mem_gb=24, gpus_per_node=1, gpu_name="4090")
+    perf = P.throughput(qwen, w, lay, c)
+    assert perf["generation_seconds"] > 0
+    assert perf["step_seconds"] > perf["generation_seconds"]
+
+
+def test_grpo_fsdp_sampling_is_not_faster_than_ddp():
+    w = P.Workload(algorithm="grpo", method="lora", batch_size=2, seq_len=1024, completion_len=512)
+    c = P.Cluster(gpu_mem_gb=80, gpus_per_node=8, gpu_name="h100")
+    ddp = P.throughput(LLAMA_8B, w, P.Layout("ddp", 8, dp=8), c)
+    fsdp = P.throughput(LLAMA_8B, w, P.Layout("fsdp", 8, dp=8), c)
+    assert fsdp["generation_seconds"] >= ddp["generation_seconds"]
+
+
+def test_grpo_workload_from_config():
+    cfg = yaml.safe_load(open("configs/llm_grpo_lora_single_gpu.yaml"))
+    w = P.workload_from_config(cfg)
+    assert (w.algorithm, w.method, w.num_generations, w.completion_len) == ("grpo", "lora", 4, 320)
+    assert w.seq_len == 192 + 320 and w.rows == 8
+    r = P.plan(P.resolve_spec(cfg["model_name"]), w, P.Cluster(gpu_mem_gb=6, gpus_per_node=1, gpu_name="4050"))
+    assert r["verdict"] == "single_gpu" and any("GRPO" in n for n in r["notes"])
+    assert all(o["strategy"] != "5d" for o in r["options"])

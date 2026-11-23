@@ -15,6 +15,9 @@ The memory model follows how this repo trains (see CLAUDE.md, "Precision"):
   * activations are bf16 under mixed precision, fp32 otherwise; attention uses SDPA
     (no seq^2 score matrix); gradient checkpointing keeps one tensor per layer;
   * preference runs (DPO/SimPO/ORPO) forward chosen + rejected: 2 x batch_size rows;
+  * GRPO samples num_generations completions per prompt: batch_size x G rows, and its
+    peak is the larger of sampling (KV cache) and training; sampling time is added to
+    the step time (decoding is memory-bandwidth bound);
   * the loss upcasts logits to fp32, which dominates for large vocabularies.
 It is an estimate (typically within ~15% of the measured peak), not a guarantee.
 """
@@ -39,28 +42,28 @@ GATED_ARCHS = {"llama", "mistral", "mixtral", "qwen2", "qwen2_moe", "qwen3", "qw
                "gemma", "gemma2", "gemma3", "gemma3_text", "phi3", "olmo", "olmo2", "granite",
                "cohere", "deepseek_v2", "deepseek_v3", "smollm3"}
 
-# name -> (display, memory GB, dense bf16 tensor TFLOPS)
+# name -> (display, memory GB, dense bf16 tensor TFLOPS, memory bandwidth GB/s)
 GPU_CATALOG = {
-    "b200":    ("NVIDIA B200 192GB", 192, 2250),
-    "h200":    ("NVIDIA H200 141GB", 141, 989),
-    "h100":    ("NVIDIA H100 80GB", 80, 989),
-    "gh200":   ("NVIDIA GH200 96GB", 96, 989),
-    "a100-80": ("NVIDIA A100 80GB", 80, 312),
-    "a100":    ("NVIDIA A100 40GB", 40, 312),
-    "l40s":    ("NVIDIA L40S 48GB", 48, 362),
-    "a6000":   ("NVIDIA RTX A6000 48GB", 48, 155),
-    "a10g":    ("NVIDIA A10G 24GB", 24, 125),
-    "l4":      ("NVIDIA L4 24GB", 24, 121),
-    "4090":    ("NVIDIA RTX 4090 24GB", 24, 165),
-    "3090":    ("NVIDIA RTX 3090 24GB", 24, 71),
-    "v100":    ("NVIDIA V100 32GB", 32, 125),
-    "t4":      ("NVIDIA T4 16GB", 16, 65),
-    "4050":    ("NVIDIA RTX 4050 Laptop 6GB", 6, 25),
-    "mi300x":  ("AMD MI300X 192GB", 192, 1307),
+    "b200":    ("NVIDIA B200 192GB", 192, 2250, 8000),
+    "h200":    ("NVIDIA H200 141GB", 141, 989, 4800),
+    "h100":    ("NVIDIA H100 80GB", 80, 989, 3350),
+    "gh200":   ("NVIDIA GH200 96GB", 96, 989, 4000),
+    "a100-80": ("NVIDIA A100 80GB", 80, 312, 2039),
+    "a100":    ("NVIDIA A100 40GB", 40, 312, 1555),
+    "l40s":    ("NVIDIA L40S 48GB", 48, 362, 864),
+    "a6000":   ("NVIDIA RTX A6000 48GB", 48, 155, 768),
+    "a10g":    ("NVIDIA A10G 24GB", 24, 125, 600),
+    "l4":      ("NVIDIA L4 24GB", 24, 121, 300),
+    "4090":    ("NVIDIA RTX 4090 24GB", 24, 165, 1008),
+    "3090":    ("NVIDIA RTX 3090 24GB", 24, 71, 936),
+    "v100":    ("NVIDIA V100 32GB", 32, 125, 900),
+    "t4":      ("NVIDIA T4 16GB", 16, 65, 320),
+    "4050":    ("NVIDIA RTX 4050 Laptop 6GB", 6, 25, 192),
+    "mi300x":  ("AMD MI300X 192GB", 192, 1307, 5300),
 }
 
 
-def match_gpu(name: str) -> tuple[str, float, float] | None:
+def match_gpu(name: str) -> tuple[str, float, float, float] | None:
     """Map a device name ("NVIDIA H100 80GB HBM3", "a100-sxm4-40gb", "h100") to the catalog."""
     n = (name or "").lower().replace(" ", "")
     if not n:
@@ -157,9 +160,13 @@ class Workload:
     pp_schedule: str = "1f1b"
     num_samples: int | None = None
     epochs: int = 1
+    num_generations: int = 4      # grpo: completions per prompt
+    completion_len: int | None = None   # grpo: tokens generated per completion
 
     @property
     def rows(self) -> int:
+        if self.algorithm == "grpo":
+            return self.batch_size * max(2, self.num_generations)
         return self.batch_size * (2 if self.algorithm in PREFERENCE_ALGOS else 1)
 
 
@@ -181,6 +188,11 @@ class Cluster:
             return float(self.tflops)
         hit = match_gpu(self.gpu_name)
         return float(hit[2]) if hit else 100.0
+
+    @property
+    def bandwidth_gbs(self) -> float:
+        hit = match_gpu(self.gpu_name)
+        return float(hit[3]) if hit else 1000.0
 
     @property
     def usable_bytes(self) -> float:
@@ -419,6 +431,15 @@ def _activations(m: ModelSpec, w: Workload, lay: Layout) -> dict:
     # logits: bf16/fp32 output + the fp32 upcast and its gradient inside the loss
     if w.algorithm in PREFERENCE_ALGOS:
         logits = tokens * m.vocab * act_bytes + seq * m.vocab * 8     # sequence_logps: one row in fp32
+    elif w.algorithm == "grpo":
+        comp = min(seq, w.completion_len or seq // 2)                # logits_to_keep: completion only
+        logits = rows * comp * m.vocab * act_bytes + comp * m.vocab * 8
+        # sampling phase: KV cache of every sequence + one step of fp32 logits; the peak is
+        # whichever phase is larger, reported under "activations"
+        kv = rows * seq * m.layers * 2 * m.kv_heads * m.hd * act_bytes
+        sampling = kv + rows * m.vocab * 4 * 2
+        if sampling > acts + logits:
+            acts += sampling - (acts + logits)
     else:
         logits = tokens * m.vocab * (act_bytes + 8)
     return {"activations": acts, "logits": logits}
@@ -467,8 +488,21 @@ def throughput(m: ModelSpec, w: Workload, lay: Layout, c: Cluster) -> dict:
     step_s = tokens_per_step * flops_per_token / flops_per_s
     out = {"tokens_per_step": int(tokens_per_step), "step_seconds": round(step_s, 4),
            "tokens_per_second": round(tokens_per_step / step_s) if step_s else None, "mfu": round(mfu, 3)}
+    if w.algorithm == "grpo":
+        # decoding reads the (local) weights once per generated token: bandwidth bound
+        weight_bytes = P * (0.53 if w.method == "qlora" else 2)
+        comp = w.completion_len or w.seq_len // 2
+        gen_s = comp * weight_bytes / (c.bandwidth_gbs * 1e9 * 0.6)
+        if lay.strategy == "fsdp":
+            gen_s *= 2          # every decode step all-gathers the full weights layer by layer
+        elif lay.strategy == "5d":
+            gen_s /= lay.tp     # (5d does not run grpo; kept for completeness)
+        out["generation_seconds"] = round(gen_s, 4)
+        step_s += gen_s
+        out["step_seconds"] = round(step_s, 4)
+        out["tokens_per_second"] = round(tokens_per_step / step_s) if step_s else None
     if w.num_samples:
-        samples_per_step = w.batch_size * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)
+        samples_per_step = w.batch_size * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)  # prompts for grpo
         steps = math.ceil(w.num_samples / max(1, samples_per_step)) * max(1, w.epochs)
         out["total_steps"] = steps
         out["total_seconds"] = round(steps * step_s, 1)
@@ -675,6 +709,10 @@ def plan(m: ModelSpec, w: Workload, c: Cluster) -> dict:
         notes.append(f"{w.algorithm.upper()} forwards chosen + rejected together: {w.rows} sequences per GPU per step.")
     if w.algorithm == "dpo":
         notes.append("DPO reference log-probs are precomputed once, so no second model is held in memory.")
+    if w.algorithm == "grpo":
+        notes.append(f"GRPO samples {max(2, w.num_generations)} completions per prompt ({w.rows} sequences per GPU "
+                     "per step); the step time includes sampling, and the KL reference (LoRA) reuses the "
+                     "model with adapters disabled.")
     if rec.layout.strategy == "5d" and rec.layout.tp > 1:
         notes.append("Keep TP inside a node (NVLink); PP and DP can cross nodes.")
 
@@ -735,6 +773,12 @@ def workload_from_config(cfg: dict) -> Workload:
     seq = int(tr.get("max_length", 512))
     if model_type == "custom_transformer":
         seq = int((cfg.get("custom_transformer_args") or {}).get("max_seq_len", seq))
+    algo_type = str(algo.get("type", "pretrain")).lower()
+    completion = None
+    if algo_type == "grpo":
+        prompt_len = int(algo.get("max_prompt_length") or seq // 2)
+        completion = int(algo.get("max_completion_length") or seq - prompt_len)
+        seq = min(seq, prompt_len + completion)
     return Workload(
         method=method, algorithm=str(algo.get("type", "pretrain")).lower(), model_type=model_type,
         batch_size=int(tr.get("batch_size", 1)), seq_len=seq,
@@ -743,6 +787,7 @@ def workload_from_config(cfg: dict) -> Workload:
         lora_r=int(peft.get("r", 16)), quant_bits=int(quant.get("bits", 4)),
         micro_batches=int(par.get("micro_batches", 1)), pp_schedule=str(par.get("pp_schedule", "1f1b")),
         epochs=int(tr.get("epochs", 1)),
+        num_generations=int(algo.get("num_generations", 4)), completion_len=completion,
     )
 
 
@@ -805,7 +850,8 @@ def main(argv=None) -> None:
     ap.add_argument("--model", help="HF model id (presets are known offline)")
     ap.add_argument("--params", type=float, help="parameter count in billions, if the model is unknown")
     ap.add_argument("--method", choices=["full", "lora", "qlora"])
-    ap.add_argument("--algorithm", choices=["pretrain", "sft", "dpo", "simpo", "orpo"])
+    ap.add_argument("--algorithm", choices=["pretrain", "sft", "dpo", "simpo", "orpo", "grpo"])
+    ap.add_argument("--generations", type=int, help="grpo: completions per prompt (default 4)")
     ap.add_argument("--batch", type=int)
     ap.add_argument("--seq", type=int)
     ap.add_argument("--no-ckpt", action="store_true", help="gradient checkpointing off")
@@ -827,6 +873,8 @@ def main(argv=None) -> None:
             setattr(w, attr, val)
     if a.no_ckpt:
         w.grad_ckpt = False
+    if a.generations:
+        w.num_generations = a.generations
     name = a.model or cfg.get("model_name") or ""
     if a.params:
         m = spec_from_params(int(a.params * 1e9), name)

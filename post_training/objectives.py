@@ -134,7 +134,12 @@ class PreferenceObjective:
         return losses.mean(), metrics
 
 
-def build_objective(args):
+def build_objective(args, tokenizer=None):
     if args.algorithm == "sft":
         return SFTObjective()
+    if args.algorithm == "grpo":
+        from .grpo import GRPOObjective
+        if tokenizer is None:
+            raise ValueError("grpo needs the tokenizer (to decode completions for the rewards)")
+        return GRPOObjective(args, tokenizer)
     return PreferenceObjective(args)
