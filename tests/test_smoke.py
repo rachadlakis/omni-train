@@ -418,6 +418,13 @@ SMOKE_EXTRA_CASES += [
      "algorithm": _algo("sft"), "data": _SFT_ROWS},
     {"id": "post_dpo_ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2,
      "algorithm": _algo("dpo"), "data": _PREF_ROWS},
+    # HF export (export.py): FSDP gathers the full state dict and rebuilds on rank 0.
+    {"id": "export_fsdp_full", "strategy": "fsdp", ("save_load", "export_hf"): True},
+    {"id": "export_fsdp_lora", "strategy": "fsdp", ("peft", "enabled"): True, ("save_load", "export_hf"): True},
+    {"id": "export_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
+     ("peft", "enabled"): True, ("save_load", "export_hf"): True},
+    {"id": "export_solo_qlora_adapter", "strategy": "solo", ("peft", "enabled"): True, ("peft", "type"): "qlora",
+     ("quantization", "enabled"): True, ("quantization", "bits"): 4, ("save_load", "export_hf"): True},
     {"id": "post_dpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
      "algorithm": _algo("dpo"), "data": _PREF_ROWS, ("peft", "enabled"): True},
 ]

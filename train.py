@@ -42,7 +42,8 @@ from distributed_utils import (
     apply_solo,
     apply_ddp,
     apply_fsdp,
-    save_checkpoint
+    save_checkpoint,
+    restore_optimizer_state,
 )
 import wandb
 
@@ -111,11 +112,17 @@ warnings.filterwarnings("ignore", message=".*inputs will be cast.*", category=Us
 # Main
 # ----------------------------------------------------------------------
 
+EXPERIMENTAL_MODEL_TYPES = {"seq2seq", "encoder", "vision", "yolo", "vlm"}
+
+
 def main(args):
     """Main training loop for distributed training. 
     Initializes distributed environment, loads model and data, and runs training epochs."""
     try:
         checkpointer = None
+        if args.model_type in EXPERIMENTAL_MODEL_TYPES and int(os.environ.get("RANK", "0")) == 0:
+            print(f"🧪  model_type '{args.model_type}' is experimental: it works, but has less test "
+                  "coverage than llm and no post-training support.", flush=True)
 
         ## 5D parallelism (DP, TP+SP, CP, PP, EP) has its own model and loop.
         if args.strategy == "5d":
@@ -257,8 +264,14 @@ def main(args):
             except Exception as e:
                 print_on_rank_0(rank, f"⚠️ Optimizer state incompatible (model changed?), starting fresh. Reason: {e}", "⚠️")
 
-        elif args.strategy == "ddp":
-            print_on_rank_0(rank, "Optimizer state will not be loaded since checkpointing is not implemented for DDP in this example.", "⚠️")    
+        elif args.strategy in ("solo", "ddp") and args.resume and args.resume_path:
+            status = restore_optimizer_state(optimizer, args, device)
+            if status == "restored":
+                print_on_rank_0(rank, "Optimizer state restored ✓ (LR schedule restarts from this config)", "♻️")
+            elif status == "absent":
+                print_on_rank_0(rank, "Checkpoint has no optimizer state (older format): AdamW starts fresh", "⚠️")
+            else:
+                print_on_rank_0(rank, "Optimizer state does not match the trainable parameters: AdamW starts fresh", "⚠️")
         
         ## Load the dataset and create the dataloader with DistributedSampler for sharding across GPUs
         print_banner_on_rank_0(rank, "PREPARING DATA")
@@ -281,6 +294,7 @@ def main(args):
                 model_type=args.model_type,
                 vocab_size=getattr(args, "custom_vocab_size", None),
                 custom_max_seq_len=getattr(args, "custom_max_seq_len", None),
+                text_field=getattr(args, "dataset_text_field", "text"),
             )
 
         if hasattr(dataloader, "__len__"):
@@ -476,6 +490,14 @@ def main(args):
                 args, 
                 checkpointer=checkpointer   # type: ignore
             )
+
+        if args.export_hf:
+            from export import export_hf
+            print_banner_on_rank_0(rank, "EXPORTING (HUGGING FACE FORMAT)")
+            out_dir = export_hf(model, tokenizer, args, rank, args.strategy)
+            if rank == 0:
+                note = (" (adapter only: merge with scripts/merge_lora.py)" if args.quantization_enabled else "")
+                print_on_rank_0(rank, f"HF export written to {out_dir}{note} ✓", "📦")
 
         if dist.is_initialized():
             print_on_rank_0(rank, "Process group is being destroyed. All done!", "👋")

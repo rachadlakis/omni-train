@@ -209,15 +209,9 @@ def collate_preference(rows, pad_id: int) -> dict:
 # Loading
 # ----------------------------------------------------------------------
 
-LOCAL_FORMATS = {".json": "json", ".jsonl": "json", ".csv": "csv", ".parquet": "parquet"}
-
-
 def load_raw(name, subset, split):
-    from datasets import load_dataset
-    ext = os.path.splitext(str(name))[1].lower()
-    if ext in LOCAL_FORMATS:  # local file
-        return load_dataset(LOCAL_FORMATS[ext], data_files=name, split=split)
-    return load_dataset(name, subset or None, split=split, token=os.getenv("HF_TOKEN"))
+    from data import load_any_dataset  # Hub dataset or local file
+    return load_any_dataset(name, subset, split)
 
 
 def build_dataset(raw, tokenizer, args):

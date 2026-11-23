@@ -46,7 +46,7 @@ python train.py
 
 ## Testing
 
-CI (`.github/workflows/tests.yml`, GitHub's CPU runners, offline: `HF_HUB_OFFLINE=1`) runs the unit suite on every push and the `-m dist` suite on PRs, pushes to `main` and manual runs. Only the GPU tests need a local machine: `-m smoke` and the FSDP cases of `test_post_training_dist.py` (≥ 2 GPUs). Tests in the CI suites must not download anything: build tiny models from configs (see `tests/post_training_helpers.py`).
+CI (`.github/workflows/tests.yml`, GitHub's CPU runners, offline: `HF_HUB_OFFLINE=1`) runs the unit and `-m e2e` suites on every push and the `-m dist` suite on PRs, pushes to `main` and manual runs. Only the GPU tests need a local machine: `-m smoke` and the FSDP cases of `test_post_training_dist.py` (≥ 2 GPUs). Tests in the CI suites must not download anything: build tiny models from configs (see `tests/post_training_helpers.py`).
 
 On a rented GPU machine, `bash scripts/gpu_check.sh [--setup] [--full]` runs everything CI can't: an NCCL check (`scripts/nccl_check.py`), `-m dist` on GPUs over NCCL (`OMNI_DIST_DEVICE=cuda`, see `tests/dist_device.py`; cases needing more GPUs than present are skipped), and the curated smoke set (multi-GPU `min_gpus` cases, post-training, save/resume, QLoRA, vision/detection/VLM). Logs go to `gpu_check_logs/<ts>/`.
 
@@ -65,6 +65,10 @@ python -m pytest -m smoke
 
 # multi-process equivalence: strategy 5d layouts + post-training under DDP (CPU/gloo, ~5 min)
 python -m pytest -m dist
+
+# end to end: the real train.py as a subprocess on CPU (tiny local Llama + .jsonl, solo and
+# 2-process DDP): loss decreases, DPO starts at ln 2, resume restores AdamW, HF export loads (~40 s)
+python -m pytest -m e2e
 ```
 
 ## Web UI
@@ -142,8 +146,11 @@ When `peft.enabled=true` or `quantization.enabled=true`, the model is **material
 
 ```
 checkpoints/
-├── solo/<unix_ms_timestamp>[__lora_q4].pt
-├── ddp/<unix_ms_timestamp>[__lora_q4].pt
+├── solo/<unix_ms_timestamp>[__lora_q4].pt     # {"model_state_dict", "optimizer_state_dict"}
+├── ddp/<unix_ms_timestamp>[__lora_q4].pt      # same (rank 0's copy)
+├── hf/<unix_ms_timestamp>[__lora]/            # save_load.export_hf: true (export.py)
+│   ├── config.json, model.safetensors, tokenizer files, omni_train.json
+│   └── adapter/                               # QLoRA/8-bit only: adapter, not merged
 └── fsdp/
     ├── dcp_api/
     │   └── <unix_ms_timestamp>[__lora_q4]/
@@ -156,6 +163,10 @@ checkpoints/
 ```
 
 Checkpoint folders are named with Unix millisecond timestamps. PEFT/quantization runs append a tag (e.g., `__lora_q4`). `get_latest_checkpoint_folder()` picks the numerically largest timestamp prefix.
+
+**Resume (solo/DDP):** `distributed_utils.restore_optimizer_state` reloads the AdamW moments and resets each group's `lr`/`initial_lr`/`weight_decay` to the new config, because the LR schedule restarts on resume. Older weights-only `.pt` files still load (AdamW starts fresh, with a notice). FSDP restores via `Checkpointer.load_optim`.
+
+**HF export** (`export.py`, `save_load.export_hf: true`, `export_dtype` bfloat16 | float16 | float32): runs after training on every rank. Solo/DDP merge LoRA in place on the finished model. FSDP all-gathers the full state dict to rank 0 (`get_model_state_dict(full_state_dict, cpu_offload)`), which rebuilds the model on CPU (`rebuild_from_state_dict`) and merges. Quantized runs export only `adapter/`; `scripts/merge_lora.py` merges it into the full-precision base. Not for 5d (it has its own `<ts>/hf/` export) or `custom_transformer`.
 
 Two FSDP checkpoint APIs:
 - **DCP API** (`distribute_api: dcp_api`): uses `torch.distributed.checkpoint.state_dict` — rank 0 broadcasts state, simpler
@@ -174,19 +185,21 @@ Two FSDP checkpoint APIs:
 
 ### Model Types
 
-| `model_type` | HF class used |
-|---|---|
-| `llm` | `AutoModelForCausalLM` |
-| `seq2seq` | `AutoModelForSeq2SeqLM` |
-| `vision` | `AutoModelForImageClassification` |
-| `yolo` | `AutoModelForObjectDetection` |
-| `vlm` | `AutoModelForImageTextToText` |
-| `encoder` | `AutoModel` |
-| `custom_transformer` | `model.Transformer` (toy model built from scratch, uses synthetic data) |
+| `model_type` | HF class used | Status |
+|---|---|---|
+| `llm` | `AutoModelForCausalLM` | supported: the product focus (post-training, export, e2e tests) |
+| `seq2seq` | `AutoModelForSeq2SeqLM` | experimental |
+| `vision` | `AutoModelForImageClassification` | experimental |
+| `yolo` | `AutoModelForObjectDetection` | experimental |
+| `vlm` | `AutoModelForImageTextToText` | experimental |
+| `encoder` | `AutoModel` | experimental |
+| `custom_transformer` | `model.Transformer` (toy model built from scratch, uses synthetic data) | demo/testing |
+
+Experimental types print a one-line notice at startup (`train.py`, `EXPERIMENTAL_MODEL_TYPES`). New features target `llm` first; `strategy: 5d` is an advanced mode, not the default recommendation.
 
 ### Data Pipeline by Model Type (`data.py`)
 
-`get_dataloader()` branches on `model_type` to decide how raw dataset rows become batches. Each type expects a specific dataset schema:
+`dataset.name` is a Hub dataset or a local `.json/.jsonl/.csv/.parquet/.txt` file (`data.load_any_dataset`, also used by post-training); `dataset.text_field` renames the pretrain text column to `text`. `get_dataloader()` branches on `model_type` to decide how raw dataset rows become batches. Each type expects a specific dataset schema:
 
 | `model_type` | Dataset columns expected | How batches are built | Train-loop call |
 |---|---|---|---|

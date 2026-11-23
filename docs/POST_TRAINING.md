@@ -11,8 +11,9 @@ CONFIG_PATH=configs/llm_dpo_lora_single_gpu.yaml bash scripts/launch.sh
 ```
 
 Typical recipe: SFT an instruction model on your chat data, then DPO it on preference pairs.
-To DPO a model you just fine-tuned, point `model_name` at the HF-format export (or merge the
-LoRA adapters first). The reference is whatever model training starts from.
+To DPO a model you just fine-tuned, set `save_load.export_hf: true` on the SFT run and point
+the DPO run's `model_name` at the exported folder (`checkpoints/hf/<ts>.../`, LoRA already
+merged). The reference is whatever model training starts from.
 
 ## The `algorithm:` block
 

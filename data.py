@@ -116,6 +116,19 @@ def _vlm_collate(examples, processor, image_col, text_col):
     enc["labels"] = labels
     return dict(enc)
 
+LOCAL_FORMATS = {".json": "json", ".jsonl": "json", ".csv": "csv", ".parquet": "parquet", ".txt": "text"}
+
+
+def load_any_dataset(name, subset=None, split="train"):
+    """A Hub dataset, or a local .json/.jsonl/.csv/.parquet/.txt file (one sample per row / line)."""
+    ext = os.path.splitext(str(name))[1].lower()
+    if ext in LOCAL_FORMATS:
+        if not os.path.exists(name):
+            raise FileNotFoundError(f"dataset file not found: {name}")
+        return load_dataset(LOCAL_FORMATS[ext], data_files=name, split=split)
+    return load_dataset(name, subset or None, split=split, streaming=False, token=os.getenv("HF_TOKEN"))
+
+
 @contextlib.contextmanager
 def _rank0_first():
     """Run the enclosed block on rank 0 first, then on the remaining ranks."""
@@ -178,11 +191,11 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
             print_on_rank_0(rank, f"Loading dataset: {dataset} / {dataset_full_name} | split: {dataset_split}", "📂")
             # Pass HF_TOKEN so gated/rate-limited datasets resolve without hanging on
             # unauthenticated Hub requests (the token is loaded by train.py via dotenv).
-            dataset = load_dataset(
-                dataset, dataset_full_name, split=dataset_split, streaming=False,
-                token=os.getenv("HF_TOKEN"),
-            )  # type: ignore
+            dataset = load_any_dataset(dataset, dataset_full_name, dataset_split)
             print_on_rank_0(rank, f"Raw dataset size: {len(dataset)} samples")
+            text_field = kwargs.get("text_field") or "text"
+            if text_field != "text" and text_field in dataset.column_names:
+                dataset = dataset.rename_column(text_field, "text")
 
             # collate_fn stays None for the map-based paths (vision classification,
             # text) and is set for the paths whose batches can't be default-collated

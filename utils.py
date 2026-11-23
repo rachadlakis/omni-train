@@ -102,7 +102,7 @@ def print_config(args):
         "Quantization":    ["quantization_enabled", "quantization_bits", "quantization_type", "quantization_compute_dtype", "quantization_double_quant"],
         "Algorithm":       ["algorithm", "algo_beta", "algo_dpo_loss", "algo_label_smoothing", "algo_simpo_gamma", "algo_max_prompt_length", "algo_completion_only"],
         "Parallelism (5d)": ["par_dp", "par_tp", "par_sp", "par_cp", "par_pp", "par_pp_schedule", "par_micro_batches", "par_ep", "par_zero1"],
-        "Checkpoint":      ["distribute_api", "resume", "resume_path", "load_model_from_hf"],
+        "Checkpoint":      ["distribute_api", "resume", "resume_path", "load_model_from_hf", "export_hf", "export_dtype"],
         "Prefetch":        ["explicit_prefetching", "forward_prefetch", "backward_prefetch"],
         "Wandb":           ["wandb_log_with_train", "wandb_entity", "wandb_project", "wandb_run_name"],
     }
@@ -217,6 +217,7 @@ class Args:
 
         self.dataset = None
         self.dataset_full_name = None
+        self.dataset_text_field = "text"
         self.dataset_split = None
 
         self.strategy = None # fsdp, ddp, solo, or 5d
@@ -245,6 +246,8 @@ class Args:
         self.dtensor_api: bool
         self.resume: bool 
         self.resume_path = None
+        self.export_hf: bool = False
+        self.export_dtype: str = "bfloat16"
 
         self.explicit_prefetching: bool 
         self.forward_prefetch: int 
@@ -325,6 +328,7 @@ def build_args(cfg):
     dataset = cfg["dataset"]
     args.dataset = dataset["name"]
     args.dataset_full_name = dataset.get("subset")  # None for datasets without subsets
+    args.dataset_text_field = dataset.get("text_field", "text")  # pretrain text column
     args.dataset_split = dataset.get("split", "train")
 
     # --------------------------------------------------
@@ -390,6 +394,12 @@ def build_args(cfg):
     args.resume = to_bool(sl.get("resume", False))
     args.resume_path = sl.get("resume_path", None)
     args.load_model_from_hf = to_bool(sl.get("load_model_from_hf", True))
+    # Hugging Face export after training (export.py): a folder from_pretrained can load,
+    # LoRA merged into the base. QLoRA runs export the adapter (merge: scripts/merge_lora.py).
+    args.export_hf = to_bool(sl.get("export_hf", False))
+    args.export_dtype = str(sl.get("export_dtype", "bfloat16")).lower()
+    if args.export_dtype not in {"bfloat16", "float16", "float32"}:
+        raise ValueError(f"save_load.export_dtype must be bfloat16, float16 or float32 (got {args.export_dtype})")
 
     # --------------------------------------------------
     # PEFT
@@ -520,6 +530,12 @@ def build_args(cfg):
     # --------------------------------------------------
     if args.strategy == "5d":
         _parse_5d(cfg, args)
+
+    if args.export_hf and args.strategy == "5d":
+        raise ValueError("save_load.export_hf is for solo/ddp/fsdp; strategy: 5d always exports "
+                         "an HF checkpoint to checkpoints/5d/<ts>/hf/ when save: true")
+    if args.export_hf and args.model_type == "custom_transformer":
+        raise ValueError("save_load.export_hf needs a Hugging Face model (custom_transformer is not one)")
 
     # --------------------------------------------------
     # POST-TRAINING (SFT / DPO / SimPO / ORPO)

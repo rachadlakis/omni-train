@@ -40,6 +40,7 @@ save_load:
   resume: false
   resume_path: ""
   load_model_from_hf: true
+  export_hf: true               ## writes checkpoints/hf/<ts>__lora/: a plain HF model, LoRA merged
 
 prefetch:
   explicit: false
