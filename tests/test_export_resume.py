@@ -50,6 +50,26 @@ class TestExport:
             rebuild_from_state_dict(model, sd, "llm")
 
     @pytest.mark.parametrize("peft", [False, True])
+    @pytest.mark.parametrize("tied", [False, True])
+    def test_rebuild_missing_lm_head(self, tied, peft):
+        """Missing lm_head: fine when tied to the embedding, an error (not a random
+        output layer) when it is its own weight."""
+        from transformers import LlamaForCausalLM
+        from export import rebuild_from_state_dict
+        config = tiny_llama(len(make_tokenizer())).config
+        config.tie_word_embeddings = tied
+        model = LlamaForCausalLM(config).eval()
+        if peft:
+            model = _lora(model)
+        sd = {k: v.clone() for k, v in model.state_dict().items() if not k.endswith("lm_head.weight")}
+        if tied:
+            torch.testing.assert_close(_logits(rebuild_from_state_dict(model, sd, "llm").eval()),
+                                       _logits(model), atol=1e-5, rtol=1e-5)
+        else:
+            with pytest.raises(RuntimeError, match="lm_head"):
+                rebuild_from_state_dict(model, sd, "llm")
+
+    @pytest.mark.parametrize("peft", [False, True])
     def test_export_solo(self, tmp_path, peft):
         from transformers import AutoModelForCausalLM
         from export import export_hf

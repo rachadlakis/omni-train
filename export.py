@@ -66,8 +66,11 @@ def rebuild_from_state_dict(module, state_dict, model_type: str):
         peft_cfg.inference_mode = False
         model = get_peft_model(model, peft_cfg)
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    # Tied weights (lm_head = embedding) may appear under only one name; anything else is a bug.
-    missing = [k for k in missing if not k.endswith("lm_head.weight")]
+    # A missing name is fine only if that weight SHARES MEMORY with one that was loaded
+    # (tied lm_head = embedding). Otherwise it would be exported with random values.
+    own = model.state_dict()
+    loaded = {own[k].data_ptr() for k in state_dict if k in own and own[k].numel()}
+    missing = [k for k in missing if own[k].data_ptr() not in loaded]
     if missing or unexpected:
         raise RuntimeError(f"export: state dict does not match the model "
                            f"(missing={missing[:5]}, unexpected={unexpected[:5]})")
