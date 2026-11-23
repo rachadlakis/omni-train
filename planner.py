@@ -19,7 +19,9 @@ The memory model follows how this repo trains (see CLAUDE.md, "Precision"):
     peak is the larger of sampling (KV cache) and training; sampling time is added to
     the step time (decoding is memory-bandwidth bound);
   * the loss upcasts logits to fp32, which dominates for large vocabularies.
-It is an estimate (typically within ~15% of the measured peak), not a guarantee.
+It is an estimate, not a guarantee. Single-GPU runs were checked against the measured allocator
+peak (tests/test_planner.py, RTX 4050: full, SFT, DPO and GRPO within 15%). DDP, FSDP, 5d and
+models above 0.5B parameters have NOT been measured.
 """
 
 from __future__ import annotations
@@ -417,6 +419,10 @@ def _activations(m: ModelSpec, w: Workload, lay: Layout) -> dict:
     tp_repl = replicated / lay.tp if lay.sp else replicated
     per_layer_full = tokens * act_bytes * (tp_split + tp_repl)
     stage_layers = math.ceil(m.layers / lay.pp)
+    if w.method in {"lora", "qlora"}:
+        # every adapter keeps its own input (3 q/k/v + o + 2 MLP inputs of size h, one of size ffn);
+        # ~3 bytes each, calibrated on a measured run (see tests/test_planner.py)
+        per_layer_full += tokens * 3 * ((6 * m.hidden + ffn_eff) / lay.tp)
     if w.grad_ckpt:
         boundary = tokens * act_bytes * m.hidden / (lay.tp if lay.sp else 1)
         per_micro = stage_layers * boundary + per_layer_full
@@ -430,10 +436,11 @@ def _activations(m: ModelSpec, w: Workload, lay: Layout) -> dict:
 
     # logits: bf16/fp32 output + the fp32 upcast and its gradient inside the loss
     if w.algorithm in PREFERENCE_ALGOS:
-        logits = tokens * m.vocab * act_bytes + seq * m.vocab * 8     # sequence_logps: one row in fp32
+        # sequence_logps goes row by row, but autograd keeps EVERY fp32 row for the backward pass
+        logits = tokens * m.vocab * (act_bytes + 4) + seq * m.vocab * 4
     elif w.algorithm == "grpo":
         comp = min(seq, w.completion_len or seq // 2)                # logits_to_keep: completion only
-        logits = rows * comp * m.vocab * act_bytes + comp * m.vocab * 8
+        logits = rows * comp * m.vocab * (act_bytes + 4) + comp * m.vocab * 4
         # sampling phase: KV cache of every sequence + one step of fp32 logits; the peak is
         # whichever phase is larger, reported under "activations"
         kv = rows * seq * m.layers * 2 * m.kv_heads * m.hd * act_bytes

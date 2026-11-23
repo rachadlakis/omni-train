@@ -148,7 +148,9 @@ class GRPOObjective:
         """log pi(token) for the last n_completion tokens: [N, C] fp32."""
         out = model(**self._model_inputs(input_ids, attention_mask, n_completion + 1))
         logits = out.logits[:, -(n_completion + 1):-1]
-        return selective_logps(logits / self.temperature, input_ids[:, -n_completion:])
+        if self.temperature != 1.0:          # dividing copies [N, C, V]: skip it when it changes nothing
+            logits = logits / self.temperature
+        return selective_logps(logits, input_ids[:, -n_completion:])
 
     @torch.no_grad()
     def rollout(self, model, batch, device) -> Rollout:
@@ -172,6 +174,8 @@ class GRPOObjective:
                                            generation_config=gen_cfg, synced_gpus=synced)
         finally:
             model.train(was_training)
+        if device.type == "cuda":            # the growing KV cache leaves the allocator fragmented
+            torch.cuda.empty_cache()
         completion_ids = seqs[:, prompt_ids.shape[1]:]
         if completion_ids.shape[1] == 0:      # nothing generated (all prompts at EOS): one pad token
             completion_ids = torch.full((seqs.shape[0], 1), eos[0], device=device, dtype=seqs.dtype)

@@ -346,7 +346,8 @@ memory of every strategy split into weights, gradients, AdamW states, activation
 layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
 (gradient checkpointing, LoRA, QLoRA, shorter sequences). The same plan is served at `POST /api/plan`.
 Estimates follow this repo's precision rules (fp32 trainable weights, bf16 frozen LoRA base outside FSDP)
-and are typically within ~15% of the measured peak.
+and match measured single-GPU peaks (RTX 4050: full, SFT, DPO, GRPO) within 15%. DDP, FSDP, 5D and
+models above 0.5B parameters have not been measured, so treat those numbers as guidance.
 
 ---
 

@@ -270,3 +270,21 @@ def test_grpo_workload_from_config():
     r = P.plan(P.resolve_spec(cfg["model_name"]), w, P.Cluster(gpu_mem_gb=6, gpus_per_node=1, gpu_name="4050"))
     assert r["verdict"] == "single_gpu" and any("GRPO" in n for n in r["notes"])
     assert all(o["strategy"] != "5d" for o in r["options"])
+
+
+# Peak allocated memory (torch.cuda.max_memory_allocated, GiB) of real train.py runs on an RTX 4050,
+# every sequence at full length. The planner must stay close; DDP/FSDP/5d are not measured.
+QWEN = "Qwen/Qwen2.5-0.5B-Instruct"
+MEASURED = [
+    ("facebook/opt-125m", dict(method="full", batch_size=4, seq_len=256), 2.46),
+    (QWEN, dict(method="lora", algorithm="sft", batch_size=2, seq_len=512), 2.83),
+    (QWEN, dict(method="lora", algorithm="sft", batch_size=2, seq_len=512, grad_ckpt=False), 4.49),
+    (QWEN, dict(method="lora", algorithm="dpo", batch_size=2, seq_len=512), 3.45),
+    (QWEN, dict(method="lora", algorithm="grpo", batch_size=2, seq_len=512, num_generations=4, completion_len=320), 3.82),
+]
+
+
+@pytest.mark.parametrize("model, work, measured_gb", MEASURED)
+def test_planner_matches_measured_peaks(model, work, measured_gb):
+    mem = P.memory_per_gpu(P.PRESETS[model.lower()], P.Workload(**work), P.Layout("solo", 1))
+    assert mem["total"] - mem["overhead"] == pytest.approx(measured_gb, rel=0.15)

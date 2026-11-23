@@ -1,4 +1,6 @@
-## GRPO with LoRA on one small GPU (fits a 6 GB card): grade-school math with verifiable rewards.
+## GRPO with LoRA on one small GPU: grade-school math with verifiable rewards.
+## Measured on a 6 GB RTX 4050: 3.8 GB allocated, 5.5 GB reserved, so 6 GB is tight once the desktop
+## takes its share. Lower num_generations or batch_size if it runs out of memory.
 ## Every step samples num_generations answers per prompt, scores them with the reward
 ## functions and pushes the policy towards the answers that beat their group's average.
 ## No reward model, no value model, no second copy of the weights (the KL reference is the
