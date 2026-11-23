@@ -13,8 +13,9 @@ CONFIG_PATH=configs/llm_grpo_lora_single_gpu.yaml bash scripts/launch.sh   # onl
 
 Typical recipe: SFT an instruction model on your chat data, then DPO it on preference pairs,
 or GRPO it on prompts whose answers can be checked (math, code, formats).
-To DPO a model you just fine-tuned, point `model_name` at the HF-format export (or merge the
-LoRA adapters first). The reference is whatever model training starts from.
+To DPO or GRPO a model you just fine-tuned, set `save_load.export_hf: true` on the SFT run and
+point the next run's `model_name` at the exported folder (`checkpoints/hf/<ts>.../`, LoRA already
+merged). The reference is whatever model training starts from.
 
 ## The `algorithm:` block
 

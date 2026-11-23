@@ -1,5 +1,6 @@
 # CPU test suites on GitHub's runners (no GPU there, no GPU needed).
 #   unit: python -m pytest           every push and PR (~10 s of tests)
+#         python -m pytest -m e2e    same job: real train.py runs, solo + 2-process DDP (~1 min)
 #   dist: python -m pytest -m dist   PRs, pushes to main, manual runs (~10 min):
 #         multi-process runs on CPU/gloo compared against 1 process on losses
 #         AND every parameter's gradient (strategy 5d layouts, post-training under DDP)
@@ -38,6 +39,8 @@ jobs:
           pip install -r requirements.txt
       - name: Unit tests
         run: python -m pytest
+      - name: End-to-end train.py runs (CPU, tiny local model)
+        run: python -m pytest -m e2e
 
   dist:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'

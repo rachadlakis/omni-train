@@ -262,6 +262,18 @@ memory. Details and dataset formats: [`docs/POST_TRAINING.md`](docs/POST_TRAININ
 
 Set `model_type` in `config.yaml` to match your architecture. Tiny picks below are smoke-tested.
 
+**Support levels.** OMNI-Train's focus is LLM fine-tuning and post-training (`model_type: llm`).
+That path is covered by unit, multi-process and end-to-end tests. The other model types work
+but are **experimental**: each has one smoke test, no post-training support, and they may lag
+behind new features (export, resume, planner). `strategy: 5d` is an advanced mode for very
+large models; for most fine-tuning, `fsdp` + LoRA is the recommended path.
+
+| `model_type` | Status |
+| --- | --- |
+| `llm` | supported (SFT / DPO / SimPO / ORPO, LoRA/QLoRA, solo / DDP / FSDP, 5d) |
+| `seq2seq`, `encoder`, `vision`, `yolo`, `vlm` | experimental |
+| `custom_transformer` | demo / testing model (synthetic data) |
+
 ### Large Language Models (`model_type: llm`)
 
 | Tier | Example models | Auth |
@@ -385,12 +397,13 @@ omni-train/
 ├── utils.py                # config parsing + validation
 ├── model.py                # custom_transformer toy model
 ├── parallelism/            # strategy: 5d — DP, TP+SP, CP, PP, EP, ZeRO-1
+├── post_training/          # algorithm: sft / dpo / simpo / orpo
+├── export.py               # Hugging Face export (+ LoRA merge)
 ├── configs/                # ready-made example configs
 ├── scripts/                # launch + SLURM utilities
 ├── tests/                  # unit and smoke tests
 ├── planner.py              # capacity planner: is distributed training needed?
 ├── ui/                     # training console + REST API (FastAPI)
-├── dist_kit/               # standalone solo/DDP/FSDP kit to copy into other projects
 └── docs/                   # guides and technical reference
 ```
 

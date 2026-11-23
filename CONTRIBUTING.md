@@ -38,6 +38,9 @@ python -m pytest tests/test_config_validation.py -v
 # Multi-process equivalence (CPU/gloo, ~5 min): 5d layouts + post-training under DDP
 python -m pytest -m dist
 
+# End to end: real train.py runs on CPU (solo + 2-process DDP, tiny local model, ~40 s)
+python -m pytest -m e2e
+
 # GPU smoke tests (~30-60s each, requires a GPU) — not run in CI
 python -m pytest -m smoke
 

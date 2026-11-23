@@ -1407,13 +1407,36 @@ def apply_fsdp(local_rank, rank, device, args):
         raise
 
 
+def restore_optimizer_state(optimizer, args, device) -> str:
+    """Solo/DDP resume: load the AdamW moments saved next to the weights.
+
+    The LR schedule restarts on resume (warmup, then decay over the new run), so each
+    group's lr / initial_lr / weight_decay are reset to this run's config instead of
+    the values the previous run ended with (~0 after a cosine decay).
+    Returns "restored", "absent" (older weights-only checkpoint) or "mismatch".
+    """
+    # CPU first: load_state_dict moves each state tensor to its parameter's device.
+    ckpt = torch.load(args.resume_path, map_location="cpu", weights_only=True, mmap=True)
+    state = ckpt.get("optimizer_state_dict") if isinstance(ckpt, dict) else None
+    if state is None:
+        return "absent"
+    try:
+        optimizer.load_state_dict(state)
+    except (ValueError, KeyError, RuntimeError):
+        return "mismatch"  # different trainable parameters (e.g. PEFT settings changed)
+    for group in optimizer.param_groups:
+        group["lr"] = group["initial_lr"] = args.learning_rate
+        group["weight_decay"] = args.weight_decay
+    return "restored"
+
+
 def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkpointer = None): # type: ignore
     """Saves the model checkpoint.
     FSDP2: uses Checkpointer (from checkpoint.py) which supports both DCP and DTensor APIs.
       - DCP path  (--dcp-api): uses get_model/optimizer_state_dict with full_state_dict=True.
       - DTensor path         : gathers sharded tensors manually, rank 0 saves .pt files.
-    DDP: rank 0 saves model.module.state_dict() as a single .pt file.
-    SOLO: rank 0 saves model.state_dict() as a single .pt file.
+    DDP / SOLO: rank 0 saves one .pt file {"model_state_dict", "optimizer_state_dict"}
+      (DDP: model.module). Loaders also accept older files holding a bare state dict.
     """
     try:
         print_banner_on_rank_0(rank, "SAVING CHECKPOINT")
@@ -1436,7 +1459,8 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
                 _fname = f"{_ts}{_tag}.pt"
                 os.makedirs(args.checkpoint_dir + "/ddp", exist_ok=True)
                 checkpoint_path = f"{args.checkpoint_dir}/ddp/{_fname}"
-                torch.save(model.module.state_dict(), checkpoint_path)
+                torch.save({"model_state_dict": model.module.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict()}, checkpoint_path)
                 print_on_rank_0(rank, f"DDP checkpoint saved to {checkpoint_path} ✓", "🎉")
 
         elif strategy == "solo":
@@ -1446,7 +1470,8 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
             _fname = f"{_ts}{_tag}.pt"
             os.makedirs(args.checkpoint_dir + "/solo", exist_ok=True)
             checkpoint_path = f"{args.checkpoint_dir}/solo/{_fname}"
-            torch.save(model.state_dict(), checkpoint_path)
+            torch.save({"model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict()}, checkpoint_path)
             print_on_rank_0(rank, f"Solo checkpoint saved to {checkpoint_path} ✓", "🎉")
 
         if dist.is_initialized():

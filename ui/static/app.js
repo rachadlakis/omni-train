@@ -274,12 +274,25 @@ const routes = {
   api: renderApi,
 };
 
+const VIEW_TITLE = { runs: 'Runs', run: 'Runs', new: 'New run', planner: 'Planner', checkpoints: 'Checkpoints', system: 'System', api: 'API reference' };
+const VIEW_GROUP = { system: 'Infrastructure', api: 'Infrastructure' };
+
+function setCrumbs(view, arg) {
+  const el = $('#crumbs');
+  if (!el) return;
+  const group = `<span>${VIEW_GROUP[view] || 'Workspace'}</span><span aria-hidden="true">/</span>`;
+  el.innerHTML = view === 'run' && arg
+    ? `${group}<a href="#/runs">Runs</a><span aria-hidden="true">/</span><span aria-current="page" id="crumb-leaf">${esc(arg)}</span>`
+    : `${group}<span aria-current="page">${esc(VIEW_TITLE[view] || 'Runs')}</span>`;
+}
+
 function route() {
   clearTimers();
   const [name, arg] = (location.hash.replace(/^#\/?/, '') || 'runs').split('/');
   const view = routes[name] ? name : 'runs';
   $$('.rail nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.nav === (view === 'run' ? 'runs' : view)));
   $$('.rail nav a').forEach((a) => { if (a.hasAttribute('aria-current')) a.setAttribute('aria-current', 'page'); });
+  setCrumbs(view, arg ? decodeURIComponent(arg) : undefined);
   const main = $('#main');
   main.innerHTML = '';
   window.scrollTo(0, 0);
@@ -331,10 +344,19 @@ async function renderRuns(main) {
     catch (e) { $('#runs-table').innerHTML = `<div class="panel-pad notice error">${esc(e.message)}</div>`; return; }
     jobs = jobs.jobs;
     const count = (s) => jobs.filter((j) => j.status === s).length;
+    const busy = q.total_gpus - q.available_gpus;
+    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const lastFail = jobs.find((j) => j.status === 'failed');
+    const tile = (k, v, sub, dot = '', extra = '') => `<div class="stat"><div class="k"><span>${k}</span>${dot ? `<i class="${dot}"></i>` : ''}</div>
+      <div class="v">${v}</div>${extra}${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
     $('#run-stats').innerHTML = [
-      ['Running', count('running')], ['Queued', count('pending')],
-      ['GPUs free', `${q.available_gpus} / ${q.total_gpus}`], ['Completed', count('completed')], ['Failed', count('failed')],
-    ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+      tile('Running', count('running'), busy ? `${plural(busy, 'GPU')} busy` : 'No GPUs busy', 'running'),
+      tile('Queued', count('pending'), count('pending') ? 'Starts when GPUs free up' : 'Queue is empty', 'pending'),
+      tile('GPUs free', `${q.available_gpus}<small> / ${q.total_gpus}</small>`, '', '',
+        `<div class="meter" aria-hidden="true"><span style="width:${q.total_gpus ? ((busy / q.total_gpus) * 100).toFixed(1) : 0}%"></span></div>`),
+      tile('Completed', count('completed'), 'All time', 'completed'),
+      tile('Failed', count('failed'), lastFail ? esc(runTitle(lastFail)) : 'None', 'failed'),
+    ].join('');
 
     if (!jobs.length) {
       $('#runs-table').innerHTML = `
@@ -436,7 +458,6 @@ async function renderRun(main, id) {
 
   const shell = (job) => `
     <div class="page">
-      <a href="#/runs" class="btn ghost small" style="margin-bottom:12px">Back to runs</a>
       <div class="run-head">
         <div>
           <h1><span>${esc(runTitle(job))}</span><span id="run-status">${statusPill(job.status)}</span></h1>
@@ -461,6 +482,7 @@ async function renderRun(main, id) {
 
   let job = await api(`/api/queue/jobs/${encodeURIComponent(id)}`);
   main.innerHTML = shell(job);
+  const leaf = $('#crumb-leaf'); if (leaf) leaf.textContent = runTitle(job);
   $$('.tabs button', main).forEach((b) => { b.onclick = () => { tab = b.dataset.tab; $$('.tabs button', main).forEach((x) => x.setAttribute('aria-selected', String(x === b))); drawTab(); }; });
 
   const actions = () => {
@@ -1713,13 +1735,33 @@ EOF`)}
 // ===========================================================================
 
 async function refreshChip() {
+  const dot = $('.cluster-state .dot');
   try {
-    const q = await api('/api/queue/status');
+    const [q, sys] = await Promise.all([api('/api/queue/status'), S.gpuName !== undefined ? null : api('/api/system/gpus').catch(() => null)]);
     S.queue = q;
-    const dot = $('#cluster-chip .dot');
+    if (sys) {
+      const list = sys.gpus || sys.devices || (Array.isArray(sys) ? sys : []);
+      const first = list[0] || {};
+      const name = first.name || first.gpu_name;
+      const mem = first.memory_total_gb || first.total_memory_gb || first.memory_gb;
+      S.gpuName = name ? `${q.total_gpus} × ${String(name).replace(/^NVIDIA\s+/, '')}${mem ? ` ${Math.round(mem)} GB` : ''}` : '';
+    }
+    const busy = q.total_gpus - q.available_gpus;
     dot.className = `dot ${q.available_gpus ? 'ok' : 'busy'}`;
-    $('#cluster-chip-text').textContent = `${q.available_gpus} of ${q.total_gpus} GPU${q.total_gpus === 1 ? '' : 's'} free${q.pending_jobs ? `, ${q.pending_jobs} queued` : ''}`;
-  } catch (e) { $('#cluster-chip-text').textContent = 'Server unreachable'; }
+    $('#cluster-state-text').textContent = q.total_gpus ? (q.available_gpus ? 'Online' : 'Fully booked') : 'No GPUs';
+    $('#cluster-name').textContent = S.gpuName || (q.total_gpus ? `${q.total_gpus} GPU${q.total_gpus === 1 ? '' : 's'}` : 'CPU only');
+    $('#cluster-meter').innerHTML = Array.from({ length: Math.min(q.total_gpus, 16) }, (_, i) => `<span class="${i < busy ? 'busy' : ''}"></span>`).join('');
+    $('#cluster-chip-text').textContent = q.total_gpus
+      ? `${busy} in use · ${q.available_gpus} free${q.pending_jobs ? ` · ${q.pending_jobs} queued` : ''}`
+      : 'Jobs run on CPU';
+    const badge = $('#nav-running');
+    badge.textContent = q.running_jobs || '';
+    badge.hidden = !q.running_jobs;
+  } catch (e) {
+    dot.className = 'dot down';
+    $('#cluster-state-text').textContent = 'Offline';
+    $('#cluster-chip-text').textContent = 'Server unreachable';
+  }
 }
 
 function initTheme() {

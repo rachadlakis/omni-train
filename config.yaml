@@ -36,6 +36,8 @@ save_load:
   resume: false              ## whether to resume from a checkpoint. Options: true, false
   resume_path: ""            ## path to checkpoint to resume from. Options: "checkpoints/epoch_2.pt", etc.
   load_model_from_hf: true   ## whether to load  from Hugging Face. Options: true, false
+  export_hf: false           ## after training, write a Hugging Face model to checkpoint_dir/hf/<ts>/ (LoRA merged; QLoRA: adapter only)
+  export_dtype: bfloat16     ## dtype of the exported weights: bfloat16 | float16 | float32
 
 prefetch:
   explicit: true  ## explicit prefetching? Options: true, false (if false, will rely on the built-in prefetching of the training loop)
