@@ -434,3 +434,34 @@ pre.code {
   th:first-child, td:first-child { padding-left: 16px; }
   th:last-child, td:last-child { padding-right: 16px; }
 }
+
+/* ---------- template picker ---------- */
+.tpl-groups { display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: var(--radius-lg);
+  background: var(--surface); overflow: hidden; }
+.tpl-group + .tpl-group { border-top: 1px solid var(--rule); }
+.tpl-group summary { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px; cursor: pointer;
+  list-style: none; user-select: none; }
+.tpl-group summary::-webkit-details-marker { display: none; }
+.tpl-group summary:hover { background: var(--surface-2); }
+.tpl-group .chev { width: 16px; height: 16px; fill: none; stroke: var(--ink-3); stroke-width: 2; stroke-linecap: round;
+  stroke-linejoin: round; transition: transform .15s; flex: none; }
+.tpl-group[open] .chev { transform: rotate(90deg); }
+.tpl-group-title { font-weight: 600; font-size: .9rem; }
+.tpl-group-sub { color: var(--ink-3); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tpl-count { margin-left: auto; font: 500 .72rem var(--mono); color: var(--ink-3); background: var(--sunken);
+  border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px; }
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; padding: 4px 16px 16px 42px; }
+.tpl-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink);
+  font: 500 .84rem var(--font); text-align: left; cursor: pointer; transition: border-color .12s, background-color .12s; }
+.tpl-item:hover { border-color: var(--signal); background: var(--signal-soft); }
+.tpl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpl-tags { display: flex; gap: 4px; flex: none; }
+.tpl-tags span { font: 500 .68rem var(--mono); color: var(--ink-2); background: var(--sunken); border-radius: 4px; padding: 2px 6px; }
+@media (max-width: 760px) {
+  .tpl-group-sub { display: none; }
+  .tpl-grid { padding-left: 16px; }
+}
+.model-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-top: 8px;
+  max-height: 232px; overflow-y: auto; padding: 2px; }
+.tpl-item.on { border-color: var(--signal); background: var(--signal-soft); box-shadow: 0 0 0 1px var(--signal); }

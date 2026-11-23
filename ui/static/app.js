@@ -905,6 +905,14 @@ function bindStep(panel) {
   };
   panel.addEventListener('input', onInput);
   panel.addEventListener('change', onInput);
+  panel.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-model]');
+    if (!b) return;
+    const input = $('#f-model_name', panel);
+    input.value = b.dataset.model;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    $$('[data-model]', panel).forEach((x) => x.classList.toggle('on', x === b));
+  });
 }
 
 function onCfgChange(rerender) {
@@ -960,7 +968,7 @@ function stepGoal() {
     <section class="step-section">
       <h3>Or start from a template</h3>
       <p>Ready-made configs from <code>configs/</code>. Loading one replaces this draft.</p>
-      <div class="choices" id="tpl-list"><div class="skeleton"></div></div>
+      <div class="tpl-groups" id="tpl-list"><div class="skeleton"></div></div>
     </section>`;
 }
 
@@ -987,17 +995,74 @@ function setGoal(goal, algo) {
   onCfgChange(true);
 }
 
+const TPL_GROUPS = [
+  { id: 'post', title: 'Post-training', sub: 'SFT and preference alignment', open: true, test: (n) => /^llm_(sft|dpo|simpo|orpo)_/.test(n) },
+  { id: '5d', title: '5D parallelism', sub: 'TP, PP, CP, EP and DP for large models', test: (n) => /(^|_)5d(_|$)/.test(n) },
+  { id: 'llm', title: 'LLM fine-tuning', sub: 'Full, LoRA and QLoRA on causal LMs', open: true, test: (n) => n.startsWith('llm_') },
+  { id: 'vision', title: 'Vision and multimodal', sub: 'Classification, detection, VLM', experimental: true, test: (n) => /^(cnn|detection|vlm|vision)_/.test(n) },
+  { id: 'embed', title: 'Embeddings', sub: 'Contrastive and triplet training', experimental: true, test: (n) => n.startsWith('embedding_') },
+  { id: 'other', title: 'Other', sub: '', test: () => true },
+];
+const TPL_ORDER = ['post', 'llm', '5d', 'vision', 'embed', 'other'];
+const TPL_WORDS = {
+  lora: 'LoRA', qlora: 'QLoRA', ddp: 'DDP', fsdp: 'FSDP', sft: 'SFT', dpo: 'DPO', '5d': '5D', cpu: 'CPU', moe: 'MoE',
+  vlm: 'VLM', cp: 'CP', tp: 'TP', pp: 'PP', dp: 'DP', coco: 'COCO', yolo: 'YOLO', bert: 'BERT', clip: 'CLIP', vit: 'ViT',
+  cnn: 'CNN', infonce: 'InfoNCE', llava: 'LLaVA', resnet: 'ResNet', llm: 'LLM', hf: 'HF', finetune: 'fine-tune',
+};
+
+/** Title and tags for a configs/ file name, e.g. llm_lora_quantized_single_gpu → "Lora" + [Solo, 1 GPU, QLoRA]. */
+function describeTemplate(n, group) {
+  const t = n.split('_');
+  const tags = [];
+  const strat = t.includes('5d') ? '5D' : t.includes('fsdp') ? 'FSDP' : t.includes('ddp') ? 'DDP'
+    : (n.includes('single_gpu') || t.includes('cpu')) ? 'Solo' : '';
+  if (strat) tags.push(strat);
+  const gpus = n.match(/(\d+)gpu\b/);
+  if (gpus) tags.push(`${gpus[1]} GPUs`);
+  else if (n.includes('single_gpu')) tags.push('1 GPU');
+  else if (t.includes('cpu')) tags.push('CPU');
+  if (t.includes('quantized')) tags.push(t.includes('lora') ? 'QLoRA' : '8-bit');
+  else if (t.includes('lora')) tags.push('LoRA');
+  else if (t.includes('full')) tags.push('Full FT');
+  const drop = new Set(['single', 'gpu', 'quantized', 'cpu', 'ddp', 'fsdp']);
+  if (group === 'llm' || group === 'post') drop.add('llm');
+  if (group === 'embed') drop.add('embedding');
+  if (group === '5d') drop.add('5d');
+  if (tags.includes('LoRA') || tags.includes('QLoRA')) drop.add('lora');
+  if (tags.includes('Full FT')) { drop.add('full'); drop.add('finetune'); }
+  const words = t.filter((w) => !drop.has(w) && !/^\d+gpu$/.test(w)).map((w) => TPL_WORDS[w] || w);
+  let title = words.join(' ') || tags.join(' ') || n;
+  title = title.charAt(0).toUpperCase() + title.slice(1);
+  return { title, tags };
+}
+
 async function loadTemplates() {
   const el = $('#tpl-list');
   try {
     const { configs } = await api('/api/configs');
-    const names = configs.filter((n) => n !== 'config');
-    el.innerHTML = names.map((n) => {
-      const nice = n.replace(/_/g, ' ').replace(/\bllm\b/, 'LLM').replace(/\bfsdp\b/, 'FSDP').replace(/\bddp\b/, 'DDP').replace(/\blora\b/, 'LoRA').replace(/\bsft\b/, 'SFT').replace(/\bdpo\b/, 'DPO').replace(/\b5d\b/, '5D').replace(/\bvlm\b/, 'VLM').replace(/\bcpu\b/, 'CPU').replace(/\bmoe\b/, 'MoE');
-      return `<button type="button" class="choice" data-tpl="${esc(n)}"><span class="choice-title">${esc(nice.charAt(0).toUpperCase() + nice.slice(1))}</span><span class="choice-meta">${esc(n)}.yaml</span></button>`;
-    }).join('') || '<p class="faint">No templates in configs/.</p>';
+    const names = configs.filter((n) => n !== 'config').sort();
+    if (!names.length) { el.innerHTML = '<p class="faint" style="padding:16px">No templates in configs/.</p>'; return; }
+    const buckets = Object.fromEntries(TPL_GROUPS.map((g) => [g.id, []]));
+    names.forEach((n) => { buckets[TPL_GROUPS.find((g) => g.test(n)).id].push(n); });
+    el.innerHTML = TPL_ORDER.map((id) => TPL_GROUPS.find((g) => g.id === id)).filter((g) => buckets[g.id].length).map((g) => `
+      <details class="tpl-group"${g.open ? ' open' : ''}>
+        <summary>
+          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="tpl-group-title">${esc(g.title)}</span>
+          ${g.experimental ? '<span class="pill">Experimental</span>' : ''}
+          <span class="tpl-group-sub">${esc(g.sub)}</span>
+          <span class="tpl-count">${buckets[g.id].length}</span>
+        </summary>
+        <div class="tpl-grid">${buckets[g.id].map((n) => {
+          const d = describeTemplate(n, g.id);
+          return `<button type="button" class="tpl-item" data-tpl="${esc(n)}" title="Load ${esc(n)}.yaml">
+            <span class="tpl-name">${esc(d.title)}</span>
+            <span class="tpl-tags">${d.tags.map((x) => `<span>${esc(x)}</span>`).join('')}</span>
+          </button>`;
+        }).join('')}</div>
+      </details>`).join('');
     $$('[data-tpl]', el).forEach((b) => { b.onclick = () => applyTemplate(b.dataset.tpl); });
-  } catch (e) { el.innerHTML = `<p class="faint">${esc(e.message)}</p>`; }
+  } catch (e) { el.innerHTML = `<p class="faint" style="padding:16px">${esc(e.message)}</p>`; }
 }
 
 async function applyTemplate(name) {
@@ -1071,6 +1136,7 @@ function stepModel() {
         <div class="field span-all"><label for="f-model_name">Model</label>
           <input id="f-model_name" type="text" list="model-presets" data-bind="model_name" data-type="str" value="${esc(c.model_name)}" placeholder="org/model-name" autocomplete="off" spellcheck="false">
           <datalist id="model-presets">${presets.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}${m.five_d_ready ? ', 5D ready' : ''}</option>`).join('')}</datalist>
+          <div class="model-presets" role="group" aria-label="Popular models">${presets.map((m) => `<button type="button" class="tpl-item${m.name === c.model_name ? ' on' : ''}" data-model="${esc(m.name)}" title="${esc(m.name)}"><span class="tpl-name">${esc(m.name.split('/').pop())}</span><span class="tpl-tags"><span>${fmt.params(m.params)}</span>${m.five_d_ready ? '<span>5D</span>' : ''}</span></button>`).join('')}</div>
         </div>
       </div>
       <div class="model-card" style="margin-top:14px" id="model-card"><div class="skeleton"></div></div>
