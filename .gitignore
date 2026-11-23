@@ -52,3 +52,6 @@ docs/presentation*.html
 
 # GPU check logs (scripts/gpu_check.sh)
 gpu_check_logs/
+
+# Windows download markers copied into WSL
+*:Zone.Identifier
