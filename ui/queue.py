@@ -45,6 +45,63 @@ except ImportError:
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
+RUNS_DIR = Path(__file__).parent / "runs"
+
+# "Epoch 1/3 [███░░] 42.0% | step 21/50 | loss: 2.3141 | avg: 2.4012 | grad norm: 0.812 | 12,345 tok/s"
+STEP_RE = re.compile(
+    r"Epoch\s+(?P<epoch>\d+)/(?P<epochs>\d+).*?\|\s*step\s+(?P<step>\d+)/(?P<steps>\d+)\s*\|"
+    r"\s*loss:\s*(?P<loss>[-\d.eE+naif]+)\s*\|\s*avg:\s*(?P<avg>[-\d.eE+naif]+)(?P<rest>.*)"
+)
+EPOCH_RE = re.compile(r"Epoch\s+(\d+)\s+complete\s*\|\s*avg loss:\s*([-\d.eE+naif]+)")
+EXTRA_RE = re.compile(r"\|\s*([A-Za-z_ /]+?):\s*([-\d.,eE+]+)")
+TOKS_RE = re.compile(r"\|\s*([\d,.]+)\s*tok/s")
+
+
+def _num(text: str) -> Optional[float]:
+    try:
+        value = float(text.replace(",", ""))
+    except ValueError:
+        return None
+    return value if value == value and abs(value) != float("inf") else None
+
+
+def parse_metrics(lines: List[str], max_points: int = 1500) -> dict:
+    """Loss curve, epoch losses and latest progress from trainer log lines."""
+    points: List[dict] = []
+    epochs: List[dict] = []
+    for line in lines:
+        m = STEP_RE.search(line)
+        if m:
+            loss = _num(m.group("loss"))
+            if loss is None:
+                continue
+            point = {
+                "epoch": int(m.group("epoch")), "epochs": int(m.group("epochs")),
+                "step": int(m.group("step")), "steps": int(m.group("steps")),
+                "loss": loss, "avg": _num(m.group("avg")),
+            }
+            for key, value in EXTRA_RE.findall(m.group("rest")):
+                point[key.strip().replace(" ", "_")] = _num(value)
+            toks = TOKS_RE.search(m.group("rest"))
+            if toks:
+                point["tokens_per_s"] = _num(toks.group(1))
+            point["global_step"] = (point["epoch"] - 1) * point["steps"] + point["step"]
+            points.append(point)
+            continue
+        e = EPOCH_RE.search(line)
+        if e and _num(e.group(2)) is not None:
+            epochs.append({"epoch": int(e.group(1)), "loss": _num(e.group(2))})
+    latest = points[-1] if points else None
+    progress = None
+    if latest:
+        done = latest["global_step"]
+        total = latest["epochs"] * latest["steps"]
+        progress = {**latest, "fraction": done / max(1, total), "total_steps": total}
+    if len(points) > max_points:
+        stride = len(points) / max_points
+        points = [points[int(i * stride)] for i in range(max_points)] + [points[-1]]
+    return {"points": points, "epochs": epochs, "progress": progress}
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -68,10 +125,12 @@ class Job:
     finished_at: Optional[datetime] = None
     error_message: Optional[str] = None
     process_pid: Optional[int] = None
+    name: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "name": self.name,
             "config": self.config,
             "gpu_count": self.gpu_count,
             "status": self.status.value,
@@ -102,8 +161,20 @@ class QueueManager:
     def _append_job_log(self, job_id: str, line: str) -> None:
         """Store a cleaned log line for a queued job."""
         cleaned = ANSI_ESCAPE_RE.sub("", line).rstrip()
-        if cleaned and job_id in self._job_logs:
+        if not cleaned:
+            return
+        if job_id in self._job_logs:
             self._job_logs[job_id].append(cleaned)
+        try:
+            with open(self._log_path(job_id), "a", encoding="utf-8") as f:
+                f.write(cleaned + "\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _log_path(job_id: str) -> Path:
+        RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        return RUNS_DIR / f"{job_id}.log"
 
     def _init_db(self):
         """Initialize the database schema."""
@@ -136,6 +207,10 @@ class QueueManager:
                 CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);
                 CREATE INDEX IF NOT EXISTS idx_gpu_allocations_job_id ON gpu_allocations(job_id);
             """)
+
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+            if "name" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN name TEXT")
 
             # Initialize GPU allocations if not present
             total_gpus = self._detect_gpu_count()
@@ -261,6 +336,7 @@ class QueueManager:
         gpu_count: int,
         priority: int = 0,
         estimated_seconds: Optional[float] = None,
+        name: Optional[str] = None,
     ) -> Job:
         """Submit a new job. Starts immediately if GPUs available, else queues."""
         job_id = str(uuid.uuid4())
@@ -274,14 +350,15 @@ class QueueManager:
             priority=priority,
             estimated_seconds=estimated_seconds,
             created_at=now,
+            name=name,
         )
 
         # Save to database
         with self._get_connection() as conn:
             conn.execute(
                 """INSERT INTO jobs
-                   (id, status, gpu_count, config, priority, estimated_seconds, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, status, gpu_count, config, priority, estimated_seconds, created_at, name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job.id,
                     job.status.value,
@@ -290,6 +367,7 @@ class QueueManager:
                     job.priority,
                     job.estimated_seconds,
                     now.isoformat(),
+                    job.name,
                 )
             )
 
@@ -336,6 +414,7 @@ class QueueManager:
             finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
             error_message=row["error_message"],
             process_pid=row["process_pid"],
+            name=row["name"] if "name" in row.keys() else None,
         )
 
     def list_jobs(
@@ -412,6 +491,9 @@ class QueueManager:
             # Clean up logs
             if job_id in self._job_logs:
                 del self._job_logs[job_id]
+            log_file = RUNS_DIR / f"{job_id}.log"
+            if log_file.exists():
+                log_file.unlink()
 
             return True
 
@@ -524,11 +606,21 @@ class QueueManager:
             "queue": queue,
         }
 
-    def get_job_logs(self, job_id: str) -> List[str]:
-        """Get logs for a job."""
-        if job_id in self._job_logs:
-            return list(self._job_logs[job_id])
-        return []
+    def get_job_logs(self, job_id: str, tail: int = 5000) -> List[str]:
+        """Get logs for a job: the live buffer, or the run's log file after a restart."""
+        if job_id in self._job_logs and self._job_logs[job_id]:
+            return list(self._job_logs[job_id])[-tail:]
+        return self._read_log_file(job_id)[-tail:]
+
+    def _read_log_file(self, job_id: str) -> List[str]:
+        path = RUNS_DIR / f"{job_id}.log"
+        if not path.exists():
+            return []
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    def get_job_metrics(self, job_id: str) -> dict:
+        """Loss curve and progress parsed from the full log file."""
+        return parse_metrics(self._read_log_file(job_id))
 
     # =========================================================================
     # Job Execution
@@ -564,8 +656,8 @@ class QueueManager:
         # Build command
         gpu_count = len(job.gpu_indices)
         strategy = str(mini_cfg.get("strategy", "solo")).lower()
-        if strategy in {"ddp", "fsdp"}:
-            # ddp/fsdp always need torchrun — even on 1 GPU, train.py initializes a
+        if strategy in {"ddp", "fsdp", "5d"}:
+            # ddp/fsdp/5d always need torchrun — even on 1 GPU, train.py initializes a
             # process group, which requires the RANK/WORLD_SIZE/MASTER_* env torchrun sets.
             cmd = [
                 sys.executable, "-u", "-m", "torch.distributed.run",

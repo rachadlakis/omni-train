@@ -22,7 +22,11 @@ cp .env.example .env   # then add your HF_TOKEN
 
 ## Running Tests
 
-All non-GPU tests must pass before opening a PR.
+All non-GPU tests must pass before opening a PR. GitHub Actions runs them for you
+(`.github/workflows/tests.yml`): the unit suite on every push, the multi-process suite on
+PRs. Both run on CPU with `HF_HUB_OFFLINE=1`, so tests must not download models or datasets.
+Build tiny models from configs instead (see `tests/post_training_helpers.py`). Only the GPU
+smoke tests need your own machine.
 
 ```bash
 # Unit tests — no GPU required
@@ -31,8 +35,15 @@ python -m pytest
 # Single test file
 python -m pytest tests/test_config_validation.py -v
 
-# GPU smoke tests (~30-60s each, requires a GPU)
+# Multi-process equivalence (CPU/gloo, ~5 min): 5d layouts + post-training under DDP
+python -m pytest -m dist
+
+# GPU smoke tests (~30-60s each, requires a GPU) — not run in CI
 python -m pytest -m smoke
+
+# Everything GPU-only in one go, e.g. on a rented multi-GPU pod (logs in gpu_check_logs/)
+bash scripts/gpu_check.sh --setup   # first run on a fresh machine
+bash scripts/gpu_check.sh           # quick: NCCL + dist on GPUs + curated smoke
 ```
 
 ---
@@ -47,7 +58,7 @@ If you're not sure where to start, these are well-scoped and genuinely useful:
 - **Improve the Web UI** — `ui/static/app.js` and `ui/static/styles.css`. The UI is functional but there is room to improve the job history view and error display.
 
 **Advanced:**
-- **3D hybrid parallelism** (`hybrid/`) — the module exists and is tested in isolation but is not yet integrated into the main training loop. This is the highest-impact open task and the most complex.
+- **Extend `strategy: 5d`** (`parallelism/`) — LoRA under TP, more HF architectures (Qwen3, Gemma, Mixtral MoE checkpoints), vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules. Any change to gradient sync must keep `python -m pytest -m dist` green; it compares every parameter's gradient against a 1-process run.
 
 ---
 

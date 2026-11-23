@@ -1,5 +1,7 @@
 # OMNI-Train
 
+[![tests](https://github.com/rachadlakis/omni-train/actions/workflows/tests.yml/badge.svg)](https://github.com/rachadlakis/omni-train/actions/workflows/tests.yml)
+
 **A modular PyTorch framework for distributed fine-tuning of LLMs, vision, vision-language, and embedding models.**
 
 Train across multiple GPUs and nodes with a single config file — from a single consumer GPU to a multi-node SLURM cluster.
@@ -12,13 +14,15 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 
 ## Highlights
 
-- **Three execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), and `fsdp` (Fully Sharded Data Parallel).
+- **Four execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), `fsdp` (Fully Sharded Data Parallel), and `5d`: any mix of data, tensor (+sequence), context, pipeline and expert parallelism, set in YAML.
+- **Post-training** — SFT and preference optimisation (DPO, IPO, hinge, SimPO, ORPO), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA. GRPO and PPO are next.
 - **Parameter-efficient fine-tuning** — LoRA and QLoRA with 4-bit (NF4) / 8-bit quantization via `bitsandbytes`.
 - **Memory-efficient FSDP2** — parameter, gradient, and optimizer-state sharding with meta-device initialization to avoid CPU RAM spikes.
 - **Distributed checkpointing** — both DCP and DTensor APIs.
 - **Multi-modality** — LLMs, seq2seq, encoders, image classification, object detection, and vision-language models.
 - **SLURM multi-node** — batch script and Python launcher included.
-- **Browser UI** — a FastAPI web app to configure and launch jobs.
+- **Capacity planner** — `planner.py` answers “is distributed training needed?”: per-GPU memory for solo / DDP / FSDP / 5D, a recommended layout, the minimum GPU count and fixes when nothing fits.
+- **Training console** — a browser UI and REST API to plan, queue and monitor pretraining, SFT and preference runs (5D included).
 
 ---
 
@@ -123,7 +127,7 @@ Open `config.yaml`, pick your model, dataset, number of GPUs, and training param
 bash scripts/launch.sh
 ```
 
-`launch.sh` reads `strategy` and `num_gpus` from the config and decides whether to run `python train.py` (solo) or `torchrun --nproc_per_node=N train.py` (ddp/fsdp).
+`launch.sh` reads `strategy` and `num_gpus` from the config and decides whether to run `python train.py` (solo) or `torchrun --nproc_per_node=N train.py` (ddp/fsdp/5d).
 
 **Other ways to launch:**
 
@@ -179,6 +183,12 @@ Ready-made configs live in [`configs/`](configs/) — use them as starting point
 | `embedding_bert_lora_triplet.yaml` | Embedding model with LoRA |
 | `detection_yolo_single_gpu.yaml` | YOLO object detection |
 | `vlm_llava_lora_single_gpu.yaml` | Vision-language model |
+| `llm_5d_tp_pp_dp_8gpu.yaml` | 5D: TP=2 (+SP) × PP=2 × DP=2 + ZeRO-1, Llama-family full fine-tune, 8 GPUs |
+| `llm_5d_long_context_cp.yaml` | 5D: 16K-token sequences with context parallelism (CP=4) × TP=2 |
+| `custom_5d_moe_16gpu.yaml` | 5D: all five dimensions (DP, TP+SP, CP, PP, EP) on 2 × 8 GPUs, MoE |
+| `custom_5d_cpu_demo.yaml` | 5D on a laptop: 4 CPU processes, TP=2 × PP=2 |
+| `llm_sft_lora_single_gpu.yaml` | SFT with LoRA on chat data (Qwen2.5-0.5B-Instruct, fits 6 GB) |
+| `llm_dpo_lora_single_gpu.yaml` | DPO with LoRA on UltraFeedback pairs (Qwen2.5-0.5B-Instruct, fits 6 GB) |
 
 See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 
@@ -191,6 +201,31 @@ See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 | `solo` | Single GPU | No torchrun, no process group |
 | `ddp` | Model fits in one GPU; scale throughput | Every GPU holds a full model replica; gradients synced via all-reduce |
 | `fsdp` | Large models, limited GPU memory | Parameters, gradients, and optimizer states sharded across GPUs |
+| `5d` | Very large models, long sequences, MoE, many nodes | Any mix of DP (+ZeRO-1), TP (+SP), CP, PP and EP from the `parallelism:` block |
+
+### 5D parallelism (`strategy: 5d`)
+
+Pick the size of each dimension in YAML; `dp × tp × cp × pp` must equal `num_gpus`:
+
+```yaml
+strategy: 5d
+num_gpus: 8
+parallelism:
+  tp: 2              # tensor parallel (split heads / MLP), keep within a node
+  sp: true           # sequence parallel on top of TP
+  cp: 1              # context parallel: ring attention over the sequence
+  pp: 2              # pipeline stages
+  pp_schedule: 1f1b
+  micro_batches: 8   # global batch = batch_size × micro_batches × dp
+  ep: 1              # expert parallel (MoE models)
+  zero1: true        # shard AdamW states over DP
+  dp: auto           # = num_gpus / (tp × cp × pp) = 2
+```
+
+Works with Hugging Face **Llama, Mistral and Qwen2** models (`model_type: llm`, full fine-tune,
+weights loaded shard by shard, exported back to HF format after training) and with
+`model_type: custom_transformer` (including Mixture-of-Experts). Every layout is tested to give the
+same losses and gradients as a single process. Details: [`docs/5D_PARALLELISM.md`](docs/5D_PARALLELISM.md).
 
 > **Constraint:** `bitsandbytes` quantization (4-bit / 8-bit) is **incompatible with FSDP**. Use `strategy: ddp` or `strategy: solo` when quantization is enabled.
 
@@ -203,6 +238,23 @@ See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 | Full fine-tuning | Highest | Small models |
 | LoRA | Medium | Most fine-tuning |
 | QLoRA | Lowest | 7B+ models on consumer GPUs |
+
+### Post-training (`algorithm:` block)
+
+| `algorithm.type` | What it does | Data |
+| --- | --- | --- |
+| `pretrain` (default) | next-token loss on raw text | `text` |
+| `sft` | supervised fine-tuning, loss on the answer tokens only | `messages`, `prompt`/`completion`, Alpaca |
+| `dpo` | DPO (`dpo_loss: sigmoid`), IPO (`ipo`) or SLiC (`hinge`) | `prompt`/`chosen`/`rejected` or chosen/rejected chats |
+| `simpo` / `orpo` | reference-free preference optimisation | same as DPO |
+
+```bash
+CONFIG_PATH=configs/llm_sft_lora_single_gpu.yaml bash scripts/launch.sh
+CONFIG_PATH=configs/llm_dpo_lora_single_gpu.yaml bash scripts/launch.sh
+```
+
+DPO's reference log-probs are computed once before training, so no second model is kept in
+memory. Details and dataset formats: [`docs/POST_TRAINING.md`](docs/POST_TRAINING.md).
 
 ---
 
@@ -252,17 +304,37 @@ Set `model_type` in `config.yaml` to match your architecture. Tiny picks below a
 
 ## Web UI
 
-Launch the browser-based training launcher:
+The console plans, launches and monitors runs on this machine's GPUs (or submits them to SLURM):
 
 ```bash
-bash ui/launch_ui.sh          # http://127.0.0.1:8787
+bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)
 ```
 
-For a remote server:
+- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO; GRPO and PPO are listed as planned), a model,
+  data, a strategy (solo, DDP, FSDP or a 5D layout with a live rank map) and hyperparameters. A plan panel
+  re-estimates memory as you edit and offers its recommended strategy in one click.
+- **Runs**: a queue with live progress, loss curves and logs; logs persist in `ui/runs/` across restarts.
+- **Planner**, **Checkpoints**, **System** (GPUs, which credentials are set) and **API** (copyable curl examples).
+
+For a remote server (the UI has no authentication: put it behind a firewall or an authenticated proxy):
 
 ```bash
 uvicorn ui.app:app --host 0.0.0.0 --port 8787
 ```
+
+### Is distributed training needed?
+
+```bash
+python planner.py --model meta-llama/Llama-3.1-8B --gpus 8 --gpu h100 --seq 4096
+python planner.py --config configs/llm_dpo_lora_single_gpu.yaml --gpu 4050
+```
+
+It prints the verdict (single GPU / distributed optional / distributed required / does not fit), the per-GPU
+memory of every strategy split into weights, gradients, AdamW states, activations and logits, the recommended
+layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
+(gradient checkpointing, LoRA, QLoRA, shorter sequences). The same plan is served at `POST /api/plan`.
+Estimates follow this repo's precision rules (fp32 trainable weights, bf16 frozen LoRA base outside FSDP)
+and are typically within ~15% of the measured peak.
 
 ---
 
@@ -294,6 +366,9 @@ python -m pytest tests/test_config_validation.py -v
 
 # GPU smoke tests (require a GPU, ~30–60s each)
 python -m pytest -m smoke
+
+# 5D layout equivalence on CPU (multi-process, no GPU, a few minutes)
+python -m pytest -m dist
 ```
 
 ---
@@ -306,14 +381,16 @@ omni-train/
 ├── config.yaml             # active configuration
 ├── distributed_utils.py    # solo / ddp / fsdp model setup
 ├── checkpoint.py           # distributed checkpointing
-├── parallelism.py          # experimental 3D parallelism
 ├── data.py                 # dataloaders per model type
 ├── utils.py                # config parsing + validation
 ├── model.py                # custom_transformer toy model
+├── parallelism/            # strategy: 5d — DP, TP+SP, CP, PP, EP, ZeRO-1
 ├── configs/                # ready-made example configs
 ├── scripts/                # launch + SLURM utilities
 ├── tests/                  # unit and smoke tests
-├── ui/                     # FastAPI web UI
+├── planner.py              # capacity planner: is distributed training needed?
+├── ui/                     # training console + REST API (FastAPI)
+├── dist_kit/               # standalone solo/DDP/FSDP kit to copy into other projects
 └── docs/                   # guides and technical reference
 ```
 
@@ -325,6 +402,7 @@ omni-train/
 | --- | --- |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | Beginner setup and usage |
 | [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | Distributed internals and architecture |
+| [`docs/5D_PARALLELISM.md`](docs/5D_PARALLELISM.md) | `strategy: 5d`: layouts, rules, how each dimension works |
 
 ---
 
@@ -342,10 +420,10 @@ omni-train/
 
 ## Roadmap
 
-- [ ] DeviceMesh parallelism
-- [ ] Tensor parallelism
-- [ ] Pipeline parallelism
-- [ ] Expert parallelism (MoE)
+- [ ] `strategy: 5d`: LoRA/QLoRA, more architectures (Qwen3, Gemma, MoE checkpoints such as Mixtral),
+      vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules
+- [x] `strategy: 5d`, SFT and preference optimisation in the web UI
+- [ ] GRPO / PPO (shown in the UI as planned)
 
 ---
 

@@ -34,18 +34,24 @@ build/
 # UI runtime artifacts
 ui/_active_config.yaml
 ui/_torchelastic_error.json
+ui/runs/
+ui/_job_*_config.yaml
 
 # OS / editor cruft
 nul
 .DS_Store
-
-# Work-in-progress modules (not part of the public release yet)
-hybrid/
-parallelism.py
-parallelism_test.py
 
 # Local scratch / private docs (never publish)
 docs/Directions OMNI-Train.txt
 docs/Steps to clone and run omni-train.txt
 docs/presentation.pptx
 docs/presentation*.html
+
+# Type-checker caches
+.mypy_cache/
+
+# GPU check logs (scripts/gpu_check.sh)
+gpu_check_logs/
+
+# Windows download markers copied into WSL
+*:Zone.Identifier

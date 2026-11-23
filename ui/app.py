@@ -1,13 +1,12 @@
 """
-OMNI-Train Web UI
+OMNI-Train console and REST API.
 
-A simple FastAPI server with a web interface for configuring and launching
-training jobs. Serves a single-page frontend and exposes REST endpoints.
+Serves the single-page console (ui/static) and a REST API to plan, validate, queue and
+monitor pretraining, SFT and preference-optimisation runs. Interactive API docs: /docs.
 
 Usage:
-    python -m omni_train.ui.app
-    # or
-    uvicorn omni_train.ui.app:app --reload --port 8000
+    bash ui/launch_ui.sh                      # http://127.0.0.1:8787
+    uvicorn ui.app:app --host 127.0.0.1 --port 8787
 """
 
 import math
@@ -43,7 +42,12 @@ except ImportError:
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="OMNI-Train UI", version="1.0")
+app = FastAPI(
+    title="OMNI-Train API",
+    version="2.0",
+    description="Plan, launch and monitor pretraining, SFT and preference-optimisation runs "
+                "(solo, DDP, FSDP, 5D parallelism) on your own GPUs.",
+)
 
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
@@ -104,6 +108,10 @@ STATIC_DIR = UI_DIR / "static"
 PROJECT_ROOT = UI_DIR.parent
 CONFIGS_DIR = PROJECT_ROOT / "configs"
 IMAGES_DIR = PROJECT_ROOT / "images"
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import planner  # noqa: E402  (needs PROJECT_ROOT on sys.path)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if IMAGES_DIR.exists():
@@ -188,6 +196,13 @@ class QueueSubmitPayload(BaseModel):
     config: dict
     gpu_count: int = 1
     priority: int = 0
+    name: Optional[str] = None
+
+
+class PlanPayload(BaseModel):
+    config: dict
+    cluster: Optional[dict] = None   # {gpu_mem_gb, gpus_per_node, nodes, gpu_name, tflops}
+    num_samples: Optional[int] = None
 
 
 class ValidateResponse(BaseModel):
@@ -313,6 +328,17 @@ async def get_env_keys(request: Request, keys: str = Query("", description="Comm
         result = {k: "" for k in selected}
 
     return {"found": env_path.exists(), "local": is_local, "keys": result}
+
+
+@app.get("/api/env/status")
+async def env_status():
+    """Which credentials are configured (.env or the server's environment). Never returns values."""
+    parsed = _parse_dotenv((PROJECT_ROOT / ".env").resolve())
+    keys = ("HF_TOKEN", "WANDB_API_KEY")
+    return {
+        "found": (PROJECT_ROOT / ".env").exists(),
+        "keys": {k: bool(parsed.get(k) or os.environ.get(k)) for k in keys},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -478,12 +504,19 @@ def _infer_dataset_size(dataset_name: str, dataset_split: str) -> int:
         "c4": 365000000,
         "alpaca": 52000,
         "squad": 87599,
+        "ultrafeedback": 62135,
+        "capybara": 16006,
+        "hh-rlhf": 160800,
     }
     base = 100000
     for key, size in known_full_sizes.items():
         if key in name:
             base = size
             break
+    # "train[:2000]" / "train[:2000]+validation[:500]": absolute row counts
+    counts = re.findall(r"\[\s*:\s*(\d+)\s*\]", dataset_split or "")
+    if counts:
+        return max(1, sum(int(n) for n in counts))
     ratio = _parse_dataset_split_ratio(dataset_split)
     return max(1, int(base * ratio))
 
@@ -601,6 +634,7 @@ async def list_checkpoints(dir: str = "checkpoints"):
         ("ddp",          ckpt_root / "ddp",               "file"),
         ("fsdp-dcp",     ckpt_root / "fsdp" / "dcp_api",  "dir"),
         ("fsdp-dtensor", ckpt_root / "fsdp" / "dtensor_api", "dir"),
+        ("5d",           ckpt_root / "5d",                "dir"),
     ]
     for strategy, sub, kind in scan_specs:
         if not sub.exists():
@@ -815,154 +849,171 @@ async def api_estimate_training_time(payload: ConfigPayload):
         }
 
 # ---------------------------------------------------------------------------
-# Routes: FSDP Check
+# Routes: Capacity planner ("is distributed training needed?")
 # ---------------------------------------------------------------------------
 
-@app.post("/api/fsdp-check")
-async def fsdp_check(payload: ConfigPayload):
-    """Check if distributed training (FSDP / 3D parallelism) is needed based on estimated VRAM vs available GPU memory."""
-    config = payload.config
-    model_cfg = config.get("model", {})
-    training_cfg = config.get("training", {})
-    distributed_cfg = config.get("distributed", {})
+_HF_CONFIG_CACHE: dict[str, Optional[dict]] = {}
 
-    model_name = model_cfg.get("name", "") or ""
-    model_type = str(model_cfg.get("type", "")).lower()
-    batch_size = int(training_cfg.get("batch_size") or 8)
-    seq_len = int(training_cfg.get("max_length") or training_cfg.get("max_seq_len") or 512)
-    activation_checkpointing = bool(training_cfg.get("gradient_checkpointing", False))
-    mixed_precision = distributed_cfg.get("mixed_precision", True)
 
-    param_dtype_bits = 16 if mixed_precision else 32
-
-    if model_type == "custom_transformer":
-        # Compute exact param count from user-specified architecture
-        arch = model_cfg.get("arch", {})
-        n_layers  = int(arch.get("n_layers",   2))
-        dim       = int(arch.get("dim",        16))
-        n_heads   = int(arch.get("n_heads",     4))
-        vocab_size = int(arch.get("vocab_size", 8))
-        max_seq_len = int(arch.get("max_seq_len", 16))
-        seq_len = max_seq_len  # use the model's actual seq len
-
-        # Parameter count: embeddings + n_layers*(attn projections + FFN + norms) + final norm + output
-        embed_params      = vocab_size * dim + max_seq_len * dim          # tok + pos embeddings
-        attn_params       = 4 * dim * dim                                 # wq, wk, wv, wo
-        ffn_params        = dim * (4 * dim) + (4 * dim) * dim             # w1 + w2 (bias=False)
-        norm_params       = 2 * dim * 2 + dim * 2                        # 2x LayerNorm per block + final norm
-        block_params      = attn_params + ffn_params + norm_params
-        output_params     = dim * vocab_size
-        num_params        = embed_params + n_layers * block_params + output_params
-        num_layers, hidden_dim, num_heads = n_layers, dim, n_heads
-    else:
-        num_params = _infer_num_params_from_model_name(model_name)
-        num_layers, hidden_dim, num_heads = _infer_transformer_shape(num_params)
-
-    # Map UI model_type to values accepted by estimate_training_vram
-    _type_map = {
-        "llm": "llm", "seq2seq": "seq2seq", "vlm": "vlm",
-        "encoder": "encoder", "embedding": "encoder",
-        "vision": "vision", "cnn": "vision",
-        "yolo": "yolo", "detection": "yolo",
-    }
-    vram_model_type = _type_map.get(model_type, "llm")
-
+def _hf_config(model_name: str) -> Optional[dict]:
+    """config.json of a Hub model: local cache first, then the Hub (unless offline)."""
+    if not model_name or model_name in _HF_CONFIG_CACHE:
+        return _HF_CONFIG_CACHE.get(model_name)
+    result = None
     try:
-        utils_mod = _load_mini_utils_module(PROJECT_ROOT)
-        vram = utils_mod.estimate_training_vram(
-            model_type=vram_model_type,
-            num_params=num_params,
-            param_dtype_bits=param_dtype_bits,
-            batch_size=batch_size,
-            seq_len=seq_len,
-            num_layers=num_layers,
-            hidden_dim=hidden_dim,
-            activation_checkpointing=activation_checkpointing,
-        )
+        from transformers import AutoConfig
+        token = os.environ.get("HF_TOKEN") or _parse_dotenv(PROJECT_ROOT / ".env").get("HF_TOKEN") or None
+        for local_only in (True, False):
+            if not local_only and os.environ.get("HF_HUB_OFFLINE") == "1":
+                break
+            try:
+                result = AutoConfig.from_pretrained(model_name, token=token, local_files_only=local_only).to_dict()
+                break
+            except Exception:
+                continue
     except Exception:
-        # Fallback: rough estimate without utils module
-        bytes_per_param = param_dtype_bits / 8
-        weights_gb = num_params * bytes_per_param / 1e9
-        activations_gb = round(batch_size * seq_len * hidden_dim * num_layers * 2 / 1e9, 2)
-        vram = {
-            "weights_gb": round(weights_gb, 2),
-            "gradients_gb": round(weights_gb, 2),
-            "optimizer_gb": round(weights_gb * 6, 2),
-            "activations_gb": activations_gb,
-            "total_gb": round(weights_gb * 8 + activations_gb, 2),
-        }
+        result = None
+    _HF_CONFIG_CACHE[model_name] = result
+    return result
 
-    # Detect GPU memory
-    gpu_memory_gb = None
-    gpu_name = "Unknown"
-    detected_gpu_count = 0
+
+def _model_spec(cfg: dict) -> "planner.ModelSpec":
+    model_type = str(cfg.get("model_type", "llm")).lower()
+    name = str(cfg.get("model_name") or "")
+    if model_type == "custom_transformer":
+        return planner.spec_from_custom(cfg.get("custom_transformer_args") or {})
+    if name.lower() in planner.PRESETS:
+        return planner.PRESETS[name.lower()]
+    return planner.resolve_spec(name, model_type, hf_config=_hf_config(name))
+
+
+def _local_cluster() -> dict:
+    """GPUs on this machine, as planner.Cluster fields."""
     try:
         import torch
         if torch.cuda.is_available():
-            detected_gpu_count = torch.cuda.device_count()
             props = torch.cuda.get_device_properties(0)
-            gpu_memory_gb = round(props.total_memory / (1024 ** 3), 2)
-            gpu_name = props.name
+            return {"gpu_mem_gb": round(props.total_memory / GB_BYTES, 2), "gpus_per_node": torch.cuda.device_count(),
+                    "nodes": 1, "gpu_name": props.name, "detected": True}
     except Exception:
         pass
+    return {"gpu_mem_gb": 80.0, "gpus_per_node": 1, "nodes": 1, "gpu_name": "H100", "detected": False}
 
-    num_gpus = detected_gpu_count if detected_gpu_count > 0 else 1
 
-    total_vram_needed = vram["total_gb"]
+GB_BYTES = 1024 ** 3
 
-    # With FSDP, weights/gradients/optimizer are sharded across GPUs;
-    # activations remain per-GPU
-    shardable_gb = vram["weights_gb"] + vram["gradients_gb"] + vram["optimizer_gb"]
-    # Apply same 0.85 efficiency factor as used in estimate_training_vram
-    fsdp_per_gpu_gb = round((shardable_gb / max(1, num_gpus) + vram["activations_gb"]) * 0.85, 2)
 
-    if gpu_memory_gb is None:
-        fsdp_needed = None
-        verdict = "Unable to determine"
-        reason = "No GPU detected. Cannot compare VRAM requirements."
-    elif total_vram_needed <= gpu_memory_gb:
-        fsdp_needed = False
-        verdict = "Distributed training not needed"
-        reason = (
-            f"Estimated VRAM ({total_vram_needed:.1f} GB) fits within a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}). Solo or DDP is sufficient."
-        )
-    elif fsdp_per_gpu_gb <= gpu_memory_gb:
-        fsdp_needed = True
-        verdict = "Distributed training recommended"
-        reason = (
-            f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}), but sharding across {num_gpus} GPU(s) "
-            f"(FSDP or 3D parallelism) reduces per-GPU usage to ~{fsdp_per_gpu_gb:.1f} GB, which fits."
-        )
-    else:
-        fsdp_needed = True
-        gpus_needed = math.ceil(shardable_gb / (gpu_memory_gb - vram["activations_gb"])) if gpu_memory_gb > vram["activations_gb"] else None
-        gpus_hint = f" Try increasing GPU count to ~{gpus_needed}." if gpus_needed else ""
-        verdict = "Distributed training needed — more GPUs required"
-        reason = (
-            f"Estimated VRAM ({total_vram_needed:.1f} GB) exceeds a single GPU "
-            f"({gpu_memory_gb:.1f} GB on {gpu_name}), and sharding across {num_gpus} GPU(s) "
-            f"(FSDP or 3D parallelism) still requires ~{fsdp_per_gpu_gb:.1f} GB per GPU, which also exceeds available memory.{gpus_hint}"
-        )
+def _plan(payload: PlanPayload) -> dict:
+    cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+    spec = _model_spec(cfg)
+    work = planner.workload_from_config(cfg)
+    work.num_samples = payload.num_samples or _infer_dataset_size(
+        str((cfg.get("dataset") or {}).get("name", "")), str((cfg.get("dataset") or {}).get("split", "train")))
+    local = _local_cluster()
+    fields = {k: v for k, v in {**local, **(payload.cluster or {})}.items()
+              if k in {"gpu_mem_gb", "gpus_per_node", "nodes", "gpu_name", "tflops"} and v not in (None, "")}
+    cluster = planner.Cluster(**fields)
+    result = planner.plan(spec, work, cluster)
+    strategy = str(cfg.get("strategy", "solo")).lower()
+    result["selected"] = planner.evaluate_layout(
+        spec, work, cluster, strategy, int(cfg.get("num_gpus", 1) or 1), cfg.get("parallelism"))
+    result["selected"]["strategy"] = strategy
+    result["local_cluster"] = local
+    return result
 
-    return {
-        "fsdp_needed": fsdp_needed,
-        "verdict": verdict,
-        "reason": reason,
-        "vram_needed_gb": total_vram_needed,
-        "gpu_memory_gb": gpu_memory_gb,
-        "gpu_name": gpu_name,
-        "gpu_count": detected_gpu_count,
-        "fsdp_per_gpu_gb": fsdp_per_gpu_gb,
-        "vram_breakdown": vram,
-        "model_params_b": round(num_params / 1e9, 2),
-    }
+
+@app.post("/api/plan")
+async def plan_run(payload: PlanPayload):
+    """Is distributed training needed? Recommends solo / DDP / FSDP / a 5D layout.
+
+    Returns the verdict, per-GPU memory breakdown and throughput of every strategy,
+    the minimum GPU count per strategy, what-if fixes, and an evaluation of the
+    strategy currently in the config (`selected`).
+    """
+    from starlette.concurrency import run_in_threadpool
+    try:
+        return await run_in_threadpool(_plan, payload)
+    except Exception as e:
+        raise HTTPException(400, f"Could not plan this config: {e}")
+
+
+@app.get("/api/models/inspect")
+async def inspect_model(name: str = Query(..., description="Hugging Face model id"),
+                        model_type: str = Query("llm")):
+    """Architecture summary of a model (presets offline, otherwise its config.json)."""
+    from starlette.concurrency import run_in_threadpool
+    spec = await run_in_threadpool(_model_spec, {"model_name": name, "model_type": model_type})
+    return spec.to_dict()
+
+
+ALGORITHM_CATALOG = [
+    {"id": "pretrain", "stage": "pretrain", "title": "Pretraining / continued pretraining",
+     "summary": "Next-token prediction on raw text. Supports every strategy including 5D.",
+     "data": "text column (packed into fixed blocks under 5d)", "status": "ready",
+     "strategies": ["solo", "ddp", "fsdp", "5d"], "lr": {"full": 2e-5, "lora": 2e-4}},
+    {"id": "sft", "stage": "sft", "title": "Supervised fine-tuning (SFT)",
+     "summary": "Instruction / chat tuning. Loss on the assistant tokens only by default.",
+     "data": "messages | prompt + completion | instruction (+input) + output | text", "status": "ready",
+     "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-5, "lora": 2e-4},
+     "example_dataset": {"name": "trl-lib/Capybara", "split": "train[:2000]"}},
+    {"id": "dpo", "stage": "preference", "title": "DPO", "summary": "Direct Preference Optimisation against a frozen reference (precomputed once, no second model).",
+     "data": "prompt + chosen + rejected | chosen/rejected conversations | hh-rlhf", "status": "ready",
+     "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 5e-5}, "beta": 0.1,
+     "example_dataset": {"name": "trl-lib/ultrafeedback_binarized", "split": "train[:2000]"}},
+    {"id": "simpo", "stage": "preference", "title": "SimPO", "summary": "Reference-free, length-normalised preference loss with a target margin.",
+     "data": "prompt + chosen + rejected", "status": "ready", "strategies": ["solo", "ddp", "fsdp"],
+     "lr": {"full": 1e-6, "lora": 5e-5}, "beta": 2.0,
+     "example_dataset": {"name": "trl-lib/ultrafeedback_binarized", "split": "train[:2000]"}},
+    {"id": "orpo", "stage": "preference", "title": "ORPO", "summary": "SFT + odds-ratio preference term in one pass, no reference model.",
+     "data": "prompt + chosen + rejected", "status": "ready", "strategies": ["solo", "ddp", "fsdp"],
+     "lr": {"full": 5e-6, "lora": 8e-5}, "beta": 0.1,
+     "example_dataset": {"name": "trl-lib/ultrafeedback_binarized", "split": "train[:2000]"}},
+    {"id": "grpo", "stage": "rl", "title": "GRPO", "summary": "Online RL with group-relative advantages and verifiable rewards.",
+     "data": "prompts + reward function", "status": "planned", "strategies": []},
+    {"id": "ppo", "stage": "rl", "title": "PPO (RLHF)", "summary": "Online RL with a reward model and value head.",
+     "data": "prompts + reward model", "status": "planned", "strategies": []},
+]
+
+
+@app.get("/api/catalog")
+async def catalog():
+    """Algorithms, strategies, model presets and GPU types the console offers."""
+    models = [{"name": s.name, "params": s.params, "arch": s.arch, "five_d_ready": s.five_d_ready,
+               "layers": s.layers, "hidden": s.hidden, "vocab": s.vocab, "num_experts": s.num_experts}
+              for s in planner.PRESETS.values()]
+    gpus = [{"id": k, "name": v[0], "memory_gb": v[1], "tflops": v[2]} for k, v in planner.GPU_CATALOG.items()]
+    return {"algorithms": ALGORITHM_CATALOG, "models": models, "gpus": gpus,
+            "local_cluster": _local_cluster()}
 
 
 # ---------------------------------------------------------------------------
 # Routes: Validation
 # ---------------------------------------------------------------------------
+
+class YamlPayload(BaseModel):
+    yaml: str
+
+
+@app.post("/api/config/render")
+async def render_config(payload: ConfigPayload):
+    """The full training YAML (config.yaml schema) this config launches with."""
+    mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+    for key in ("launch_mode", "slurm"):
+        mini_cfg.pop(key, None)
+    return {"yaml": yaml.safe_dump(mini_cfg, sort_keys=False, default_flow_style=False), "config": mini_cfg}
+
+
+@app.post("/api/config/parse")
+async def parse_config(payload: YamlPayload):
+    """Parse YAML text into a config dict (for the console's YAML editor)."""
+    try:
+        parsed = yaml.safe_load(payload.yaml)
+    except yaml.YAMLError as e:
+        raise HTTPException(400, f"YAML syntax error: {e}")
+    if not isinstance(parsed, dict):
+        raise HTTPException(400, "The YAML must be a mapping (key: value pairs) at the top level.")
+    return {"config": parsed}
+
 
 @app.post("/api/config/validate")
 async def validate_config(payload: ConfigPayload):
@@ -1009,7 +1060,7 @@ async def start_training(payload: ConfigPayload):
         state.status = "running"
 
     strategy = str(mini_cfg.get("strategy", "solo")).lower()
-    strategy = strategy if strategy in {"solo", "ddp", "fsdp", "hybrid"} else "solo"
+    strategy = strategy if strategy in {"solo", "ddp", "fsdp", "5d"} else "solo"
     gpu_count = int(mini_cfg.get("num_gpus", 1) or 1)
     if strategy == "solo":
         gpu_count = 1
@@ -1038,7 +1089,7 @@ async def start_training(payload: ConfigPayload):
     elif strategy == "solo":
         cmd = [sys.executable, "-u", "train.py"]
     else:
-        # ddp, fsdp, hybrid all use torchrun
+        # ddp, fsdp and 5d use torchrun
         cmd = [
             sys.executable,
             "-u",
@@ -1182,18 +1233,33 @@ async def queue_submit(payload: QueueSubmitPayload):
     if not queue_manager:
         raise HTTPException(500, "Queue manager not initialized")
 
+    mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+    try:
+        validate_mini_config(mini_cfg, PROJECT_ROOT)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid training config: {e}")
+
+    strategy = str(mini_cfg.get("strategy", "solo")).lower()
+    requested_gpus = 1 if strategy == "solo" else max(1, int(mini_cfg.get("num_gpus", payload.gpu_count) or 1))
+    total = queue_manager.get_total_gpus()
+    if requested_gpus > total:
+        raise HTTPException(
+            400,
+            f"This machine has {total} GPU(s) but the run asks for {requested_gpus}. Lower num_gpus, "
+            f"or launch it on a cluster (python scripts/launch_slurm.py --config <yaml>).",
+        )
+
     # Calculate estimated training time
     estimate = await api_estimate_training_time(ConfigPayload(config=payload.config))
     estimated_seconds = estimate.get("est_total_seconds")
 
-    mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
-    requested_gpus = int(mini_cfg.get("num_gpus", payload.gpu_count) or 1)
-
+    name = (payload.name or "").strip()[:120] or None
     job = queue_manager.submit_job(
         config=mini_cfg,
-        gpu_count=max(1, requested_gpus),
+        gpu_count=requested_gpus,
         priority=payload.priority,
         estimated_seconds=estimated_seconds,
+        name=name,
     )
 
     response = {
@@ -1239,10 +1305,16 @@ async def queue_list_jobs(
             raise HTTPException(400, f"Invalid status: {status}")
 
     jobs = queue_manager.list_jobs(status=job_status, limit=limit, offset=offset)
-    return {"jobs": [job.to_dict() for job in jobs]}
+    out = []
+    for job in jobs:
+        item = job.to_dict()
+        if job.status == JobStatus.RUNNING:
+            item["progress"] = queue_manager.get_job_metrics(job.id)["progress"]
+        out.append(item)
+    return {"jobs": out}
 
 @app.get("/api/queue/jobs/{job_id}")
-async def queue_get_job(job_id: str):
+async def queue_get_job(job_id: str, tail: int = Query(2000, ge=1, le=20000)):
     """Get details for a specific job."""
     if not queue_manager:
         raise HTTPException(500, "Queue manager not initialized")
@@ -1252,7 +1324,8 @@ async def queue_get_job(job_id: str):
         raise HTTPException(404, f"Job '{job_id}' not found")
 
     result = job.to_dict()
-    result["logs"] = queue_manager.get_job_logs(job_id)
+    result["logs"] = queue_manager.get_job_logs(job_id, tail=tail)
+    result["metrics"] = queue_manager.get_job_metrics(job_id)
 
     if job.status == JobStatus.PENDING:
         result["queue_position"] = queue_manager.get_queue_position(job_id)
@@ -1310,8 +1383,8 @@ async def queue_delete_job(job_id: str):
 def main():
     import uvicorn
     host = os.getenv("UI_HOST", "127.0.0.1")
-    port = int(os.getenv("UI_PORT", "8000"))
-    print("\n omni-train UI")
+    port = int(os.getenv("UI_PORT", "8787"))
+    print("\n OMNI-Train console")
     print(f"  http://{host}:{port}\n")
     if host not in ("127.0.0.1", "localhost"):
         print("  WARNING: this UI has no authentication. Binding to a non-loopback")

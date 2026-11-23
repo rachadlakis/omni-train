@@ -1,0 +1,24 @@
+# 3D layout on one 8-GPU node: TP=2 (+SP) x PP=2 x DP=2, ZeRO-1.
+# Full fine-tune of a Llama-family model (Llama / Mistral / Qwen2).
+#   CONFIG_PATH=configs/llm_5d_tp_pp_dp_8gpu.yaml bash scripts/launch.sh
+# The fine-tuned model is exported to <checkpoint_dir>/5d/<timestamp>/hf (normal HF format).
+model_name: meta-llama/Llama-3.1-8B
+model_type: llm
+dataset: {name: wikitext, subset: wikitext-103-raw-v1, split: 'train[:10%]'}
+training: {epochs: 1, batch_size: 1, max_length: 2048, learning_rate: 2.0e-05, gradient_checkpointing: true,
+  warmup_steps: 50, lr_scheduler: cosine, weight_decay: 0.01, grad_clip: 1.0}
+strategy: 5d
+num_gpus: 8
+checkpoint_dir: checkpoints/llm_5d
+save: true
+parallelism: {dp: auto, tp: 2, sp: true, cp: 1, pp: 2, pp_schedule: 1f1b, micro_batches: 8,
+  ep: 1, zero1: true}
+dist_parameters: {mixed_precision: true, param_dtype: bfloat16, reduce_dtype: float32,
+  output_dtype: bfloat16, cast_forward_inputs: false, distribute_api: dcp_api}
+save_load: {resume: false, resume_path: '', load_model_from_hf: true}
+prefetch: {explicit: true, forward: 2, backward: 2}
+peft: {enabled: false, type: lora, r: 8, alpha: 16, dropout: 0.05, target_modules: all-linear,
+  bias: none}
+quantization: {enabled: false, bits: 8, quant_type: nf4, compute_dtype: bfloat16,
+  double_quant: true}
+wandb: {wandb_log_with_train: false, wandb_entity: '', wandb_project: omni-train}

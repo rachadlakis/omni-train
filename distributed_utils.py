@@ -19,7 +19,7 @@ from transformers import (
     AutoConfig,
     BitsAndBytesConfig,
 )
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, fully_shard, MixedPrecisionPolicy
+from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
 from checkpoint import Checkpointer
 from dotenv import load_dotenv
 from utils import dist_barrier, inspect_model
@@ -101,20 +101,6 @@ def print_on_all_ranks(rank, msg, emoji="", local_rank=None, device=None):
         prefix_parts.append(f"device={device}")
     prefix = " | ".join(prefix_parts)
     print(f"\n{_gutter(emoji)}[{prefix}] {msg}", flush=True)
-
-def gather_rank_debug(rank, world_size, title, message):
-    """Utility to gather debug messages from all ranks and print them together on rank 0."""
-    if not dist.is_available() or not dist.is_initialized():
-        print(message, flush=True)
-        return
-
-    gathered = [None for _ in range(world_size)]
-    dist.all_gather_object(gathered, message) ## Gather messages from all ranks into 'gathered' list
-
-    if rank == 0:
-        print(f"\n🔎  {title}", flush=True)
-        for item in gathered:
-            print(f"   {item}", flush=True)
 
 def gpu_memory_snapshot(device):
     """Returns a string with the current GPU memory usage (allocated and reserved) for the given device."""
@@ -491,13 +477,6 @@ def _load_dtype(args):
     ):
         return DTYPE_MAP[args.param_dtype]
     return torch.float32
-
-def _dtype_from_name(dtype_name: str):
-    # Validate config dtype strings early so downstream quantization and mixed precision paths
-    # always receive a real torch dtype object.
-    if dtype_name not in DTYPE_MAP:
-        raise ValueError(f"Unsupported dtype '{dtype_name}'. Expected one of {list(DTYPE_MAP.keys())}")
-    return DTYPE_MAP[dtype_name]
 
 def _checkpoint_run_tag(args):
     # Encode run mode in checkpoint folder names (for example: __qlora_q4)

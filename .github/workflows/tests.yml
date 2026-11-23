@@ -1,0 +1,58 @@
+# CPU test suites on GitHub's runners (no GPU there, no GPU needed).
+#   unit: python -m pytest           every push and PR (~10 s of tests)
+#   dist: python -m pytest -m dist   PRs, pushes to main, manual runs (~10 min):
+#         multi-process runs on CPU/gloo compared against 1 process on losses
+#         AND every parameter's gradient (strategy 5d layouts, post-training under DDP)
+# GPU smoke tests (-m smoke) and the FSDP multi-GPU cases still need real GPUs.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every CI test builds its models from configs; nothing should touch the Hub.
+  HF_HUB_OFFLINE: "1"
+  CUDA_VISIBLE_DEVICES: ""
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install (CPU PyTorch + requirements)
+        run: |
+          pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+      - name: Unit tests
+        run: python -m pytest
+
+  dist:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install (CPU PyTorch + requirements)
+        run: |
+          pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+      - name: Multi-process equivalence tests
+        run: python -m pytest -m dist --durations=10

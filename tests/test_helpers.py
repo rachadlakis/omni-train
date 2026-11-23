@@ -8,28 +8,9 @@ from distributed_utils import (
     _load_dtype,
     _checkpoint_run_tag,
     _normalize_target_modules,
-    _dtype_from_name,
     get_model_layers,
     DTYPE_MAP,
 )
-
-
-# ------------------------------------------------------------------
-# _dtype_from_name
-# ------------------------------------------------------------------
-
-@pytest.mark.parametrize("name,expected", [
-    ("bfloat16", torch.bfloat16),
-    ("float32",  torch.float32),
-    ("float16",  torch.float16),
-])
-def test_dtype_from_name_valid(name, expected):
-    assert _dtype_from_name(name) == expected
-
-
-def test_dtype_from_name_invalid_raises():
-    with pytest.raises(ValueError, match="Unsupported dtype"):
-        _dtype_from_name("int8")
 
 
 # ------------------------------------------------------------------

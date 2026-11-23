@@ -1,0 +1,23 @@
+# Learn 5D parallelism on a laptop: 4 CPU processes (gloo), TP=2 (+SP) x PP=2, synthetic data.
+#   CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=1 CONFIG_PATH=configs/custom_5d_cpu_demo.yaml bash scripts/launch.sh
+model_type: custom_transformer
+dataset: {name: synthetic, subset: null, split: train}
+training: {epochs: 1, batch_size: 2, max_length: 64, learning_rate: 0.003, gradient_checkpointing: false,
+  warmup_steps: 5, lr_scheduler: cosine, weight_decay: 0.0, grad_clip: 1.0}
+strategy: 5d
+num_gpus: 4
+checkpoint_dir: checkpoints/custom_5d_cpu
+save: false
+parallelism: {dp: auto, tp: 2, sp: true, cp: 1, pp: 2, pp_schedule: 1f1b, micro_batches: 4,
+  ep: 1, zero1: false}
+custom_transformer_args: {n_layers: 4, vocab_size: 256, max_seq_len: 64, dim: 128,
+  n_heads: 4, dropout_p: 0.0}
+dist_parameters: {mixed_precision: true, param_dtype: bfloat16, reduce_dtype: float32,
+  output_dtype: bfloat16, cast_forward_inputs: false, distribute_api: dcp_api}
+save_load: {resume: false, resume_path: '', load_model_from_hf: true}
+prefetch: {explicit: true, forward: 2, backward: 2}
+peft: {enabled: false, type: lora, r: 8, alpha: 16, dropout: 0.05, target_modules: all-linear,
+  bias: none}
+quantization: {enabled: false, bits: 8, quant_type: nf4, compute_dtype: bfloat16,
+  double_quant: true}
+wandb: {wandb_log_with_train: false, wandb_entity: '', wandb_project: omni-train}
