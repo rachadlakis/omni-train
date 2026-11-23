@@ -21,7 +21,8 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 - **Distributed checkpointing** — both DCP and DTensor APIs.
 - **Multi-modality** — LLMs, seq2seq, encoders, image classification, object detection, and vision-language models.
 - **SLURM multi-node** — batch script and Python launcher included.
-- **Browser UI** — a FastAPI web app to configure and launch jobs.
+- **Capacity planner** — `planner.py` answers “is distributed training needed?”: per-GPU memory for solo / DDP / FSDP / 5D, a recommended layout, the minimum GPU count and fixes when nothing fits.
+- **Training console** — a browser UI and REST API to plan, queue and monitor pretraining, SFT and preference runs (5D included).
 
 ---
 
@@ -303,17 +304,37 @@ Set `model_type` in `config.yaml` to match your architecture. Tiny picks below a
 
 ## Web UI
 
-Launch the browser-based training launcher:
+The console plans, launches and monitors runs on this machine's GPUs (or submits them to SLURM):
 
 ```bash
-bash ui/launch_ui.sh          # http://127.0.0.1:8787
+bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)
 ```
 
-For a remote server:
+- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO; GRPO and PPO are listed as planned), a model,
+  data, a strategy (solo, DDP, FSDP or a 5D layout with a live rank map) and hyperparameters. A plan panel
+  re-estimates memory as you edit and offers its recommended strategy in one click.
+- **Runs**: a queue with live progress, loss curves and logs; logs persist in `ui/runs/` across restarts.
+- **Planner**, **Checkpoints**, **System** (GPUs, which credentials are set) and **API** (copyable curl examples).
+
+For a remote server (the UI has no authentication: put it behind a firewall or an authenticated proxy):
 
 ```bash
 uvicorn ui.app:app --host 0.0.0.0 --port 8787
 ```
+
+### Is distributed training needed?
+
+```bash
+python planner.py --model meta-llama/Llama-3.1-8B --gpus 8 --gpu h100 --seq 4096
+python planner.py --config configs/llm_dpo_lora_single_gpu.yaml --gpu 4050
+```
+
+It prints the verdict (single GPU / distributed optional / distributed required / does not fit), the per-GPU
+memory of every strategy split into weights, gradients, AdamW states, activations and logits, the recommended
+layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
+(gradient checkpointing, LoRA, QLoRA, shorter sequences). The same plan is served at `POST /api/plan`.
+Estimates follow this repo's precision rules (fp32 trainable weights, bf16 frozen LoRA base outside FSDP)
+and are typically within ~15% of the measured peak.
 
 ---
 
@@ -367,7 +388,8 @@ omni-train/
 ├── configs/                # ready-made example configs
 ├── scripts/                # launch + SLURM utilities
 ├── tests/                  # unit and smoke tests
-├── ui/                     # FastAPI web UI
+├── planner.py              # capacity planner: is distributed training needed?
+├── ui/                     # training console + REST API (FastAPI)
 ├── dist_kit/               # standalone solo/DDP/FSDP kit to copy into other projects
 └── docs/                   # guides and technical reference
 ```
@@ -400,7 +422,8 @@ omni-train/
 
 - [ ] `strategy: 5d`: LoRA/QLoRA, more architectures (Qwen3, Gemma, MoE checkpoints such as Mixtral),
       vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules
-- [ ] `strategy: 5d` in the web UI
+- [x] `strategy: 5d`, SFT and preference optimisation in the web UI
+- [ ] GRPO / PPO (shown in the UI as planned)
 
 ---
 

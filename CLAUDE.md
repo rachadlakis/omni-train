@@ -212,9 +212,18 @@ For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables
 
 Trainable weights are always fp32 (`_load_dtype()`), because bf16 rounds most fine-tuning-sized AdamW updates to zero. `mixed_precision: true` casts at compute time instead: FSDP via `MixedPrecisionPolicy`, solo/DDP via `torch.autocast` in `train.py` (plus `GradScaler` for float16). The only low-precision storage is a frozen PEFT base outside FSDP; PEFT keeps the adapters in fp32. FSDP2 needs one dtype per parameter group, so FSDP + PEFT stays fp32 throughout.
 
+### Capacity planner (`planner.py`)
+
+`plan(ModelSpec, Workload, Cluster)` answers "is distributed training needed?": per-GPU peak memory (weights / grads / AdamW / activations / logits / overhead) for solo, DDP, FSDP and every valid 5d layout, a verdict (`single_gpu | distributed_optional | distributed_required | infeasible`), the recommended option, min GPUs per strategy and what-if fixes. Pure Python (no torch). The memory model mirrors the Precision rules above (16 B/param trainable, bf16 frozen LoRA base outside FSDP, fp32 under FSDP, preference runs = 2 × batch rows, logits upcast to fp32 dominate for big vocabularies, no vocab-parallel CE under 5d). It only proposes what the trainer accepts: QLoRA never on FSDP; 5d only for full-FT pretrain on llama/mistral/qwen2/custom; 5d layouts obey `_parse_5d`. `ModelSpec` comes from `PRESETS` (offline), an HF `config.json`, `custom_transformer_args`, or a name heuristic. CLI: `python planner.py --model … --gpus 8 --gpu h100`. Tests: `tests/test_planner.py`.
+
 ### Web UI (`ui/`)
 
-FastAPI server (`ui/app.py`) with a REST API. Requests must carry a Host header that is `localhost`, an IP address, this machine's hostname, or a name in `OMNI_UI_ALLOWED_HOSTS` (blocks DNS rebinding). Every torchrun launch, manual or queued, gets a free `--master_port`, and ddp/fsdp jobs always go through torchrun, even on 1 GPU. The UI has its own config schema; `ui/config_adapter.py` converts it to the `config.yaml` format before launching. `ui/queue.py` manages a SQLite-backed job queue with priority scheduling. Active config is written to `ui/_active_config.yaml` before each run.
+FastAPI server (`ui/app.py`, REST docs at `/docs`) plus a single-page console in `ui/static/` (`index.html`, `app.js`, `styles.css`; hash routes `#/runs`, `#/run/<id>`, `#/new`, `#/planner`, `#/checkpoints`, `#/system`, `#/api`). Requests must carry a Host header that is `localhost`, an IP address, this machine's hostname, or a name in `OMNI_UI_ALLOWED_HOSTS` (blocks DNS rebinding). Every torchrun launch, manual or queued, gets a free `--master_port`, and ddp/fsdp/5d jobs always go through torchrun, even on 1 GPU.
+
+- The console builds configs in the **`config.yaml` schema** directly (algorithm, parallelism, custom_transformer_args included); `ui/config_adapter.py` deep-merges them over the root `config.yaml` (it still also accepts the old UI schema).
+- Endpoints: `POST /api/plan` (planner + evaluation of the config's own strategy as `selected`), `GET /api/catalog`, `GET /api/models/inspect`, `POST /api/config/{validate,render,parse}`, `GET /api/env/status` (booleans only), `/api/queue/*`, `/api/checkpoints` (includes `5d/`), `/api/system/gpus`. `/api/train/start` remains for SLURM submission.
+- `ui/queue.py`: SQLite job queue (`ui/queue.db`) with priority scheduling and run names. `queue/submit` validates with `build_args` and rejects jobs asking for more GPUs than the machine has. Logs are also written to `ui/runs/<job_id>.log`; `parse_metrics` turns trainer step lines into the loss curve / progress.
+- UI tests must not use `with TestClient(...)` (the startup hook would open the real `ui/queue.db`); use a `QueueManager(db_path=tmp)` monkeypatched into `ui.app.queue_manager`.
 
 ### Post-training (`algorithm:` block, `post_training/`)
 

@@ -3,124 +3,57 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Omni Train</title>
-<link rel="stylesheet" href="/static/styles.css">
+<title>OMNI-Train Console</title>
+<meta name="description" content="Plan, launch and monitor pretraining, SFT and preference-alignment runs on your GPUs.">
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/styles.css">
+<script>
+  try { const t = localStorage.getItem('omni-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 </head>
 <body>
-
-<!-- Theme Toggle Button -->
-<button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode" aria-label="Toggle dark and light mode">
-  <span class="icon-moon">🌙</span>
-  <span class="icon-sun">☀️</span>
-  <span class="theme-label-dark">Dark</span>
-  <span class="theme-label-light">Light</span>
-</button>
-
-<!-- Landing Page -->
-<div class="landing">
-  <!-- Animated Background -->
-  <div class="landing-bg">
-    <div class="bg-gradient"></div>
-    <div class="bg-grid"></div>
-    <div class="bg-glow bg-glow-1"></div>
-    <div class="bg-glow bg-glow-2"></div>
-    <div class="bg-glow bg-glow-3"></div>
-  </div>
-
-  <div class="landing-content">
-    <div class="landing-header">
-      <h1><span>OMNI</span>TRAIN</h1>
-      <p class="tagline">Train and fine-tune <strong>Vision</strong>, <strong>LLM</strong>, <strong>VLM</strong>, <strong>Detection</strong>, and <strong>Embedding</strong> models with distributed training support.</p>
-      <p class="tagline-sub">Powered by PyTorch <strong>DDP</strong> &amp; <strong>FSDP</strong> — scale from a single GPU to multi-node clusters with mixed precision, gradient checkpointing, LoRA, and distributed checkpointing out of the box.</p>
-    </div>
-
-    <div class="landing-options">
-      <div class="landing-card" onclick="openCustomSetup()" role="button" tabindex="0" aria-label="Custom Setup: configure your training from scratch with full control">
-        <div class="card-glow"></div>
-        <div class="landing-card-icon custom">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </div>
-        <h3>Custom Setup</h3>
-        <p>Configure your training from scratch with full control</p>
-        <div class="landing-card-tags">
-          <span class="mini-tag custom">Full Control</span>
-          <span class="mini-tag yaml">From Options</span>
-        </div>
-        <div class="card-arrow">→</div>
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="rail" aria-label="Main navigation">
+    <a class="brand" href="#/runs" aria-label="OMNI-Train home">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+        <rect x="3" y="3" width="11" height="11" rx="2" fill="var(--signal)"/>
+        <rect x="18" y="3" width="11" height="11" rx="2" fill="currentColor" opacity=".55"/>
+        <rect x="3" y="18" width="11" height="11" rx="2" fill="currentColor" opacity=".55"/>
+        <rect x="18" y="18" width="11" height="11" rx="2" fill="currentColor" opacity=".25"/>
+      </svg>
+      <span>OMNI-Train</span>
+    </a>
+    <nav>
+      <a href="#/runs" data-nav="runs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Runs</span></a>
+      <a href="#/new" data-nav="new"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New run</span></a>
+      <a href="#/planner" data-nav="planner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M10 20V4M15 20v-7M20 20V8"/></svg><span>Planner</span></a>
+      <a href="#/checkpoints" data-nav="checkpoints"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 14h8"/></svg><span>Checkpoints</span></a>
+      <a href="#/system" data-nav="system"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v10H4zM8 17v3M16 17v3M8 4v3M16 4v3M12 4v3M12 17v3"/></svg><span>System</span></a>
+      <a href="#/api" data-nav="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg><span>API</span></a>
+    </nav>
+    <div class="rail-foot">
+      <div class="cluster-chip" id="cluster-chip" title="GPUs on this machine">
+        <span class="dot"></span><span id="cluster-chip-text">Checking GPUs</span>
       </div>
-
-      <div class="landing-card" onclick="openYamlEditor()" role="button" tabindex="0" aria-label="Enter YAML Config: write or paste your configuration directly in YAML format">
-        <div class="card-glow"></div>
-        <div class="landing-card-icon yaml">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 18 22 12 16 6"></polyline>
-            <polyline points="8 6 2 12 8 18"></polyline>
-          </svg>
-        </div>
-        <h3>Enter YAML Config</h3>
-        <p>Write or paste your configuration directly in YAML format</p>
-        <div class="landing-card-tags">
-          <span class="mini-tag yaml">For AI/ML Experts</span>
-        </div>
-        <div class="card-arrow">→</div>
-      </div>
+      <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch colour theme" title="Switch colour theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+      </button>
     </div>
-
-    <div class="landing-footer">
-      <a class="guide-link" onclick="openGuidePage()" role="button" tabindex="0">
-        <span class="guide-icon">📚</span>
-        <span class="guide-text">
-          <strong>Getting Started Guide</strong>
-          <span>Learn about distributed training, YAML configs & more</span>
-        </span>
-        <span class="guide-arrow">→</span>
-      </a>
-    </div>
+  </aside>
+  <main id="main" tabindex="-1"></main>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div class="dialog-backdrop" id="dialog" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+    <h2 id="dialog-title"></h2>
+    <div id="dialog-body"></div>
+    <div class="dialog-actions" id="dialog-actions"></div>
   </div>
 </div>
-
-<!-- Template Modal -->
-<div class="modal-overlay" id="template-modal" onclick="closeTemplateModal(event)">
-  <div class="modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
-    <div class="modal-header">
-      <h2 id="template-modal-title">Choose a Template</h2>
-      <button class="modal-close" onclick="closeTemplateModal()" aria-label="Close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div class="template-filters">
-        <button class="filter-btn active" data-filter="all" onclick="filterTemplates('all', this)">All</button>
-        <button class="filter-btn" data-filter="cnn" onclick="filterTemplates('cnn', this)">Vision</button>
-        <button class="filter-btn" data-filter="llm" onclick="filterTemplates('llm', this)">LLM</button>
-        <button class="filter-btn" data-filter="vlm" onclick="filterTemplates('vlm', this)">VLM</button>
-        <button class="filter-btn" data-filter="detection" onclick="filterTemplates('detection', this)">Detection</button>
-        <button class="filter-btn" data-filter="embedding" onclick="filterTemplates('embedding', this)">Embedding</button>
-      </div>
-      <div class="template-grid" id="template-grid"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Message Modal -->
-<div class="modal-overlay" id="message-modal" onclick="closeMessageModal()">
-  <div class="message-modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
-    <div class="message-modal-header">
-      <span class="message-modal-icon" id="message-modal-icon" aria-hidden="true">i</span>
-      <h3 id="message-modal-title">Message</h3>
-      <button class="modal-close" onclick="closeMessageModal()" aria-label="Close">&times;</button>
-    </div>
-    <div class="message-modal-body">
-      <p id="message-modal-text"></p>
-    </div>
-    <div class="message-modal-footer">
-      <button class="btn btn-primary" onclick="closeMessageModal()">OK</button>
-    </div>
-  </div>
-</div>
-
 <script src="/static/app.js"></script>
 </body>
 </html>

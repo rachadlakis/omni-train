@@ -34,6 +34,8 @@ build/
 # UI runtime artifacts
 ui/_active_config.yaml
 ui/_torchelastic_error.json
+ui/runs/
+ui/_job_*_config.yaml
 
 # OS / editor cruft
 nul

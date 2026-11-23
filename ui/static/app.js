@@ -1,4016 +1,1653 @@
-// =========================================================================
-// OMNI-Train Application JavaScript
-// =========================================================================
+/* OMNI-Train console: runs, new-run wizard, capacity planner, checkpoints, system, API. */
+'use strict';
 
-// =========================================================================
-// State
-// =========================================================================
-let selectedModelType = null;
-let currentConfig = null;
-let pollInterval = null;
-let startedFromYaml = false;
-let allTemplates = [];
-let sideTemplatesFilter = 'all';
-let yamlFromForm = false;
-let pendingTemplateSelection = null;
-let yamlCodeMirror = null;
+// ===========================================================================
+// Utilities
+// ===========================================================================
 
-// Training time estimation state
-let trainingStartTime = null;
-let estimatedTotalSeconds = null;
-let timerInterval = null;
-let lastEtaFromLogs = null;
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clone = (o) => JSON.parse(JSON.stringify(o));
 
-// Queue state
-let currentJobId = null;
-let queuePollInterval = null;
-let isJobQueued = false;
-
-// =========================================================================
-// Training Time Estimation
-// =========================================================================
-
-/**
- * Fetch training time estimate from backend API
- * Returns estimated time in seconds
- */
-async function fetchTimeEstimate(config) {
-  try {
-    const res = await fetch('/api/estimate-time', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data;
-    }
-  } catch (e) {
-    console.error('Failed to fetch time estimate:', e);
+function getPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+function setPath(obj, path, value) {
+  const keys = path.split('.');
+  let o = obj;
+  keys.slice(0, -1).forEach((k) => { if (typeof o[k] !== 'object' || o[k] === null) o[k] = {}; o = o[k]; });
+  o[keys[keys.length - 1]] = value;
+}
+function deepMerge(base, over) {
+  for (const [k, v] of Object.entries(over || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) deepMerge(base[k], v);
+    else base[k] = v;
   }
-  // Fallback to local estimate
-  return { est_total_seconds: estimateTrainingTimeLocal(config), readable: null };
+  return base;
 }
 
-/**
- * Local fallback estimate if API fails
- */
-function estimateTrainingTimeLocal(config) {
-  const modelType = config.model?.type || 'llm';
-  const epochs = config.training?.epochs || 3;
-  const batchSize = config.training?.batch_size || 8;
-
-  const baseTime = { cnn: 0.05, llm: 2.5, vlm: 3.0, detection: 0.3, embedding: 0.8 };
-  const datasetSize = { cnn: 50000, llm: 10000, vlm: 5000, detection: 8000, embedding: 20000 };
-
-  const timePerStep = baseTime[modelType] || 1.0;
-  const samples = datasetSize[modelType] || 10000;
-  const totalSteps = Math.ceil(samples / batchSize) * epochs;
-
-  return Math.round(totalSteps * timePerStep + 30);
-}
-
-/**
- * Format seconds into HH:MM:SS string
- */
-function formatTime(seconds) {
-  if (seconds <= 0 || isNaN(seconds)) return '--:--:--';
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+async function api(path, opts = {}) {
+  const init = { headers: {}, ...opts };
+  if (opts.json !== undefined) {
+    init.method = init.method || 'POST';
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(opts.json);
   }
-  return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
-
-/**
- * Parse ETA from training logs
- * Looks for patterns like "ETA: 01:23:45" or "ETA: 12:34"
- */
-function parseEtaFromLogs(logs) {
-  if (!logs || logs.length === 0) return null;
-
-  // Search from the end of logs for the most recent ETA
-  for (let i = logs.length - 1; i >= Math.max(0, logs.length - 50); i--) {
-    const line = logs[i];
-
-    // Match ETA patterns: "ETA: HH:MM:SS" or "ETA: MM:SS"
-    const etaMatch = line.match(/ETA:\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/i);
-    if (etaMatch) {
-      let hours = 0, minutes = 0, seconds = 0;
-
-      if (etaMatch[3]) {
-        // HH:MM:SS format
-        hours = parseInt(etaMatch[1]);
-        minutes = parseInt(etaMatch[2]);
-        seconds = parseInt(etaMatch[3]);
-      } else {
-        // MM:SS format
-        minutes = parseInt(etaMatch[1]);
-        seconds = parseInt(etaMatch[2]);
-      }
-
-      return hours * 3600 + minutes * 60 + seconds;
-    }
+  const res = await fetch(path, init);
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON */ }
+  if (!res.ok) {
+    let msg = data && data.detail ? data.detail : `${res.status} ${res.statusText}`;
+    if (Array.isArray(msg)) msg = msg.map((d) => d.msg || JSON.stringify(d)).join('; ');
+    throw new Error(msg);
   }
-
-  return null;
+  return data;
 }
 
-/**
- * Start the countdown timer
- */
-async function startTrainingTimer(config) {
-  trainingStartTime = Date.now();
-  lastEtaFromLogs = null;
-
-  // Show initial loading state
-  updateTimerDisplay(0, 'Calculating estimate...');
-
-  // Fetch estimate from backend
-  const estimate = await fetchTimeEstimate(config);
-  estimatedTotalSeconds = estimate.est_total_seconds || 0;
-  const epochs = Math.max(1, parseInt(estimate.epochs || config?.training?.epochs || 1, 10) || 1);
-  const perEpochSeconds = estimatedTotalSeconds > 0 ? (estimatedTotalSeconds / epochs) : 0;
-  const totalText = estimatedTotalSeconds > 0 ? formatTime(estimatedTotalSeconds) : (estimate.readable || '--:--:--');
-  const perEpochText = perEpochSeconds > 0 ? formatTime(perEpochSeconds) : '--:--:--';
-
-  const vramText = estimate.vram?.total_gb
-    ? ` | VRAM~${estimate.vram.total_gb} GB/GPU`
-    : '';
-
-  const infoText = estimatedTotalSeconds > 0
-    ? `Estimated total: ${totalText} | per epoch: ${perEpochText} (${epochs} epochs, ${estimate.total_steps || '?'} steps)${vramText}`
-    : 'Initial estimate based on configuration';
-
-  updateTimerDisplay(estimatedTotalSeconds, infoText);
-
-  // Clear any existing interval
-  if (timerInterval) {
-    clearInterval(timerInterval);
-  }
-
-  // Update timer every second
-  timerInterval = setInterval(updateTimerCountdown, 1000);
-}
-
-/**
- * Update the timer countdown
- */
-function updateTimerCountdown() {
-  if (!trainingStartTime || !estimatedTotalSeconds) return;
-
-  const elapsed = Math.floor((Date.now() - trainingStartTime) / 1000);
-  let remaining;
-
-  if (lastEtaFromLogs !== null) {
-    // Use ETA from logs if available (more accurate)
-    remaining = lastEtaFromLogs;
-  } else {
-    // Use initial estimate minus elapsed time
-    remaining = Math.max(0, estimatedTotalSeconds - elapsed);
-  }
-
-  updateTimerDisplay(remaining);
-}
-
-/**
- * Update the timer display elements
- */
-function updateTimerDisplay(seconds, info = null) {
-  const clockEl = document.getElementById('timer-clock');
-  const infoEl = document.getElementById('timer-info');
-
-  if (clockEl) {
-    clockEl.textContent = formatTime(seconds);
-  }
-
-  if (infoEl && info) {
-    infoEl.textContent = info;
-    infoEl.classList.remove('updated');
-  }
-}
-
-/**
- * Update timer based on log parsing
- */
-function updateTimerFromLogs(logs) {
-  const etaSeconds = parseEtaFromLogs(logs);
-
-  if (etaSeconds !== null && etaSeconds !== lastEtaFromLogs) {
-    lastEtaFromLogs = etaSeconds;
-
-    const infoEl = document.getElementById('timer-info');
-    if (infoEl) {
-      infoEl.textContent = 'Updated from training progress';
-      infoEl.classList.add('updated');
-    }
-
-    updateTimerDisplay(etaSeconds);
-  }
-}
-
-/**
- * Stop the training timer
- */
-function stopTrainingTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-    timerInterval = null;
-  }
-  trainingStartTime = null;
-  estimatedTotalSeconds = null;
-  lastEtaFromLogs = null;
-
-  const clockEl = document.getElementById('timer-clock');
-  const infoEl = document.getElementById('timer-info');
-
-  if (clockEl) clockEl.textContent = '--:--:--';
-  if (infoEl) {
-    infoEl.textContent = '';
-    infoEl.classList.remove('updated');
-  }
-}
-
-// =========================================================================
-// State Persistence (localStorage)
-// =========================================================================
-function saveFormState() {
-  const formData = {};
-  const inputs = document.querySelectorAll('input, select');
-  inputs.forEach(el => {
-    if (el.id) {
-      if (el.type === 'checkbox') {
-        formData[el.id] = el.checked;
-      } else {
-        formData[el.id] = el.value;
-      }
-    }
-  });
-  localStorage.setItem('omni_form_state', JSON.stringify(formData));
-}
-
-function loadFormState() {
-  const data = localStorage.getItem('omni_form_state');
-  if (!data) return;
-  try {
-    const formData = JSON.parse(data);
-    Object.keys(formData).forEach(id => {
-      const el = document.getElementById(id);
-      if (el) {
-        if (el.type === 'checkbox') {
-          el.checked = formData[id];
-        } else {
-          el.value = formData[id];
-        }
-      }
-    });
-  } catch (e) {
-    console.error('Failed to load form state:', e);
-  }
-}
-
-function clearFormState() {
-  localStorage.removeItem('omni_form_state');
-}
-
-// =========================================================================
-// Theme Toggle
-// =========================================================================
-function toggleTheme() {
-  document.body.classList.toggle('light');
-  const isLight = document.body.classList.contains('light');
-  localStorage.setItem('theme', isLight ? 'light' : 'dark');
-
-  // YAML editor always follows the global toggle — no separate user preference.
-  _syncEditorTheme();
-}
-
-function loadTheme() {
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme === 'light') {
-    document.body.classList.add('light');
-  }
-}
-
-function _syncEditorTheme() {
-  const theme = document.body.classList.contains('light') ? 'eclipse' : 'material';
-  if (yamlCodeMirror) {
-    yamlCodeMirror.setOption('theme', theme);
-    yamlCodeMirror.refresh();
-  }
-}
-
-function getYamlEditorValue() {
-  if (yamlCodeMirror) {
-    return yamlCodeMirror.getValue();
-  }
-
-  const editor = document.getElementById('yaml-editor');
-  return editor ? editor.value : '';
-}
-
-function setYamlEditorValue(value) {
-  const content = value || '';
-  const editor = document.getElementById('yaml-editor');
-  if (editor) {
-    editor.value = content;
-  }
-
-  if (yamlCodeMirror) {
-    yamlCodeMirror.setValue(content);
-  }
-}
-
-function setupYamlCodeEditor() {
-  const editor = document.getElementById('yaml-editor');
-  if (!editor || typeof window.CodeMirror === 'undefined' || yamlCodeMirror) return;
-
-  // Theme always derived from the global dark/light mode — no separate preference stored.
-  const initialTheme = document.body.classList.contains('light') ? 'eclipse' : 'material';
-
-  yamlCodeMirror = window.CodeMirror.fromTextArea(editor, {
-    mode: 'yaml',
-    lineNumbers: true,
-    lineWrapping: true,
-    tabSize: 2,
-    indentUnit: 2,
-    theme: initialTheme,
-    extraKeys: {
-      Tab: function(cm) {
-        cm.replaceSelection('  ', 'end');
-      }
-    }
-  });
-
-  let _yamlLintTimer = null;
-  yamlCodeMirror.on('change', function(cm) {
-    editor.value = cm.getValue();
-
-    // Debounced real-time syntax check
-    clearTimeout(_yamlLintTimer);
-    _yamlLintTimer = setTimeout(() => {
-      const val = cm.getValue().trim();
-      const statusEl = document.getElementById('yaml-lint-status');
-      if (!statusEl) return;
-      if (!val) { statusEl.textContent = ''; return; }
-      try {
-        if (typeof window.jsyaml !== 'undefined') {
-          window.jsyaml.load(val);
-        }
-        statusEl.textContent = '✓ Valid YAML';
-        statusEl.style.color = 'var(--green)';
-      } catch (e) {
-        const loc = e.mark ? ` (line ${e.mark.line + 1})` : '';
-        statusEl.textContent = `✗ ${e.reason || 'Syntax error'}${loc}`;
-        statusEl.style.color = 'var(--red)';
-      }
-    }, 400);
-  });
-}
-
-// =========================================================================
-// Message Modal
-// =========================================================================
-function showMessage(title, text, type = 'info') {
-  const icons = {
-    info: 'info',
-    success: 'check',
-    error: 'error',
-    warning: 'warning'
-  };
-  const iconEl = document.getElementById('message-modal-icon');
-  const titleEl = document.getElementById('message-modal-title');
-  const textEl = document.getElementById('message-modal-text');
-  const modal = document.getElementById('message-modal');
-
-  if (iconEl) iconEl.textContent = icons[type] || icons.info;
-  if (titleEl) titleEl.textContent = title;
-  if (textEl) {
-    textEl.textContent = text;
-    textEl.classList.remove('validation-summary');
-  }
-  if (modal) modal.classList.add('active');
-}
-
-function closeMessageModal() {
-  const modal = document.getElementById('message-modal');
-  if (modal) modal.classList.remove('active');
-}
-
-// =========================================================================
-// Navigation
-// =========================================================================
-function navigateTo(page) {
-  saveFormState();
-  // Pages are served from /static/ directory
-  window.location.href = '/static/' + page;
-}
-
-function goBack() {
-  // Go back to root which serves index.html
-  window.location.href = '/';
-}
-
-function goBackFromYaml() {
-  const fromForm = localStorage.getItem('yaml_from_form') === 'true';
-  if (fromForm) {
-    navigateTo('config.html');
-  } else {
-    window.location.href = '/';
-  }
-}
-
-function goBackFromEnv() {
-  navigateTo('config.html');
-}
-
-function proceedToYaml() {
-  localStorage.setItem('yaml_from_form', 'true');
-  saveFormState();
-  navigateTo('yaml.html');
-}
-
-// =========================================================================
-// Template Modal
-// =========================================================================
-function openTemplateModal() {
-  loadTemplatesForModal();
-  const modal = document.getElementById('template-modal');
-  if (modal) modal.classList.add('active');
-}
-
-function closeTemplateModal(event) {
-  if (event && event.target !== event.currentTarget) return;
-  const modal = document.getElementById('template-modal');
-  if (modal) modal.classList.remove('active');
-}
-
-// Template name mappings
-const templateDisplayNames = {
-  // LLM
-  'llm_full_finetune_ddp': 'LLM Full Fine Tuning',
-  'llm_full_finetune_fsdp': 'LLM Full Fine Tuning',
-  'llm_full_quantized_single_gpu': 'LLM Fine Tune with Quantization',
-  'llm_lora_ddp': 'LLM Fine Tune with LoRA',
-  'llm_lora_local_file': 'LLM Fine Tune with LoRA',
-  'llm_lora_quantized_single_gpu': 'LLM Fine Tune with QLoRA',
-  'llm_fsdp_mini_project_style': 'LLM FSDP Example Small Model',
-  // VLM
-  'vlm_llava_lora_single_gpu': 'VLM Fine Tune with LoRA',
-  // Vision (CNN)
-  'cnn_resnet_single_gpu': 'Vision Full Training (Single GPU)',
-  'cnn_vit_ddp': 'Vision Full Training (DDP)',
-  // Detection
-  'detection_coco_format': 'Detection Full Training (COCO)',
-  'detection_yolo_single_gpu': 'Detection Full Training (YOLO)',
-  // Embedding
-  'embedding_text_infonce': 'Embedding Text Training',
-  'embedding_bert_lora_triplet': 'Embedding BERT with LoRA',
-  'embedding_vision_resnet': 'Embedding Vision Training',
-  'embedding_clip_finetune': 'Embedding CLIP Fine-Tuning',
+const fmt = {
+  params(n) {
+    if (!n && n !== 0) return '–';
+    if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B`;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(0)}M`;
+    return `${(n / 1e3).toFixed(0)}K`;
+  },
+  gb(n, digits = 1) { return n == null ? '–' : `${Number(n).toFixed(n < 10 ? digits : 0)} GB`; },
+  int(n) { return n == null ? '–' : Math.round(n).toLocaleString(); },
+  bytes(n) {
+    if (n == null) return '–';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+  },
+  dur(s) {
+    if (s == null || !isFinite(s)) return '–';
+    s = Math.max(0, Math.round(s));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  },
+  ago(iso) {
+    if (!iso) return '–';
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  },
+  lr(v) { return typeof v === 'number' ? (v < 0.001 ? v.toExponential(0).replace('e-', 'e-') : String(v)) : String(v ?? ''); },
 };
 
-// Additional templates
-const extraTemplates = [
-  // Top Open Source LLMs (2026)
-  { name: 'llm_glm5', display: 'GLM-5 (THUDM)', type: 'llm', desc: 'Reasoning & document analysis' },
-  { name: 'llm_kimi_k25', display: 'Kimi K2.5 (Moonshot)', type: 'llm', desc: 'Top-tier reasoning & coding' },
-  { name: 'llm_deepseek_v3', display: 'DeepSeek-V3', type: 'llm', desc: '671B MoE, exceptional coding' },
-  { name: 'llm_deepseek_r1', display: 'DeepSeek-R1', type: 'llm', desc: 'Specialized reasoning' },
-  { name: 'llm_qwen3_235b', display: 'Qwen3-235B (Alibaba)', type: 'llm', desc: '1M+ token context' },
-  { name: 'llm_llama33_70b', display: 'Llama 3.3 70B (Meta)', type: 'llm', desc: 'Versatile, 128k context' },
-  { name: 'llm_mimo_v2_flash', display: 'MiMo-V2-Flash (Xiaomi)', type: 'llm', desc: 'Ultra-fast, 256K context' },
-  // Other LLMs
-  { name: 'llm_mistral_7b_lora', display: 'Mistral 7B', type: 'llm' },
-  { name: 'llm_phi3_mini_lora', display: 'Phi-3 Mini', type: 'llm' },
-  // Top Open Source VLMs (2026)
-  { name: 'vlm_full_finetune', display: 'VLM Full Fine Tuning', type: 'vlm', desc: 'Full parameter fine-tuning' },
-  { name: 'vlm_qlora_general', display: 'VLM Fine Tune with QLoRA', type: 'vlm', desc: 'Quantized LoRA fine-tuning' },
-  { name: 'vlm_qwen2_vl_72b', display: 'Qwen2-VL 72B (Alibaba)', type: 'vlm', desc: 'State-of-the-art vision-language' },
-  { name: 'vlm_internvl2_26b', display: 'InternVL2 26B', type: 'vlm', desc: 'Strong multimodal reasoning' },
-  { name: 'vlm_llava_next_34b', display: 'LLaVA-NeXT 34B', type: 'vlm', desc: 'Enhanced visual instruction' },
-  { name: 'vlm_cogvlm2', display: 'CogVLM2 (THUDM)', type: 'vlm', desc: 'Visual understanding & grounding' },
-  { name: 'vlm_phi3_vision', display: 'Phi-3 Vision (Microsoft)', type: 'vlm', desc: 'Efficient multimodal, 128k ctx' },
-  { name: 'vlm_idefics2_8b', display: 'Idefics2 8B (HuggingFace)', type: 'vlm', desc: 'Open multimodal assistant' },
-  { name: 'vlm_paligemma_3b', display: 'PaliGemma 3B (Google)', type: 'vlm', desc: 'Lightweight vision-language' },
-  // Other VLMs
-  { name: 'vlm_llava_7b_lora', display: 'LLaVA 1.5 7B', type: 'vlm' },
-  { name: 'vlm_blip2_flan_lora', display: 'BLIP-2 Flan-T5', type: 'vlm' },
-  // Small/test LLMs
-  { name: 'llm_opt_125m', display: 'OPT-125M (Facebook)', type: 'llm', desc: 'Tiny model, fast for testing' },
-  { name: 'llm_opt_350m', display: 'OPT-350M (Facebook)', type: 'llm', desc: 'Small model for quick runs' },
-  { name: 'llm_gpt2', display: 'GPT-2 (OpenAI)', type: 'llm', desc: 'Classic small language model' },
-  { name: 'llm_gpt2_medium', display: 'GPT-2 Medium (OpenAI)', type: 'llm', desc: '345M params' },
-  // Vision (CNN)
-  // ResNet
-  { name: 'cnn_resnet18', display: 'ResNet-18', type: 'cnn', desc: 'Lightweight, fast baseline' },
-  { name: 'cnn_resnet50', display: 'ResNet-50', type: 'cnn', desc: 'Classic strong baseline' },
-  { name: 'cnn_resnet101', display: 'ResNet-101', type: 'cnn', desc: 'Deeper ResNet variant' },
-  // ViT
-  { name: 'cnn_vit_base', display: 'ViT Base (16×16)', type: 'vision', desc: 'Vision Transformer base' },
-  { name: 'cnn_vit_large', display: 'ViT Large (16×16)', type: 'vision', desc: 'Vision Transformer large' },
-  { name: 'cnn_vit_huge', display: 'ViT Huge (14×14)', type: 'vision', desc: 'Vision Transformer huge, ImageNet-21k' },
-  // Swin Transformer
-  { name: 'cnn_swin_tiny', display: 'Swin Transformer Tiny', type: 'vision', desc: 'Efficient hierarchical ViT' },
-  { name: 'cnn_swin_base', display: 'Swin Transformer Base', type: 'vision', desc: 'Balanced accuracy/speed' },
-  { name: 'cnn_swin_large', display: 'Swin Transformer Large', type: 'vision', desc: 'High-accuracy hierarchical ViT' },
-  // DeiT
-  { name: 'cnn_deit_tiny', display: 'DeiT Tiny', type: 'vision', desc: 'Data-efficient ViT, tiny' },
-  { name: 'cnn_deit_small', display: 'DeiT Small', type: 'vision', desc: 'Data-efficient ViT, small' },
-  { name: 'cnn_deit_base', display: 'DeiT Base', type: 'vision', desc: 'Data-efficient ViT, base' },
-  // EfficientNet
-  { name: 'cnn_efficientnet_b0', display: 'EfficientNet B0', type: 'cnn', desc: 'Compact & efficient' },
-  { name: 'cnn_efficientnet_b4', display: 'EfficientNet B4', type: 'vision', desc: 'Balanced accuracy/size' },
-  { name: 'cnn_efficientnet_b7', display: 'EfficientNet B7', type: 'vision', desc: 'Highest accuracy in family' },
-  // ConvNeXT
-  { name: 'cnn_convnext_tiny', display: 'ConvNeXT Tiny', type: 'vision', desc: 'Modern CNN with ViT-like design' },
-  { name: 'cnn_convnext_base', display: 'ConvNeXT Base', type: 'vision', desc: 'Strong modern CNN baseline' },
-  { name: 'cnn_convnext_large', display: 'ConvNeXT Large', type: 'vision', desc: 'High-capacity modern CNN' },
-  // BEiT
-  { name: 'cnn_beit_base', display: 'BEiT Base', type: 'vision', desc: 'BERT-style pre-trained ViT' },
-  { name: 'cnn_beit_large', display: 'BEiT Large', type: 'vision', desc: 'Large BERT-style ViT' },
-  // Detection — YOLOS (MIT/Apache 2.0, HuggingFace-native)
-  { name: 'detection_yolos_tiny',        display: 'YOLOS Tiny',         type: 'detection', desc: 'Fastest YOLO via ViT (MIT)' },
-  { name: 'detection_yolos_small',       display: 'YOLOS Small',        type: 'detection', desc: 'Balanced YOLO via ViT (MIT)' },
-  { name: 'detection_yolos_base',        display: 'YOLOS Base',         type: 'detection', desc: 'Strongest YOLO via ViT (MIT)' },
-  // Detection — RT-DETR (Apache 2.0)
-  { name: 'detection_rtdetr_r18',        display: 'RT-DETR R18',        type: 'detection', desc: 'Real-time DETR, lightest (Apache 2.0)' },
-  { name: 'detection_rtdetr_r50',        display: 'RT-DETR R50',        type: 'detection', desc: 'Real-time DETR, balanced (Apache 2.0)' },
-  { name: 'detection_rtdetr_r101',       display: 'RT-DETR R101',       type: 'detection', desc: 'Real-time DETR, strongest (Apache 2.0)' },
-  // Detection — DETR family (Apache 2.0)
-  { name: 'detection_detr_r50',          display: 'DETR R50',           type: 'detection', desc: 'Original DETR (Apache 2.0)' },
-  { name: 'detection_detr_r101',         display: 'DETR R101',          type: 'detection', desc: 'DETR with ResNet-101 backbone (Apache 2.0)' },
-  { name: 'detection_conditional_detr',  display: 'Conditional DETR',   type: 'detection', desc: '10× faster convergence than DETR (Apache 2.0)' },
-  { name: 'detection_deformable_detr',   display: 'Deformable DETR',    type: 'detection', desc: 'Sparse attention, strong real-world perf (Apache 2.0)' },
-  { name: 'detection_dab_detr',          display: 'DAB-DETR R50',       type: 'detection', desc: 'Dynamic anchor boxes DETR (Apache 2.0)' },
-  // Detection — OWL-ViT zero-shot (Apache 2.0)
-  { name: 'detection_owlvit_base',       display: 'OWL-ViT Base',       type: 'detection', desc: 'Zero-shot open-vocabulary detection (Apache 2.0)' },
-  { name: 'detection_owlvit_large',      display: 'OWL-ViT Large',      type: 'detection', desc: 'Larger zero-shot detection model (Apache 2.0)' },
-  // Embedding — text
-  { name: 'embedding_e5_large_v2', display: 'E5-Large-v2 (Microsoft)', type: 'embedding', desc: 'State-of-the-art text embeddings' },
-  { name: 'embedding_e5_mistral_7b', display: 'E5-Mistral-7B (Microsoft)', type: 'embedding', desc: 'LLM-based text embeddings' },
-  { name: 'embedding_gte_qwen2_7b', display: 'GTE-Qwen2-7B (Alibaba)', type: 'embedding', desc: 'Top multilingual embeddings' },
-  { name: 'embedding_bge_large_en', display: 'BGE-Large-EN (BAAI)', type: 'embedding', desc: 'Best English text embeddings' },
-  { name: 'embedding_bge_m3', display: 'BGE-M3 (BAAI)', type: 'embedding', desc: 'Multi-lingual, multi-granularity' },
-  { name: 'embedding_minilm_l6', display: 'all-MiniLM-L6-v2', type: 'embedding', desc: 'Fast, lightweight sentence model' },
-  { name: 'embedding_mpnet_base', display: 'all-mpnet-base-v2', type: 'embedding', desc: 'High quality sentence embeddings' },
-  { name: 'embedding_gte_large', display: 'GTE-Large (Alibaba)', type: 'embedding', desc: 'General text embeddings' },
-  { name: 'embedding_nomic_text', display: 'Nomic Embed Text v1.5', type: 'embedding', desc: '8192 token context, open source' },
-  // Embedding — vision
-  { name: 'embedding_dinov2_large', display: 'DINOv2 Large (Meta)', type: 'embedding', desc: 'Self-supervised vision features' },
-  { name: 'embedding_clip_vit_l14', display: 'CLIP ViT-L/14 (OpenAI)', type: 'embedding', desc: 'Strong visual + text alignment' },
-  { name: 'embedding_siglip_so400m', display: 'SigLIP SO400M (Google)', type: 'embedding', desc: 'Sigmoid image-text contrastive' },
-  { name: 'embedding_imagebind', display: 'ImageBind (Meta)', type: 'embedding', desc: 'Multi-modal joint embedding' },
+function toast(message, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), type === 'error' ? 7000 : 3500);
+}
+
+function dialog({ title, body, actions }) {
+  const root = $('#dialog');
+  $('#dialog-title').textContent = title;
+  $('#dialog-body').innerHTML = body;
+  const bar = $('#dialog-actions');
+  bar.innerHTML = '';
+  const close = () => { root.hidden = true; document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  (actions || [{ label: 'Close' }]).forEach((a) => {
+    const b = document.createElement('button');
+    b.className = `btn ${a.kind || ''}`;
+    b.textContent = a.label;
+    b.onclick = async () => { if (a.onClick) { const keep = await a.onClick(); if (keep === true) return; } close(); };
+    bar.appendChild(b);
+  });
+  root.hidden = false;
+  root.onclick = (e) => { if (e.target === root) close(); };
+  document.addEventListener('keydown', onKey);
+  bar.lastChild && bar.lastChild.focus();
+  return close;
+}
+
+function download(filename, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/yaml' }));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
+  catch (e) { toast('Copy failed: select the text and copy it manually', 'error'); }
+}
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
+};
+
+// ===========================================================================
+// Shared data
+// ===========================================================================
+
+const S = { catalog: null, queue: null };
+
+async function loadCatalog() {
+  if (!S.catalog) S.catalog = await api('/api/catalog');
+  return S.catalog;
+}
+
+const ALGO_LABEL = { pretrain: 'Pretrain', sft: 'SFT', dpo: 'DPO', simpo: 'SimPO', orpo: 'ORPO', grpo: 'GRPO', ppo: 'PPO' };
+const MODEL_TYPES = [
+  { id: 'llm', label: 'Causal language model', hint: 'Llama, Qwen, Mistral, OPT, GPT-2 …' },
+  { id: 'custom_transformer', label: 'Transformer from scratch', hint: 'Random init, your architecture; optional MoE' },
+  { id: 'seq2seq', label: 'Encoder-decoder', hint: 'T5, BART, mT5' },
+  { id: 'vlm', label: 'Vision-language model', hint: 'SmolVLM, Idefics3, LLaVA' },
+  { id: 'vision', label: 'Image classification', hint: 'ViT, Swin, DeiT, ResNet' },
+  { id: 'yolo', label: 'Object detection', hint: 'DETR, RT-DETR, YOLOS' },
+  { id: 'encoder', label: 'Text encoder / embeddings', hint: 'BERT, RoBERTa, E5' },
 ];
-
-// strategy: 5d templates are YAML/CLI only: the UI form has no parallelism block yet.
-const hiddenTemplates = ['llm_lora_s3', 'config', 'llm_5d_tp_pp_dp_8gpu', 'llm_5d_long_context_cp',
-  'custom_5d_moe_16gpu', 'custom_5d_cpu_demo'];
-
-async function loadTemplatesForModal() {
-  try {
-    const res = await fetch('/api/configs');
-    const data = await res.json();
-    allTemplates = data.configs;
-    renderTemplateGrid(allTemplates);
-  } catch (e) {
-    console.error('Failed to load templates:', e);
-  }
-}
-
-function renderTemplateGrid(templates, filter = 'all') {
-  const grid = document.getElementById('template-grid');
-  if (!grid) return;
-  grid.innerHTML = '';
-
-  const seen = new Set();
-  const filtered = templates.filter(name => {
-    if (hiddenTemplates.includes(name)) return false;
-    const displayName = templateDisplayNames[name] || name;
-    if (seen.has(displayName)) return false;
-    seen.add(displayName);
-    return true;
-  });
-
-  const items = filtered.map(name => {
-    let type = 'llm';
-    if (name.startsWith('cnn')) type = 'cnn';
-    else if (name.startsWith('vlm')) type = 'vlm';
-    else if (name.startsWith('detection')) type = 'detection';
-    else if (name.startsWith('embedding')) type = 'embedding';
-    return {
-      name,
-      display: templateDisplayNames[name] || name.replace(/_/g, ' '),
-      type,
-      isExtra: false
-    };
-  });
-
-  extraTemplates.forEach(t => {
-    if (!seen.has(t.display)) {
-      seen.add(t.display);
-      items.push({ ...t, isExtra: true });
-    }
-  });
-
-  const finalItems = filter === 'all' ? items : items.filter(t => {
-    if (filter === 'cnn') return t.type === 'cnn' || t.type === 'vision';
-    return t.type === filter;
-  });
-  const typeOrder = { llm: 0, vlm: 1, cnn: 2, vision: 2, detection: 3, embedding: 4 };
-  finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
-
-  finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'VISION CNN' :
-                item.type === 'vision' ? 'VIS TRANSF' :
-                item.type === 'vlm' ? 'VLM' :
-                item.type === 'detection' ? 'OBJ DET' :
-                item.type === 'embedding' ? 'EMBED' : 'LLM';
-
-    const div = document.createElement('div');
-    div.className = 'template-card';
-    div.setAttribute('data-type', item.type);
-    const descHtml = item.desc ? `<p class="template-desc">${item.desc}</p>` : '';
-    div.innerHTML = `
-      <span class="template-tag ${item.type}">${tag}</span>
-      <div class="template-card-info">
-        <h4>${item.display}</h4>
-        ${descHtml}
-      </div>
-      <span class="template-card-arrow">-></span>
-    `;
-    div.onclick = () => selectTemplateFromModal(item.name, item.type, item.isExtra ? item : null);
-    grid.appendChild(div);
-  });
-}
-
-function filterTemplates(filter, btn) {
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderTemplateGrid(allTemplates, filter);
-}
-
-async function selectTemplateFromModal(name, type, extraTemplate = null) {
-  closeTemplateModal();
-  localStorage.setItem('selected_template', JSON.stringify({ name, type, isExtra: !!extraTemplate, extra: extraTemplate }));
-  navigateTo('config.html');
-}
-
-// =========================================================================
-// Custom Setup
-// =========================================================================
-function openCustomSetup() {
-  clearFormState();
-  localStorage.removeItem('selected_template');
-  navigateTo('config.html');
-}
-
-function openYamlEditor() {
-  localStorage.setItem('yaml_from_form', 'false');
-  navigateTo('yaml.html');
-}
-
-function openGuidePage() {
-  navigateTo('guide.html');
-}
-
-function closeGuidePage() {
-  navigateTo('index.html');
-}
-
-function openCheckpointsPage() {
-  // Pass the currently-configured checkpoint dir so the page lists the right folder
-  const dir = (typeof getVal === 'function' ? getVal('f-checkpoint-dir') : '') || 'checkpoints';
-  const q = '?dir=' + encodeURIComponent(dir);
-  window.location.href = '/static/checkpoints.html' + q;
-}
-
-// =========================================================================
-// Form Logic (Config Page)
-// =========================================================================
-
-function onModelTypeChange() {
-  resetFsdpCheck();
-  const t = getVal('f-model-type');
-
-  document.getElementById('f-model-source').selectedIndex = 0;
-  setVal('f-model-name', '');
-  setVal('f-model-url', '');
-  setVal('f-model-path', '');
-  clearModelUpload();
-  toggle('fg-model-name', false);
-  toggle('fg-model-url', false);
-  toggle('fg-model-path', false);
-  toggle('fg-model-upload', false);
-
-  document.getElementById('f-finetune-mode').selectedIndex = 0;
-  setVal('f-lora-r', '');
-  setVal('f-lora-alpha', '');
-  setVal('f-lora-dropout', '');
-  const quantizeEl = document.getElementById('f-quantize');
-  if (quantizeEl) quantizeEl.checked = false;
-  document.getElementById('f-quant-bits').selectedIndex = 0;
-  setVal('f-max-seq-len', '');
-
-  setVal('f-num-classes', '');
-  const freezeEl = document.getElementById('f-freeze-backbone');
-  if (freezeEl) freezeEl.checked = false;
-
-  document.getElementById('f-yolo-model').selectedIndex = 0;
-  setVal('f-image-size', '');
-
-  const isCustom = t === 'custom_transformer';
-  toggle('fg-model-source', !isCustom);
-  toggle('fg-num-classes', t === 'cnn');
-  toggle('fg-finetune-mode', !isCustom && (t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision'));
-  toggle('fg-yolo-model', t === 'detection');
-  toggle('tr-quantize', t === 'llm' || t === 'vlm');
-  toggle('tr-freeze', t === 'cnn');
-  toggle('fg-max-seq-len', !isCustom && (t === 'llm' || t === 'vlm' || t === 'embedding'));
-  toggle('fg-image-size', t === 'cnn' || t === 'vlm' || t === 'detection' || t === 'vision');
-  toggle('fg-custom-arch', isCustom);
-  if (isCustom) updateCustomParamCount();
-
-  // Hide QLoRA option for vision transformers (quantization not applicable)
-  const qloraOpt = document.querySelector('#f-finetune-mode option[value="qlora"]');
-  if (qloraOpt) qloraOpt.style.display = (t === 'vision' || t === 'embedding') ? 'none' : '';
-
-  if (t === 'llm' || t === 'vlm' || t === 'embedding' || t === 'vision') {
-    onFinetuneModeChange();
-  } else {
-    toggle('lora-options', false);
-    toggle('tr-quant-bits', false);
-  }
-
-  updateDataFormatOptions(t);
-}
-
-function updateDataFormatOptions(modelType) {
-  const formatSelect = document.getElementById('f-data-format');
-  if (!formatSelect) return;
-
-  const formats = {
-    cnn: [{ value: 'image_folder', label: 'Image Folder' }],
-    vision: [{ value: 'image_folder', label: 'Image Folder' }],
-    llm: [
-      { value: 'json', label: 'JSON/JSONL' },
-      { value: 'parquet', label: 'Parquet' },
-      { value: 'csv', label: 'CSV' }
-    ],
-    vlm: [
-      { value: 'json', label: 'JSON/JSONL' },
-      { value: 'parquet', label: 'Parquet' }
-    ],
-    detection: [
-      { value: 'yolo', label: 'YOLO Format' },
-      { value: 'coco', label: 'COCO Format' }
-    ],
-    embedding: [
-      { value: 'json', label: 'JSON/JSONL' },
-      { value: 'csv', label: 'CSV' },
-      { value: 'parquet', label: 'Parquet' }
-    ]
-  };
-
-  formatSelect.innerHTML = '<option value="" disabled selected hidden>Select format...</option>';
-  const relevantFormats = formats[modelType] || [];
-  relevantFormats.forEach(fmt => {
-    const option = document.createElement('option');
-    option.value = fmt.value;
-    option.textContent = fmt.label;
-    formatSelect.appendChild(option);
-  });
-}
-
-function onFinetuneModeChange() {
-  const m = getVal('f-finetune-mode');
-  const modelType = getVal('f-model-type');
-  const supportsQuantization = modelType === 'llm' || modelType === 'vlm';
-  const isLora = m === 'lora' || m === 'qlora';
-  toggle('lora-options', isLora);
-
-  if (m === 'qlora') {
-    const quantizeEl = document.getElementById('f-quantize');
-    if (quantizeEl) quantizeEl.checked = true;
-    setVal('f-quant-bits', '4');
-    toggle('tr-quant-bits', true);
-    toggle('tr-quantize', false);
-  } else if ((m === 'lora' || m === 'full') && supportsQuantization) {
-    toggle('tr-quantize', true);
-    onQuantizeChange();
-  } else {
-    const quantizeEl = document.getElementById('f-quantize');
-    if (quantizeEl) quantizeEl.checked = false;
-    toggle('tr-quantize', false);
-    toggle('tr-quant-bits', false);
-  }
-}
-
-function onQuantizeChange() {
-  const finetuneMode = getVal('f-finetune-mode');
-  if (finetuneMode !== 'lora' && finetuneMode !== 'full') {
-    const quantizeElForce = document.getElementById('f-quantize');
-    if (quantizeElForce) quantizeElForce.checked = false;
-    toggle('tr-quant-bits', false);
-    return;
-  }
-
-  const quantizeEl = document.getElementById('f-quantize');
-  const q = quantizeEl ? quantizeEl.checked : false;
-  toggle('tr-quant-bits', q);
-
-  // Full fine-tune only supports 8-bit (4-bit requires PEFT/QLoRA)
-  const bitsSelect = document.getElementById('f-quant-bits');
-  if (bitsSelect) {
-    if (finetuneMode === 'full' && q) {
-      setVal('f-quant-bits', '8');
-      Array.from(bitsSelect.options).forEach(opt => { opt.disabled = opt.value !== '8'; });
-    } else {
-      Array.from(bitsSelect.options).forEach(opt => { opt.disabled = false; });
-    }
-  }
-}
-
-// =========================================================================
-// W&B Toggle
-// =========================================================================
-function onWandbChange() {
-  const enabled = document.getElementById('f-wandb-enabled')?.checked;
-  toggle('fg-wandb-project', !!enabled);
-  toggle('fg-wandb-entity', !!enabled);
-  toggle('fg-wandb-run', !!enabled);
-}
-
-// =========================================================================
-// Strategy / GPU compatibility warning
-// =========================================================================
-function checkStrategyGpuCompatibility() {
-  const strategy = getVal('f-strategy');
-  const gpuCount = parseInt(getVal('f-gpu-count') || '1');
-  const warnEl = document.getElementById('strategy-gpu-warning');
-  if (!warnEl) return;
-
-  if (strategy === 'fsdp' && gpuCount < 2) {
-    warnEl.textContent = '⚠ FSDP with 1 GPU provides no memory-saving benefit (nothing to shard across). Use 2+ GPUs or switch to Solo mode.';
-    warnEl.style.display = 'block';
-  } else if (strategy === 'ddp' && gpuCount < 2) {
-    warnEl.textContent = '⚠ DDP with 1 GPU provides no throughput benefit. Use 2+ GPUs or switch to Solo mode.';
-    warnEl.style.display = 'block';
-  } else {
-    warnEl.style.display = 'none';
-  }
-}
-
-function syncGpuOptionsWithStrategy() {
-  const strategy = getVal('f-strategy');
-  const gpuInput = document.getElementById('f-gpu-count');
-  if (!gpuInput) return;
-
-  const multiGpuAllowed = strategy === 'ddp' || strategy === 'fsdp';
-
-  // Solo runs on exactly one GPU — lock the field to 1. Multi-GPU strategies
-  // leave it free for any positive count the user types.
-  gpuInput.disabled = !multiGpuAllowed;
-  if (!multiGpuAllowed) {
-    gpuInput.value = '1';
-  }
-}
-
-function onModelSourceChange() {
-  const source = getVal('f-model-source');
-  const modelType = getVal('f-model-type');
-
-  toggle('fg-model-name', false);
-  toggle('fg-model-url', false);
-  toggle('fg-model-path', false);
-  toggle('fg-model-upload', false);
-  // Detection model dropdown is shown/hidden by onModelTypeChange, not by source
-  if (modelType !== 'detection') {
-    toggle('fg-yolo-model', false);
-  }
-
-  if (source === 'huggingface') {
-    if (modelType !== 'detection') {
-      toggle('fg-model-name', true);
-    }
-    const el = document.getElementById('f-model-name');
-    if (el) el.placeholder = 'e.g. facebook/opt-125m';
-  } else if (source === 'torchvision') {
-    toggle('fg-model-name', true);
-    const el = document.getElementById('f-model-name');
-    if (el) el.placeholder = 'e.g. resnet50, vit_b_16, efficientnet_b0';
-  } else if (source === 'url') {
-    toggle('fg-model-url', true);
-  } else if (source === 'local') {
-    toggle('fg-model-path', true);
-  } else if (source === 'upload') {
-    toggle('fg-model-upload', true);
-  }
-}
-
-function onModelFileSelect(input) {
-  if (input.files && input.files[0]) {
-    const file = input.files[0];
-    document.getElementById('upload-filename').textContent = file.name;
-    document.getElementById('upload-area').style.display = 'none';
-    document.getElementById('upload-selected').style.display = 'flex';
-  }
-}
-
-function clearModelUpload() {
-  const fileInput = document.getElementById('f-model-file');
-  const uploadArea = document.getElementById('upload-area');
-  const uploadSelected = document.getElementById('upload-selected');
-  if (fileInput) fileInput.value = '';
-  if (uploadArea) uploadArea.style.display = 'block';
-  if (uploadSelected) uploadSelected.style.display = 'none';
-}
-
-function onDataSourceChange() {
-  const source = getVal('f-data-source');
-
-  toggle('fg-data-name', false);
-  toggle('fg-data-subset', false);
-  toggle('fg-data-split', false);
-  toggle('fg-data-kaggle', false);
-  toggle('fg-data-torchvision', false);
-  toggle('fg-data-path', false);
-  toggle('fg-data-url', false);
-  toggle('fg-data-upload', false);
-  toggle('fg-data-format', false);
-
-  if (source === 'huggingface') {
-    toggle('fg-data-name', true);
-    toggle('fg-data-subset', true);
-    toggle('fg-data-split', true);
-    const el = document.getElementById('f-data-name');
-    if (el) el.placeholder = 'e.g. wikitext, tatsu-lab/alpaca';
-    const subsetEl = document.getElementById('f-data-subset');
-    if (subsetEl) subsetEl.placeholder = 'e.g. wikitext-2-raw-v1';
-  } else if (source === 'kaggle') {
-    toggle('fg-data-kaggle', true);
-  } else if (source === 'torchvision') {
-    toggle('fg-data-torchvision', true);
-  } else if (source === 'local') {
-    toggle('fg-data-path', true);
-    toggle('fg-data-format', true);
-  } else if (source === 'url') {
-    toggle('fg-data-url', true);
-    toggle('fg-data-format', true);
-  } else if (source === 'upload') {
-    toggle('fg-data-upload', true);
-    toggle('fg-data-format', true);
-  }
-}
-
-function onDataFileSelect(input) {
-  if (input.files && input.files[0]) {
-    const file = input.files[0];
-    document.getElementById('data-upload-filename').textContent = file.name;
-    document.getElementById('data-upload-area').style.display = 'none';
-    document.getElementById('data-upload-selected').style.display = 'flex';
-  }
-}
-
-function clearDataUpload() {
-  const fileInput = document.getElementById('f-data-file');
-  const uploadArea = document.getElementById('data-upload-area');
-  const uploadSelected = document.getElementById('data-upload-selected');
-  if (fileInput) fileInput.value = '';
-  if (uploadArea) uploadArea.style.display = 'block';
-  if (uploadSelected) uploadSelected.style.display = 'none';
-}
-
-// =========================================================================
-// Side Panel
-// =========================================================================
-function toggleSidePanel() {
-  const panel = document.getElementById('side-panel');
-  const toggle = document.getElementById('side-panel-toggle');
-  const icon = document.getElementById('panel-toggle-icon');
-  const actionBar = document.querySelector('.form-action-bar');
-  const configLayout = document.querySelector('.config-layout');
-
-  if (!panel) return;
-
-  const isCollapsed = panel.classList.toggle('collapsed');
-  if (toggle) toggle.classList.toggle('collapsed', isCollapsed);
-
-  if (isCollapsed) {
-    if (icon) icon.textContent = '>';
-    if (actionBar) actionBar.style.left = '0';
-    if (configLayout) configLayout.style.marginLeft = '0';
-  } else {
-    if (icon) icon.textContent = '<';
-    if (actionBar) actionBar.style.left = '272px';
-    if (configLayout) configLayout.style.marginLeft = '272px';
-  }
-}
-
-function switchSideTab(name) {
-  document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.side-content').forEach(c => c.classList.remove('active'));
-
-  if (name === 'templates') {
-    document.querySelectorAll('.side-tab')[0].classList.add('active');
-    const el = document.getElementById('side-templates');
-    if (el) el.classList.add('active');
-  } else {
-    document.querySelectorAll('.side-tab')[1].classList.add('active');
-    const el = document.getElementById('side-logs');
-    if (el) el.classList.add('active');
-  }
-}
-
-// =========================================================================
-// Side Templates
-// =========================================================================
-async function loadTemplates() {
-  try {
-    const res = await fetch('/api/configs');
-    const data = await res.json();
-    allTemplates = data.configs;
-    renderSideTemplates(sideTemplatesFilter);
-  } catch (e) {
-    console.error('Failed to load templates:', e);
-  }
-}
-
-function filterSideTemplates(filter, btn) {
-  document.querySelectorAll('.side-filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  sideTemplatesFilter = filter;
-  renderSideTemplates(filter);
-}
-
-function renderSideTemplates(filter = 'all') {
-  const list = document.getElementById('template-list');
-  if (!list) return;
-  list.innerHTML = '';
-
-  const seen = new Set();
-  const filtered = allTemplates.filter(name => {
-    if (hiddenTemplates.includes(name)) return false;
-    const displayName = templateDisplayNames[name] || name;
-    if (seen.has(displayName)) return false;
-    seen.add(displayName);
-    return true;
-  });
-
-  const items = filtered.map(name => {
-    let type = 'llm';
-    if (name.startsWith('cnn')) type = 'cnn';
-    else if (name.startsWith('vlm')) type = 'vlm';
-    else if (name.startsWith('detection')) type = 'detection';
-    else if (name.startsWith('embedding')) type = 'embedding';
-    return {
-      name,
-      display: templateDisplayNames[name] || name.replace(/_/g, ' '),
-      type,
-      isExtra: false
-    };
-  });
-
-  extraTemplates.forEach(t => {
-    if (!seen.has(t.display)) {
-      seen.add(t.display);
-      items.push({ ...t, isExtra: true });
-    }
-  });
-
-  const finalItems = filter === 'all' ? items : items.filter(t => {
-    if (filter === 'cnn') return t.type === 'cnn' || t.type === 'vision';
-    return t.type === filter;
-  });
-  const typeOrder = { llm: 0, vlm: 1, cnn: 2, vision: 2, detection: 3, embedding: 4 };
-  finalItems.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
-
-  finalItems.forEach(item => {
-    const tag = item.type === 'cnn' ? 'CNN' :
-                item.type === 'vision' ? 'VIS-T' :
-                item.type === 'vlm' ? 'VLM' :
-                item.type === 'detection' ? 'OBJ DET' :
-                item.type === 'embedding' ? 'EMBED' : 'LLM';
-
-    const div = document.createElement('div');
-    div.className = 'template-item';
-    div.setAttribute('data-type', item.type);
-    div.setAttribute('data-name', item.name);
-    div.title = item.display;
-    div.innerHTML = `
-      <span class="template-tag ${item.type}">${tag}</span>
-      <span class="template-name">${item.display}</span>
-    `;
-    div.onclick = (e) => selectSideTemplate(item, e);
-    list.appendChild(div);
-  });
-
-  // Highlight pending template selection from landing page
-  if (pendingTemplateSelection) {
-    const templateItems = list.querySelectorAll('.template-item');
-    templateItems.forEach(el => {
-      if (el.getAttribute('data-name') === pendingTemplateSelection) {
-        el.classList.add('active');
-      }
-    });
-    pendingTemplateSelection = null;
-  }
-}
-
-async function selectSideTemplate(item, event) {
-
-  // Snap to top before any DOM changes — cover both window scroll and panel scroll
-  window.scrollTo(0, 0);
-  document.documentElement.scrollTop = 0;
-  document.body.scrollTop = 0;
-  const panel = document.querySelector('.form-panel');
-  if (panel) panel.scrollTop = 0;
-
-  document.querySelectorAll('.template-item').forEach(t => t.classList.remove('active'));
-  if (event && event.currentTarget) event.currentTarget.classList.add('active');
-
-  selectedModelType = item.type;
-  setVal('f-model-type', item.type);
-  onModelTypeChange();
-
-  if (item.isExtra) {
-    applyExtraTemplate(item);
-    showToast(`Template loaded: ${item.display}`, 'success');
-  } else {
-    try {
-      const res = await fetch(`/api/configs/${item.name}`);
-      const data = await res.json();
-      currentConfig = data.config;
-      applyConfigToForm(data.config);
-      showToast(`Template loaded: ${item.display}`, 'success');
-    } catch (e) {
-      console.error('Failed to load template:', e);
-      showToast('Failed to load template', 'info');
-    }
-  }
-}
-
-function applyExtraTemplate(template) {
-  const name = template.name;
-
-  setVal('f-model-source', 'huggingface');
-  toggle('fg-model-name', true);
-  toggle('fg-model-url', false);
-  toggle('fg-model-path', false);
-  toggle('fg-model-upload', false);
-
-  setVal('f-strategy', 'none');
-  onStrategyChange();
-  setVal('f-mixed-precision', 'true');
-  setVal('f-epochs', '3');
-  setVal('f-batch-size', '8');
-  setVal('f-lr', '2e-5');
-  setVal('f-lr-schedule', 'cosine');
-  setVal('f-grad-accum', '1');
-  setVal('f-warmup-steps', '100');
-  setVal('f-weight-decay', '0.01');
-  setVal('f-grad-clip', '1.0');
-  setVal('f-checkpoint-dir', 'checkpoints');
-
-  if (template.type === 'llm') {
-    let modelName = 'facebook/opt-125m';
-    let finetuneMode = 'lora';
-    let maxSeqLen = '2048';
-
-    // Top 2026 LLMs
-    if (name.includes('glm5')) modelName = 'THUDM/glm-5-9b-chat';
-    else if (name.includes('kimi_k25')) modelName = 'moonshotai/Kimi-K2.5-Instruct';
-    else if (name.includes('deepseek_v3')) modelName = 'deepseek-ai/DeepSeek-V3';
-    else if (name.includes('deepseek_r1')) modelName = 'deepseek-ai/DeepSeek-R1';
-    else if (name.includes('qwen3_235b')) { modelName = 'Qwen/Qwen3-235B-Instruct-2507'; maxSeqLen = '32768'; }
-    else if (name.includes('llama33_70b')) { modelName = 'meta-llama/Llama-3.3-70B-Instruct'; maxSeqLen = '8192'; }
-    else if (name.includes('mimo_v2_flash')) { modelName = 'Xiaomi/MiMo-V2-Flash'; maxSeqLen = '32768'; }
-    // Other LLMs
-    else if (name.includes('llama2_7b')) modelName = 'meta-llama/Llama-2-7b-hf';
-    else if (name.includes('mistral_7b')) modelName = 'mistralai/Mistral-7B-v0.1';
-    else if (name.includes('phi3')) modelName = 'microsoft/Phi-3-mini-4k-instruct';
-    // Small/test models
-    else if (name.includes('opt_125m')) { modelName = 'facebook/opt-125m'; maxSeqLen = '512'; }
-    else if (name.includes('opt_350m')) { modelName = 'facebook/opt-350m'; maxSeqLen = '512'; }
-    else if (name.includes('gpt2_medium')) { modelName = 'gpt2-medium'; maxSeqLen = '1024'; }
-    else if (name.includes('gpt2')) { modelName = 'gpt2'; maxSeqLen = '1024'; }
-
-    if (name.includes('qlora')) finetuneMode = 'qlora';
-    else if (name.includes('full')) finetuneMode = 'full';
-
-    setVal('f-model-name', modelName);
-    setVal('f-finetune-mode', finetuneMode);
-    setVal('f-max-seq-len', maxSeqLen);
-    setVal('f-lora-r', '16');
-    setVal('f-lora-alpha', '32');
-    setVal('f-lora-dropout', '0.05');
-
-    // Default dataset: wikitext with small split for all LLMs
-    setVal('f-data-source', 'huggingface');
-    onDataSourceChange();
-    setVal('f-data-name', 'wikitext');
-    setVal('f-data-subset', 'wikitext-2-raw-v1');
-    // Use a tiny slice for small/test models, full train split for large ones
-    const isSmall = name.includes('opt_125m') || name.includes('opt_350m') || name.includes('gpt2');
-    setVal('f-data-split', '');
-
-    onFinetuneModeChange();
-  } else if (template.type === 'vlm') {
-    let modelName = 'llava-hf/llava-1.5-7b-hf';
-    let finetuneMode = 'lora';
-    let maxSeqLen = '2048';
-
-    // Top 2026 VLMs
-    if (name.includes('qwen2_vl_72b')) { modelName = 'Qwen/Qwen2-VL-72B-Instruct'; maxSeqLen = '32768'; }
-    else if (name.includes('internvl2_26b')) { modelName = 'OpenGVLab/InternVL2-26B'; maxSeqLen = '8192'; }
-    else if (name.includes('llava_next_34b')) { modelName = 'llava-hf/llava-v1.6-34b-hf'; maxSeqLen = '4096'; }
-    else if (name.includes('cogvlm2')) { modelName = 'THUDM/cogvlm2-llama3-chat-19B'; maxSeqLen = '8192'; }
-    else if (name.includes('phi3_vision')) { modelName = 'microsoft/Phi-3-vision-128k-instruct'; maxSeqLen = '8192'; }
-    else if (name.includes('idefics2_8b')) { modelName = 'HuggingFaceM4/idefics2-8b'; maxSeqLen = '4096'; }
-    else if (name.includes('paligemma_3b')) { modelName = 'google/paligemma-3b-mix-448'; maxSeqLen = '2048'; }
-    // Other VLMs
-    else if (name.includes('llava_7b')) modelName = 'llava-hf/llava-1.5-7b-hf';
-    else if (name.includes('blip2')) modelName = 'Salesforce/blip2-flan-t5-xl';
-
-    if (name.includes('qlora')) finetuneMode = 'qlora';
-    else if (name.includes('full')) finetuneMode = 'full';
-
-    setVal('f-model-name', modelName);
-    setVal('f-finetune-mode', finetuneMode);
-    setVal('f-max-seq-len', maxSeqLen);
-    setVal('f-image-size', '448');
-    setVal('f-lora-r', '16');
-    setVal('f-lora-alpha', '32');
-    setVal('f-lora-dropout', '0.05');
-
-    // Default dataset: small image-text pairs from HuggingFace
-    setVal('f-data-source', 'huggingface');
-    onDataSourceChange();
-    setVal('f-data-name', 'HuggingFaceM4/the_cauldron');
-    setVal('f-data-subset', 'ai2d');
-    setVal('f-data-split', '');
-
-    onFinetuneModeChange();
-  } else if (template.type === 'cnn') {
-    let modelName = 'resnet50';
-    if (name.includes('resnet18')) modelName = 'resnet18';
-    else if (name.includes('vit_base')) modelName = 'vit_b_16';
-    else if (name.includes('efficientnet_b0')) modelName = 'efficientnet_b0';
-
-    setVal('f-model-name', modelName);
-    setVal('f-num-classes', '10');
-    setVal('f-image-size', '224');
-
-    // Default dataset: CIFAR-10 via torchvision
-    setVal('f-data-source', 'torchvision');
-    onDataSourceChange();
-    setVal('f-data-torchvision', 'cifar10');
-  } else if (template.type === 'vision') {
-    let modelName = 'google/vit-base-patch16-224';
-    let finetuneMode = 'lora';
-
-    if (name.includes('vit_base')) { modelName = 'google/vit-base-patch16-224'; }
-    else if (name.includes('vit_large')) { modelName = 'google/vit-large-patch16-224'; }
-    else if (name.includes('vit_huge')) { modelName = 'google/vit-huge-patch14-224-in21k'; }
-    else if (name.includes('swin_tiny')) { modelName = 'microsoft/swin-tiny-patch4-window7-224'; }
-    else if (name.includes('swin_base')) { modelName = 'microsoft/swin-base-patch4-window7-224'; }
-    else if (name.includes('swin_large')) { modelName = 'microsoft/swin-large-patch4-window7-224'; }
-    else if (name.includes('deit_tiny')) { modelName = 'facebook/deit-tiny-patch16-224'; }
-    else if (name.includes('deit_small')) { modelName = 'facebook/deit-small-patch16-224'; }
-    else if (name.includes('deit_base')) { modelName = 'facebook/deit-base-patch16-224'; }
-    else if (name.includes('beit_base')) { modelName = 'microsoft/beit-base-patch16-224'; }
-    else if (name.includes('beit_large')) { modelName = 'microsoft/beit-large-patch16-224'; }
-    else if (name.includes('convnext_tiny')) { modelName = 'facebook/convnext-tiny-224'; }
-    else if (name.includes('convnext_base')) { modelName = 'facebook/convnext-base-224'; }
-    else if (name.includes('convnext_large')) { modelName = 'facebook/convnext-large-224'; }
-    else if (name.includes('efficientnet_b4')) { modelName = 'google/efficientnet-b4'; }
-    else if (name.includes('efficientnet_b7')) { modelName = 'google/efficientnet-b7'; }
-
-    if (name.includes('full')) finetuneMode = 'full';
-
-    setVal('f-model-source', 'huggingface');
-    toggle('fg-model-name', true);
-    setVal('f-model-name', modelName);
-    setVal('f-finetune-mode', finetuneMode);
-    setVal('f-image-size', '224');
-    setVal('f-lora-r', '16');
-    setVal('f-lora-alpha', '32');
-    setVal('f-lora-dropout', '0.05');
-
-    // Default dataset: ImageNet-1k subset via HuggingFace
-    setVal('f-data-source', 'huggingface');
-    onDataSourceChange();
-    setVal('f-data-name', 'ILSVRC/imagenet-1k');
-    setVal('f-data-split', 'train[:5%]');
-
-    onFinetuneModeChange();
-  } else if (template.type === 'detection') {
-    let detectionModel = 'hustvl/yolos-small';
-    if      (name.includes('yolos_tiny'))        detectionModel = 'hustvl/yolos-tiny';
-    else if (name.includes('yolos_base'))        detectionModel = 'hustvl/yolos-base';
-    else if (name.includes('rtdetr_r18'))        detectionModel = 'PekingU/rtdetr_r18vd';
-    else if (name.includes('rtdetr_r50'))        detectionModel = 'PekingU/rtdetr_r50vd';
-    else if (name.includes('rtdetr_r101'))       detectionModel = 'PekingU/rtdetr_r101vd';
-    else if (name.includes('detr_r101'))         detectionModel = 'facebook/detr-resnet-101';
-    else if (name.includes('conditional_detr'))  detectionModel = 'microsoft/conditional-detr-resnet-50';
-    else if (name.includes('deformable_detr'))   detectionModel = 'SenseTime/deformable-detr';
-    else if (name.includes('dab_detr'))          detectionModel = 'IDEA-Research/dab-detr-r50';
-    else if (name.includes('owlvit_large'))      detectionModel = 'google/owlvit-large-patch14';
-    else if (name.includes('owlvit_base'))       detectionModel = 'google/owlvit-base-patch32';
-    else if (name.includes('detr_r50'))          detectionModel = 'facebook/detr-resnet-50';
-
-    setVal('f-model-source', 'huggingface');
-    setVal('f-yolo-model', detectionModel);
-    setVal('f-image-size', '640');
-
-    // Default dataset: COCO128 sample — small enough for quick runs
-    setVal('f-data-source', 'huggingface');
-    onDataSourceChange();
-    setVal('f-data-name', 'keremberke/coco128-object-detection');
-    setVal('f-data-split', '');
-  } else if (template.type === 'embedding') {
-    let modelName = 'sentence-transformers/all-MiniLM-L6-v2';
-    let finetuneMode = 'lora';
-    let maxSeqLen = '128';
-
-    // Text embedding models
-    if (name.includes('e5_large_v2')) { modelName = 'intfloat/e5-large-v2'; maxSeqLen = '512'; }
-    else if (name.includes('e5_mistral')) { modelName = 'intfloat/e5-mistral-7b-instruct'; maxSeqLen = '4096'; }
-    else if (name.includes('gte_qwen2')) { modelName = 'Alibaba-NLP/gte-Qwen2-7B-instruct'; maxSeqLen = '8192'; }
-    else if (name.includes('bge_large_en')) { modelName = 'BAAI/bge-large-en-v1.5'; maxSeqLen = '512'; }
-    else if (name.includes('bge_m3')) { modelName = 'BAAI/bge-m3'; maxSeqLen = '8192'; }
-    else if (name.includes('minilm_l6')) { modelName = 'sentence-transformers/all-MiniLM-L6-v2'; maxSeqLen = '256'; }
-    else if (name.includes('mpnet_base')) { modelName = 'sentence-transformers/all-mpnet-base-v2'; maxSeqLen = '384'; }
-    else if (name.includes('gte_large')) { modelName = 'thenlper/gte-large'; maxSeqLen = '512'; }
-    else if (name.includes('nomic_text')) { modelName = 'nomic-ai/nomic-embed-text-v1.5'; maxSeqLen = '8192'; }
-    // Vision embedding models
-    else if (name.includes('dinov2_large')) { modelName = 'facebook/dinov2-large'; finetuneMode = 'full'; }
-    else if (name.includes('clip_vit_l14')) { modelName = 'openai/clip-vit-large-patch14'; }
-    else if (name.includes('siglip_so400m')) { modelName = 'google/siglip-so400m-patch14-384'; }
-    else if (name.includes('imagebind')) { modelName = 'facebook/imagebind-huge'; }
-    // Legacy / YAML-backed
-    else if (name.includes('bert')) { modelName = 'bert-base-uncased'; }
-    else if (name.includes('clip')) { modelName = 'openai/clip-vit-base-patch32'; }
-    else if (name.includes('vision')) { modelName = 'microsoft/resnet-50'; }
-
-    if (name.includes('full')) finetuneMode = 'full';
-
-    setVal('f-model-name', modelName);
-    setVal('f-finetune-mode', finetuneMode);
-    setVal('f-max-seq-len', maxSeqLen);
-    setVal('f-lora-r', '8');
-    setVal('f-lora-alpha', '16');
-    setVal('f-lora-dropout', '0.05');
-
-    // Default dataset: all-nli — NLI sentence pairs, widely used for contrastive/triplet embedding training
-    setVal('f-data-source', 'huggingface');
-    onDataSourceChange();
-    setVal('f-data-name', 'sentence-transformers/all-nli');
-    setVal('f-data-subset', 'triplet');
-    setVal('f-data-split', '');
-
-    onFinetuneModeChange();
-  }
-}
-
-/**
- * Normalize the flat LLM schema (used by llm_*.yaml configs) to the standard
- * nested schema expected by applyConfigToForm.
- *
- * Flat schema keys: model_name, dataset, strategy, num_gpus, checkpoint_dir,
- *   dist_parameters, peft, quantization, training.
- * Standard schema keys: model.{type,name,...}, data.{name,...},
- *   distributed.{strategy,...}, training.{...}.
- */
-function normalizeLlmFlatConfig(cfg) {
-  const peft = cfg.peft || {};
-  const quant = cfg.quantization || {};
-  const distParams = cfg.dist_parameters || {};
-  const dataset = cfg.dataset || {};
-  const t = cfg.training || {};
-
-  // Determine finetune mode from peft block
-  let finetuneMode = 'full';
-  if (peft.enabled) {
-    finetuneMode = quant.enabled ? 'qlora' : 'lora';
-  }
-
-  // Map strategy: 'solo' → 'none' (UI uses 'none' for single-GPU)
-  let strategy = cfg.strategy || 'none';
-  if (strategy === 'solo') strategy = 'none';
-
-  // Determine data source from dataset.name value
-  const datasetName = dataset.name || '';
-  let dataSource = 'huggingface';
-  let dataName = datasetName;
-  let dataPath = '';
-  let dataUrl = '';
-  if (datasetName.startsWith('s3://') || datasetName.startsWith('http://') || datasetName.startsWith('https://')) {
-    dataSource = 'url';
-    dataUrl = datasetName;
-    dataName = '';
-  } else if (datasetName.startsWith('/') || datasetName.startsWith('./') || datasetName.startsWith('../')) {
-    dataSource = 'local';
-    dataPath = datasetName;
-    dataName = '';
-  }
-
+const PEFT_TYPES = new Set(['llm', 'seq2seq', 'encoder', 'vlm', 'vision']);
+const QLORA_TYPES = new Set(['llm', 'seq2seq', 'vlm']);
+const DATA_HINT = {
+  llm: 'A text column. Local .json/.jsonl/.csv/.parquet files work as the dataset name.',
+  seq2seq: 'A text column.',
+  encoder: 'A text column.',
+  vision: 'An image column (image or img) and an integer label column.',
+  yolo: 'image, objects (bbox in COCO [x, y, w, h], category) and image_id.',
+  vlm: 'An image column and a caption column (text, caption, captions or sentence).',
+  custom_transformer: 'Synthetic random tokens. Under strategy 5d you can also pack an HF text dataset.',
+  sft: 'messages, prompt + completion, instruction (+ input) + output, or text.',
+  preference: 'prompt + chosen + rejected, chosen/rejected conversations (last turn is the answer), or hh-rlhf strings.',
+};
+const DEFAULT_MODELS = {
+  llm: 'Qwen/Qwen2.5-0.5B-Instruct', seq2seq: 'google/flan-t5-small', vlm: 'HuggingFaceTB/SmolVLM-256M-Instruct',
+  vision: 'google/vit-base-patch16-224-in21k', yolo: 'hustvl/yolos-tiny', encoder: 'bert-base-uncased',
+};
+const DEFAULT_DATA = {
+  llm: { name: 'wikitext', subset: 'wikitext-2-raw-v1', split: 'train[:2%]' },
+  seq2seq: { name: 'wikitext', subset: 'wikitext-2-raw-v1', split: 'train[:2%]' },
+  encoder: { name: 'wikitext', subset: 'wikitext-2-raw-v1', split: 'train[:2%]' },
+  vision: { name: 'cifar10', subset: null, split: 'train[:5%]' },
+  yolo: { name: 'cppe-5', subset: null, split: 'train' },
+  vlm: { name: 'nlphuji/flickr30k', subset: null, split: 'test[:1%]' },
+  custom_transformer: { name: 'synthetic', subset: null, split: 'train' },
+};
+
+function defaultConfig() {
   return {
-    seed: cfg.seed || 42,
-    num_gpus: cfg.num_gpus || 1,
-    _flatLlm: true,
-    model: {
-      type: 'llm',
-      name: cfg.model_name || '',
-      finetune_mode: finetuneMode === 'qlora' ? 'lora' : finetuneMode,
-      quantize: quant.enabled === true,
-      quant_bits: quant.bits || 4,
-      lora_r: peft.r || 16,
-      lora_alpha: peft.alpha || 32,
-      lora_dropout: peft.dropout || 0.05,
-    },
-    data: {
-      _source: dataSource,
-      name: dataName,
-      subset: dataset.subset || '',
-      split: dataset.split || '',
-      _path: dataPath,
-      _url: dataUrl,
-      max_seq_len: t.max_length || 2048,
-    },
-    distributed: {
-      strategy: strategy,
-      mixed_precision: distParams.mixed_precision !== false,
-    },
-    training: {
-      epochs: t.epochs || 3,
-      batch_size: t.batch_size || 8,
-      lr: t.learning_rate || t.lr || '2e-4',
-      weight_decay: t.weight_decay || 0.01,
-      grad_accum_steps: t.grad_accum_steps || 1,
-      warmup_steps: t.warmup_steps || 100,
-      grad_clip: t.grad_clip || 1.0,
-      lr_schedule: t.lr_schedule || 'cosine',
-      checkpoint_dir: cfg.checkpoint_dir || 'checkpoints',
-    },
+    model_name: 'Qwen/Qwen2.5-0.5B-Instruct',
+    model_type: 'llm',
+    dataset: { name: 'wikitext', subset: 'wikitext-2-raw-v1', split: 'train[:2%]' },
+    algorithm: { type: 'pretrain', beta: 0.1, dpo_loss: 'sigmoid', label_smoothing: 0, simpo_gamma: 0.5, max_prompt_length: 256, completion_only: true },
+    training: { epochs: 1, batch_size: 4, max_length: 512, learning_rate: 2e-4, gradient_checkpointing: true,
+      warmup_steps: 20, lr_scheduler: 'cosine', weight_decay: 0.0, grad_clip: 1.0 },
+    strategy: 'solo', num_gpus: 1, checkpoint_dir: 'checkpoints', save: true,
+    dist_parameters: { mixed_precision: true, param_dtype: 'bfloat16', reduce_dtype: 'float32', output_dtype: 'bfloat16',
+      cast_forward_inputs: false, distribute_api: 'dcp_api' },
+    save_load: { resume: false, resume_path: '', load_model_from_hf: true },
+    prefetch: { explicit: true, forward: 2, backward: 2 },
+    peft: { enabled: true, type: 'lora', r: 16, alpha: 32, dropout: 0.05, target_modules: 'all-linear', bias: 'none' },
+    quantization: { enabled: false, bits: 4, quant_type: 'nf4', compute_dtype: 'bfloat16', double_quant: true },
+    parallelism: { dp: 'auto', tp: 1, sp: false, cp: 1, pp: 1, pp_schedule: '1f1b', micro_batches: 1, ep: 1, zero1: false },
+    custom_transformer_args: { n_layers: 6, vocab_size: 8192, max_seq_len: 512, dim: 512, n_heads: 8, n_kv_heads: 0,
+      dropout_p: 0.0, num_experts: 0, top_k: 2 },
+    wandb: { wandb_log_with_train: false, wandb_entity: '', wandb_project: 'omni-train', wandb_run_name: '' },
   };
 }
 
-function applyConfigToForm(cfg) {
-  if (!cfg) return;
+const methodOf = (cfg) => (!cfg.peft.enabled ? 'full' : (cfg.peft.type === 'qlora' || cfg.quantization.enabled ? 'qlora' : 'lora'));
+const goalOf = (cfg) => {
+  const a = cfg.algorithm.type;
+  if (a === 'sft') return 'sft';
+  if (['dpo', 'simpo', 'orpo'].includes(a)) return 'preference';
+  return 'pretrain';
+};
 
-  // Detect flat LLM schema (model_name at top level, no model.type)
-  if (cfg.model_name != null && cfg.model == null) {
-    cfg = normalizeLlmFlatConfig(cfg);
+/** The config sent to the server: only the keys the chosen options use. */
+function exportConfig(cfg) {
+  const c = clone(cfg);
+  const a = c.algorithm.type;
+  const algo = { type: a };
+  if (a === 'sft') algo.completion_only = !!c.algorithm.completion_only;
+  if (['dpo', 'simpo', 'orpo'].includes(a)) {
+    algo.beta = Number(c.algorithm.beta);
+    algo.max_prompt_length = Number(c.algorithm.max_prompt_length);
+    if (a === 'dpo') { algo.dpo_loss = c.algorithm.dpo_loss; if (c.algorithm.dpo_loss === 'sigmoid' && Number(c.algorithm.label_smoothing)) algo.label_smoothing = Number(c.algorithm.label_smoothing); }
+    if (a === 'simpo') algo.simpo_gamma = Number(c.algorithm.simpo_gamma);
   }
-
-  const m = cfg.model || {};
-  const d = cfg.data || {};
-  const dist = cfg.distributed || {};
-  const t = cfg.training || {};
-
-  const modelType = m.type || 'llm';
-  const modelName = m.name || '';
-
-  // Step 1: Set model type and trigger visibility updates (this resets values)
-  setVal('f-model-type', modelType);
-  onModelTypeChange();
-
-  // Step 2: Now set all the specific values AFTER the reset
-  // Model source and name
-  if (modelType === 'detection') {
-    setVal('f-model-source', 'huggingface');
-  } else if (modelType === 'cnn') {
-    setVal('f-model-source', 'torchvision');
-    setVal('f-model-name', modelName);
-    toggle('fg-model-name', true);
-  } else if (modelType === 'vision' || modelType === 'llm' || modelType === 'vlm' || modelType === 'embedding') {
-    // Always default to HuggingFace for Vision-Transformer/LLM/VLM/Embedding
-    setVal('f-model-source', 'huggingface');
-    toggle('fg-model-name', true);
-    if (modelName) {
-      setVal('f-model-name', modelName);
-    }
-  }
-
-  // Model-specific settings
-  setVal('f-num-classes', m.num_classes || 10);
-  setVal('f-yolo-model', m.yolo_model || 'hustvl/yolos-small');
-  const freezeEl = document.getElementById('f-freeze-backbone');
-  if (freezeEl) freezeEl.checked = m.freeze_backbone === true;
-
-  // Finetune mode and related settings
-  let finetuneMode = m.finetune_mode || 'full';
-  if (finetuneMode === 'lora' && m.quantize === true) {
-    finetuneMode = 'qlora';
-  }
-  setVal('f-finetune-mode', finetuneMode);
-  onFinetuneModeChange();  // Update visibility for lora options
-
-  // Quantization (set after finetune mode)
-  const quantizeEl = document.getElementById('f-quantize');
-  if (quantizeEl) quantizeEl.checked = m.quantize === true;
-  setVal('f-quant-bits', m.quant_bits || 4);
-  onQuantizeChange();  // Update quant bits visibility
-
-  // LoRA settings
-  setVal('f-lora-r', m.lora_r || 16);
-  setVal('f-lora-alpha', m.lora_alpha || 32);
-  setVal('f-lora-dropout', m.lora_dropout || 0.05);
-
-  // Data source and fields
-  // d._source is set by normalizeLlmFlatConfig; for standard configs derive from d.type
-  const rawDataType = d.type || '';
-  let dataSource = d._source || '';
-  if (!dataSource) {
-    if (rawDataType === 'torchvision') dataSource = 'torchvision';
-    else if (rawDataType === 'hf_dataset') dataSource = 'huggingface';
-    else if (rawDataType === 'local_file' || rawDataType === 'image_folder') dataSource = 'local';
-    else if (rawDataType === 'yolo' || rawDataType === 'coco') dataSource = 'url';
-    else if (d.name) dataSource = 'huggingface';
-  }
-  if (dataSource) {
-    setVal('f-data-source', dataSource);
-    onDataSourceChange();
-  }
-
-  if (dataSource === 'huggingface') {
-    setVal('f-data-name', d.name || '');
-    setVal('f-data-subset', d.subset || d.dataset_full_name || '');
-    setVal('f-data-split', d.split || '');
-  } else if (dataSource === 'torchvision') {
-    const tvName = (d.name || '').toLowerCase();
-    setVal('f-data-torchvision', tvName || 'cifar10');
-  } else if (dataSource === 'local') {
-    setVal('f-data-path', d._path || d.name || d.data_yaml || '');
-  } else if (dataSource === 'url') {
-    // For detection configs the YAML paths are local paths, not download URLs — leave blank
-    const isDetectionFmt = rawDataType === 'coco' || rawDataType === 'yolo';
-    setVal('f-data-url', isDetectionFmt ? '' : (d._url || d.name || ''));
-  }
-
-  // Pre-select data format for detection templates
-  if (rawDataType === 'coco' || rawDataType === 'yolo') {
-    setVal('f-data-format', rawDataType);
-  }
-
-  setVal('f-image-size', d.image_size || '');
-  setVal('f-max-seq-len', d.max_seq_len || '');
-
-  // Distributed settings
-  setVal('f-strategy', dist.strategy || 'none');
-  setVal('f-gpu-count', cfg.num_gpus || dist.gpu_count || 1);
-  onStrategyChange();
-  setVal('f-mixed-precision', String(dist.mixed_precision !== false));
-
-  // Launch mode & SLURM
-  setVal('f-launch-mode', cfg.launch_mode || 'torchrun');
-  onLaunchModeChange();
-  if (cfg.slurm) {
-    setVal('f-slurm-nodes', cfg.slurm.nodes || 1);
-    setVal('f-slurm-gpus-per-node', cfg.slurm.gpus_per_node || 4);
-    setVal('f-slurm-partition', cfg.slurm.partition || '');
-    setVal('f-slurm-time', cfg.slurm.time || '');
-  }
-
-  // Training settings
-  setVal('f-epochs', t.epochs || 3);
-  setVal('f-batch-size', t.batch_size || 8);
-  setVal('f-lr', t.lr || '2e-5');
-  setVal('f-weight-decay', t.weight_decay || 0.01);
-  setVal('f-grad-accum', t.grad_accum_steps || 1);
-  setVal('f-warmup-steps', t.warmup_steps || 100);
-  setVal('f-grad-clip', t.grad_clip || 1.0);
-  setVal('f-lr-schedule', t.lr_schedule || 'cosine');
-  setVal('f-checkpoint-dir', t.checkpoint_dir || 'checkpoints');
-
-  // W&B settings
-  const wandb = cfg.wandb || {};
-  const wandbEl = document.getElementById('f-wandb-enabled');
-  if (wandbEl) wandbEl.checked = !!(wandb.wandb_log_with_train);
-  setVal('f-wandb-project', wandb.wandb_project || '');
-  setVal('f-wandb-entity', wandb.wandb_entity || '');
-  setVal('f-wandb-run', wandb.wandb_run_name || '');
-  onWandbChange();
-}
-
-function buildConfigFromForm() {
-  const modelType = getVal('f-model-type');
-  const finetuneMode = getVal('f-finetune-mode');
-
-  const cfg = { seed: 42 };
-
-  const modelSource = getVal('f-model-source');
-  let modelName = '';
-  if (modelSource === 'huggingface') {
-    modelName = modelType === 'detection' ? getVal('f-yolo-model') : getVal('f-model-name');
-  } else if (modelSource === 'torchvision') {
-    modelName = getVal('f-model-name');
-  } else if (modelSource === 'url') {
-    modelName = getVal('f-model-url');
-  } else if (modelSource === 'local') {
-    modelName = getVal('f-model-path');
-  } else if (modelSource === 'upload') {
-    const fileInput = document.getElementById('f-model-file');
-    if (fileInput && fileInput.files && fileInput.files[0]) {
-      modelName = 'uploaded:' + fileInput.files[0].name;
-    }
-  }
-  cfg.model = { type: modelType, name: modelName, source: modelSource };
-
-  if (modelType === 'cnn') {
-    cfg.model.num_classes = parseInt(getVal('f-num-classes'));
-    cfg.model.pretrained = true;
-    const freezeEl = document.getElementById('f-freeze-backbone');
-    cfg.model.freeze_backbone = freezeEl ? freezeEl.checked : false;
-  } else if (modelType === 'llm') {
-    const isQlora = finetuneMode === 'qlora';
-    cfg.model.finetune_mode = isQlora ? 'lora' : finetuneMode;
-    cfg.model.use_flash_attention = true;
-
-    const quantizeEl = document.getElementById('f-quantize');
-    if (isQlora || (quantizeEl && quantizeEl.checked)) {
-      cfg.model.quantize = true;
-      cfg.model.quant_bits = isQlora ? 4 : parseInt(getVal('f-quant-bits'));
-    }
-
-    if (finetuneMode === 'lora' || isQlora) {
-      cfg.model.lora_r = parseInt(getVal('f-lora-r'));
-      cfg.model.lora_alpha = parseInt(getVal('f-lora-alpha'));
-      cfg.model.lora_dropout = parseFloat(getVal('f-lora-dropout'));
-      cfg.model.lora_target_modules = ['q_proj', 'v_proj', 'k_proj', 'o_proj'];
-    }
-  } else if (modelType === 'vlm') {
-    const isQlora = finetuneMode === 'qlora';
-    cfg.model.finetune_mode = isQlora ? 'lora' : finetuneMode;
-    cfg.model.use_flash_attention = true;
-    cfg.model.lora_target = 'llm_only';
-
-    const quantizeEl = document.getElementById('f-quantize');
-    if (isQlora || (quantizeEl && quantizeEl.checked)) {
-      cfg.model.quantize = true;
-      cfg.model.quant_bits = isQlora ? 4 : parseInt(getVal('f-quant-bits'));
-    }
-
-    if (finetuneMode === 'lora' || isQlora) {
-      cfg.model.lora_r = parseInt(getVal('f-lora-r'));
-      cfg.model.lora_alpha = parseInt(getVal('f-lora-alpha'));
-      cfg.model.lora_dropout = parseFloat(getVal('f-lora-dropout'));
-      cfg.model.lora_target_modules = ['q_proj', 'v_proj', 'k_proj', 'o_proj'];
-    }
-  } else if (modelType === 'vision') {
-    cfg.model.finetune_mode = finetuneMode;
-    if (finetuneMode === 'lora') {
-      cfg.model.lora_r = parseInt(getVal('f-lora-r'));
-      cfg.model.lora_alpha = parseInt(getVal('f-lora-alpha'));
-      cfg.model.lora_dropout = parseFloat(getVal('f-lora-dropout'));
-      cfg.model.lora_target_modules = 'all-linear';
-    }
-  } else if (modelType === 'detection') {
-    cfg.model.yolo_model = getVal('f-yolo-model');
-  } else if (modelType === 'custom_transformer') {
-    cfg.model.source = 'custom';
-    cfg.model.arch = {
-      n_layers: parseInt(getVal('f-custom-n-layers')) || 6,
-      vocab_size: parseInt(getVal('f-custom-vocab-size')) || 8192,
-      max_seq_len: parseInt(getVal('f-custom-max-seq-len')) || 512,
-      dim: parseInt(getVal('f-custom-dim')) || 512,
-      n_heads: parseInt(getVal('f-custom-n-heads')) || 8,
-      dropout_p: parseFloat(getVal('f-custom-dropout-p')) || 0.1,
-    };
-  }
-
-  cfg.data = { type: 'dummy', num_workers: 4 };
-  const dataSource = getVal('f-data-source');
-  cfg.data._source = dataSource || 'huggingface';
-  const dataName = getVal('f-data-name');
-  const dataSubset = getVal('f-data-subset');
-  const dataSplit = getVal('f-data-split');
-  if (dataSource === 'local') {
-    const dataPath = getVal('f-data-path');
-    const dataFormat = getVal('f-data-format');
-    if (dataPath) cfg.data._path = dataPath;
-    if (dataFormat) cfg.data.format = dataFormat;
-  } else if (dataSource === 'torchvision') {
-    cfg.data.name = getVal('f-data-torchvision') || 'cifar10';
-  } else if (dataSource === 'url') {
-    const dataUrl = getVal('f-data-url');
-    if (dataUrl) cfg.data._url = dataUrl;
-    if (dataName) cfg.data.name = dataName;
+  c.algorithm = algo;
+  if (c.model_type === 'custom_transformer') {
+    const ct = c.custom_transformer_args;
+    c.training.max_length = Number(ct.max_seq_len);
+    if (!Number(ct.n_kv_heads)) delete ct.n_kv_heads;
+    if (!Number(ct.num_experts)) { delete ct.num_experts; delete ct.top_k; }
+    if (c.strategy !== '5d') { delete ct.n_kv_heads; delete ct.num_experts; delete ct.top_k; }
   } else {
-    if (dataName) cfg.data.name = dataName;
+    delete c.custom_transformer_args;
   }
-  if (dataSubset) cfg.data.subset = dataSubset;
-  if (dataSplit) cfg.data.split = dataSplit;
-  if (modelType === 'cnn' || modelType === 'vision' || modelType === 'vlm' || modelType === 'detection') {
-    cfg.data.image_size = parseInt(getVal('f-image-size'));
-  }
-  if (modelType === 'llm' || modelType === 'vlm') {
-    cfg.data.max_seq_len = parseInt(getVal('f-max-seq-len'));
-  }
-
-  cfg.distributed = {
-    strategy: getVal('f-strategy'),
-    mixed_precision: getVal('f-mixed-precision') === 'true',
-  };
-
-  cfg.num_gpus = parseInt(getVal('f-gpu-count') || '1');
-
-  // Launch mode
-  cfg.launch_mode = getVal('f-launch-mode') || 'torchrun';
-  if (cfg.launch_mode === 'slurm') {
-    cfg.slurm = {
-      nodes: parseInt(getVal('f-slurm-nodes')) || 1,
-      gpus_per_node: parseInt(getVal('f-slurm-gpus-per-node')) || 4,
-      partition: getVal('f-slurm-partition') || 'gpu',
-      time: getVal('f-slurm-time') || '2:00:00',
-    };
-  }
-
-  cfg.training = {
-    epochs: parseInt(getVal('f-epochs')) || 3,
-    batch_size: parseInt(getVal('f-batch-size')) || 8,
-    lr: getVal('f-lr') || '2e-5',
-    weight_decay: parseFloat(getVal('f-weight-decay')) || 0.01,
-    grad_clip: parseFloat(getVal('f-grad-clip')) || 1.0,
-    grad_accum_steps: parseInt(getVal('f-grad-accum')) || 1,
-    warmup_steps: parseInt(getVal('f-warmup-steps')) || 100,
-    lr_schedule: getVal('f-lr-schedule') || 'cosine',
-    checkpoint_dir: getVal('f-checkpoint-dir'),
-    log_interval: 10,
-  };
-
-  // W&B logging
-  const wandbEnabled = document.getElementById('f-wandb-enabled')?.checked || false;
-  cfg.wandb = {
-    wandb_log_with_train: wandbEnabled,
-    wandb_project: getVal('f-wandb-project') || 'dist-train-project',
-    wandb_entity: getVal('f-wandb-entity') || '',
-    wandb_run_name: getVal('f-wandb-run') || '',
-  };
-
-  return cfg;
+  c.quantization.bits = Number(c.quantization.bits);
+  if (c.parallelism.dp !== 'auto') c.parallelism.dp = Number(c.parallelism.dp);
+  if (c.strategy === 'solo') c.num_gpus = 1;
+  if (!c.wandb.wandb_run_name) delete c.wandb.wandb_run_name;
+  if (!c.dataset.subset) c.dataset.subset = null;
+  return c;
 }
 
-// =========================================================================
-// Custom Transformer live parameter count
-// =========================================================================
-function updateCustomParamCount() {
-  const el = document.getElementById('custom-param-count');
-  if (!el) return;
+// ===========================================================================
+// Router
+// ===========================================================================
 
-  const nLayers   = parseInt(getVal('f-custom-n-layers'))   || 0;
-  const dim       = parseInt(getVal('f-custom-dim'))         || 0;
-  const nHeads    = parseInt(getVal('f-custom-n-heads'))     || 0;
-  const vocabSize = parseInt(getVal('f-custom-vocab-size'))  || 0;
-  const maxSeqLen = parseInt(getVal('f-custom-max-seq-len')) || 0;
+const timers = new Set();
+function every(ms, fn) { const id = setInterval(fn, ms); timers.add(id); return id; }
+function clearTimers() { timers.forEach(clearInterval); timers.clear(); }
 
-  if (!nLayers || !dim || !nHeads || !vocabSize || !maxSeqLen) {
-    el.textContent = '⚙️ Estimated parameters: fill all fields';
-    return;
-  }
+const routes = {
+  runs: renderRuns,
+  run: renderRun,
+  new: renderWizard,
+  planner: renderPlanner,
+  checkpoints: renderCheckpoints,
+  system: renderSystem,
+  api: renderApi,
+};
 
-  if (dim % nHeads !== 0) {
-    el.style.color = 'var(--danger, #e74c3c)';
-    el.textContent = `⚠️ dim (${dim}) must be divisible by n_heads (${nHeads})`;
-    return;
-  }
-  el.style.color = '';
-
-  const embedParams  = vocabSize * dim + maxSeqLen * dim;
-  const attnParams   = 4 * dim * dim;
-  const ffnParams    = dim * (4 * dim) + (4 * dim) * dim;
-  const normParams   = 2 * dim * 2 + dim * 2;
-  const blockParams  = attnParams + ffnParams + normParams;
-  const outputParams = dim * vocabSize;
-  const total        = embedParams + nLayers * blockParams + outputParams;
-
-  let label;
-  if (total >= 1e9)      label = (total / 1e9).toFixed(2) + 'B';
-  else if (total >= 1e6) label = (total / 1e6).toFixed(1) + 'M';
-  else if (total >= 1e3) label = (total / 1e3).toFixed(0) + 'K';
-  else                   label = total.toString();
-
-  el.textContent = `⚙️ Estimated parameters: ${label}`;
+function route() {
+  clearTimers();
+  const [name, arg] = (location.hash.replace(/^#\/?/, '') || 'runs').split('/');
+  const view = routes[name] ? name : 'runs';
+  $$('.rail nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.nav === (view === 'run' ? 'runs' : view)));
+  $$('.rail nav a').forEach((a) => { if (a.hasAttribute('aria-current')) a.setAttribute('aria-current', 'page'); });
+  const main = $('#main');
+  main.innerHTML = '';
+  window.scrollTo(0, 0);
+  Promise.resolve(routes[view](main, arg ? decodeURIComponent(arg) : undefined)).catch((e) => {
+    main.innerHTML = `<div class="page"><div class="notice error"><div><strong>This page could not load.</strong> ${esc(e.message)}</div></div></div>`;
+  });
 }
 
-// =========================================================================
-// FSDP Check
-// =========================================================================
-function resetFsdpCheck() {
-  const resultEl = document.getElementById('fsdp-check-result');
-  if (resultEl) resultEl.style.display = 'none';
+// ===========================================================================
+// Runs
+// ===========================================================================
+
+function statusPill(status) {
+  const label = { pending: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' }[status] || status;
+  return `<span class="pill ${esc(status)}">${esc(label)}</span>`;
 }
 
-async function checkGpuAvailability() {
-  const btn = document.getElementById('btn-gpu-check');
-  const resultEl = document.getElementById('gpu-check-result');
-  const verdictEl = document.getElementById('gpu-check-verdict');
-  const pillEl = document.getElementById('gpu-check-pill');
-  const breakdownEl = document.getElementById('gpu-check-breakdown');
+function strategyLabel(cfg) {
+  const s = String(cfg.strategy || 'solo');
+  if (s === '5d') {
+    const p = cfg.parallelism || {};
+    const parts = ['tp', 'pp', 'cp', 'ep'].filter((k) => Number(p[k]) > 1).map((k) => `${k.toUpperCase()}${p[k]}`);
+    return `5D ${parts.join('×') || 'DP'}`;
+  }
+  return s.toUpperCase();
+}
 
-  btn.disabled = true;
-  btn.textContent = '⏳ Checking...';
-  resultEl.style.display = 'none';
+function runTitle(job) {
+  if (job.name) return job.name;
+  const c = job.config || {};
+  const model = c.model_type === 'custom_transformer' ? 'custom transformer' : String(c.model_name || '').split('/').pop();
+  return `${ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'] || 'Run'} ${model}`;
+}
 
-  try {
-    const res = await fetch('/api/system/gpus');
-    if (!res.ok) throw new Error(`Server error: ${res.status}`);
-    const data = await res.json();
+async function renderRuns(main) {
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head">
+        <div><h1>Runs</h1><p>Every training job queued on this machine. Jobs start as soon as enough GPUs are free.</p></div>
+        <a class="btn primary" href="#/new">New run</a>
+      </div>
+      <div class="stats" id="run-stats" style="margin-bottom:20px"></div>
+      <div class="panel"><div id="runs-table"><div class="panel-pad"><div class="skeleton"></div></div></div></div>
+    </div>`;
 
-    if (!data.available) {
-      verdictEl.textContent = 'No GPUs available';
-      verdictEl.className = 'fsdp-verdict fsdp-unknown';
-      pillEl.textContent = data.error || 'CUDA not available';
-      breakdownEl.innerHTML = '';
-    } else {
-      verdictEl.textContent = `${data.count} GPU${data.count > 1 ? 's' : ''} detected`;
-      verdictEl.className = 'fsdp-verdict fsdp-ok';
-      pillEl.textContent = `CUDA ${data.cuda_version || '?'} · PyTorch ${data.pytorch_version || '?'}`;
+  const draw = async () => {
+    let jobs, q;
+    try { [jobs, q] = await Promise.all([api('/api/queue/jobs?limit=200'), api('/api/queue/status')]); }
+    catch (e) { $('#runs-table').innerHTML = `<div class="panel-pad notice error">${esc(e.message)}</div>`; return; }
+    jobs = jobs.jobs;
+    const count = (s) => jobs.filter((j) => j.status === s).length;
+    $('#run-stats').innerHTML = [
+      ['Running', count('running')], ['Queued', count('pending')],
+      ['GPUs free', `${q.available_gpus} / ${q.total_gpus}`], ['Completed', count('completed')], ['Failed', count('failed')],
+    ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
-      breakdownEl.innerHTML = data.gpus.map(g => {
-        const usedPct = g.total_memory_gb > 0 ? Math.round((g.used_memory_gb / g.total_memory_gb) * 100) : 0;
-        const barColor = usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#22c55e';
-        return `<div class="fsdp-breakdown-row">
-          <span class="fsdp-breakdown-label">🖥️ GPU ${g.index} — ${g.name}</span>
-          <span class="fsdp-breakdown-value">${g.free_memory_gb} / ${g.total_memory_gb} GB free</span>
-        </div>
-        <div class="gpu-check-bar-row">
-          <div class="gpu-check-bar-bg">
-            <div class="gpu-check-bar-fill" style="width:${usedPct}%; background:${barColor};"></div>
-          </div>
-          <span class="gpu-check-bar-label">${usedPct}% used · SM ${g.compute_capability}</span>
+    if (!jobs.length) {
+      $('#runs-table').innerHTML = `
+        <div class="empty">
+          <h2>No runs yet</h2>
+          <p>Pick a goal (pretraining, SFT or preference alignment), a model and a dataset. The planner tells you whether it fits on one GPU or needs FSDP or 5D parallelism.</p>
+          <a class="btn primary" href="#/new">Start a run</a>
         </div>`;
-      }).join('');
-    }
-
-    resultEl.style.display = 'block';
-  } catch (e) {
-    verdictEl.textContent = 'Error';
-    verdictEl.className = 'fsdp-verdict fsdp-unknown';
-    pillEl.textContent = e.message;
-    breakdownEl.innerHTML = '';
-    resultEl.style.display = 'block';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🖥️ Check available GPUs';
-  }
-}
-
-async function checkFsdpNeeded() {
-  const btn = document.getElementById('btn-fsdp-check');
-  const resultEl = document.getElementById('fsdp-check-result');
-  const verdictEl = document.getElementById('fsdp-verdict');
-  const reasonEl = document.getElementById('fsdp-reason');
-  const breakdownEl = document.getElementById('fsdp-breakdown');
-
-  btn.disabled = true;
-  btn.textContent = '⏳ Checking...';
-  resultEl.style.display = 'none';
-
-  try {
-    const cfg = buildConfigFromForm();
-    const modelType = getVal('f-model-type');
-    const usesSeqLen = modelType === 'llm' || modelType === 'vlm' || modelType === 'embedding';
-
-    // Helper to show an early-exit warning in the result panel
-    const showWarning = (msg) => {
-      verdictEl.textContent = 'Missing Input';
-      verdictEl.className = 'fsdp-verdict fsdp-unknown';
-      const vramPillEl = document.getElementById('fsdp-vram-pill');
-      if (vramPillEl) vramPillEl.textContent = '';
-      reasonEl.textContent = msg;
-      breakdownEl.innerHTML = '';
-      resultEl.style.display = 'block';
-    };
-
-    // Must have a model type selected
-    if (!modelType) {
-      showWarning('Please select a Model Type before running this check.');
       return;
     }
-
-    // Must have a model name for types where the estimate depends on it
-    const modelName = (getVal('f-model-name') || '').trim();
-    const requiresModelName = modelType === 'llm' || modelType === 'vlm' || modelType === 'vision' || modelType === 'embedding';
-    if (requiresModelName && !modelName) {
-      showWarning('Please enter a Model Name before running this check — the VRAM estimate is based on the number of parameters inferred from the model name.');
-      return;
-    }
-
-    // Read Max Sequence Length from the form field and inject into training config
-    // so the backend FSDP estimator uses the user-specified value.
-    const rawSeqLen = getVal('f-max-seq-len');
-    const seqLen = parseInt(rawSeqLen);
-
-    if (usesSeqLen) {
-      if (!rawSeqLen || isNaN(seqLen) || seqLen <= 0) {
-        showWarning('Please specify Max Sequence Length before running this check — it significantly affects VRAM estimation for sequence-based models.');
-        return;
-      }
-      // Ensure the value reaches the backend (which reads from training.max_length)
-      if (!cfg.training) cfg.training = {};
-      cfg.training.max_length = seqLen;
-    }
-
-    const res = await fetch('/api/fsdp-check', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg }),
+    $('#runs-table').innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Run</th><th>Status</th><th>Goal</th><th>Strategy</th><th class="right">GPUs</th><th>Progress</th><th>Created</th></tr></thead>
+        <tbody>${jobs.map((j) => {
+          const c = j.config || {};
+          const p = j.progress;
+          const frac = j.status === 'completed' ? 1 : (p ? p.fraction : 0);
+          const progress = j.status === 'running' || j.status === 'completed'
+            ? `<div class="bar" title="${Math.round(frac * 100)}%"><span style="width:${(frac * 100).toFixed(1)}%"></span></div>
+               <div class="run-sub num">${p ? `step ${p.global_step}/${p.total_steps}, loss ${p.loss.toFixed(3)}` : (j.status === 'completed' ? 'done' : 'starting')}</div>`
+            : '<span class="faint">–</span>';
+          return `<tr class="clickable" data-id="${esc(j.id)}" tabindex="0">
+            <td><div class="run-name">${esc(runTitle(j))}</div><div class="run-sub">${esc(c.model_type === 'custom_transformer' ? 'custom_transformer' : c.model_name || '')}</div></td>
+            <td>${statusPill(j.status)}</td>
+            <td>${esc(ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'] || '')}${c.peft && c.peft.enabled ? ` <span class="faint">${c.quantization && c.quantization.enabled ? 'QLoRA' : 'LoRA'}</span>` : ''}</td>
+            <td>${esc(strategyLabel(c))}</td>
+            <td class="right num">${j.gpu_count}</td>
+            <td style="min-width:160px">${progress}</td>
+            <td class="run-sub">${esc(fmt.ago(j.created_at))}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`;
+    $$('#runs-table tr[data-id]').forEach((tr) => {
+      const go = () => { location.hash = `#/run/${tr.dataset.id}`; };
+      tr.onclick = go;
+      tr.onkeydown = (e) => { if (e.key === 'Enter') go(); };
     });
-
-    if (!res.ok) throw new Error(`Server error: ${res.status}`);
-    const data = await res.json();
-
-    // Set verdict badge style
-    verdictEl.textContent = data.verdict;
-    verdictEl.className = 'fsdp-verdict';
-    if (data.fsdp_needed === true && data.verdict && data.verdict.includes('more GPUs')) {
-      verdictEl.classList.add('fsdp-warn');
-    } else if (data.fsdp_needed === true) {
-      verdictEl.classList.add('fsdp-needed');
-    } else if (data.fsdp_needed === false) {
-      verdictEl.classList.add('fsdp-ok');
-    } else {
-      verdictEl.classList.add('fsdp-unknown');
-    }
-
-    const vramPillEl = document.getElementById('fsdp-vram-pill');
-    if (vramPillEl) {
-      vramPillEl.textContent = data.gpu_memory_gb
-        ? `${data.vram_needed_gb} GB needed · ${data.gpu_memory_gb} GB available`
-        : `${data.vram_needed_gb} GB estimated`;
-    }
-
-    reasonEl.textContent = data.reason;
-
-    // Build breakdown table
-    const b = data.vram_breakdown || {};
-    const infoRows = [
-      { label: 'Model', value: data.model_params_b ? `~${data.model_params_b}B params` : '—', icon: '🧠' },
-      { label: 'GPU', value: data.gpu_memory_gb ? `${data.gpu_name} · ${data.gpu_memory_gb} GB` : 'Not detected', icon: '🖥️' },
-    ];
-    const memRows = [
-      { label: 'Weights', value: `${b.weights_gb} GB`, icon: '⚖️' },
-      { label: 'Gradients', value: `${b.gradients_gb} GB`, icon: '📐' },
-      { label: 'Optimizer', value: `${b.optimizer_gb} GB`, icon: '🔧' },
-      { label: 'Activations', value: `${b.activations_gb} GB`, icon: '⚡' },
-    ];
-    const totalRows = [
-      { label: 'Total VRAM', value: `${data.vram_needed_gb} GB`, icon: '📊' },
-    ];
-    if (data.fsdp_needed) {
-      totalRows.push({ label: `FSDP per-GPU (${data.gpu_count || '?'} GPUs)`, value: `~${data.fsdp_per_gpu_gb} GB`, icon: '🔀' });
-    }
-    const renderRows = (rows, cls = '') =>
-      rows.map(r => `<tr class="${cls}"><td class="fsdp-table-label">${r.icon} ${r.label}</td><td class="fsdp-table-value">${r.value}</td></tr>`).join('');
-    breakdownEl.innerHTML = `
-      <table class="fsdp-table">
-        <thead><tr><th>Component</th><th>Value</th></tr></thead>
-        <tbody>
-          ${renderRows(infoRows)}
-          <tr class="fsdp-table-section-divider"><td colspan="2"></td></tr>
-          ${renderRows(memRows)}
-          ${renderRows(totalRows, 'fsdp-table-total')}
-        </tbody>
-      </table>`;
-
-    resultEl.style.display = 'block';
-  } catch (e) {
-    verdictEl.textContent = 'Error';
-    verdictEl.className = 'fsdp-verdict fsdp-unknown';
-    const vramPillElErr = document.getElementById('fsdp-vram-pill');
-    if (vramPillElErr) vramPillElErr.textContent = '';
-    reasonEl.textContent = e.message;
-    breakdownEl.innerHTML = '';
-    resultEl.style.display = 'block';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🔍 Distributed Training needed?';
-  }
-}
-
-// =========================================================================
-// Validation
-// =========================================================================
-async function validateConfig() {
-  const cfg = buildConfigFromForm();
-
-  try {
-    const res = await fetch('/api/config/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg }),
-    });
-    const data = await res.json();
-
-    if (data.valid) {
-      showMessage('Validation Successful', 'Configuration is valid!', 'success');
-    } else {
-      showMessage('Validation Error', data.error || 'Unknown error', 'error');
-    }
-  } catch (e) {
-    showMessage('Validation Failed', e.message, 'error');
-  }
-}
-
-// =========================================================================
-// Environment Variables Page
-// =========================================================================
-function getFormStateValue(fieldId) {
-  // First try to get from DOM (if on config page)
-  const el = document.getElementById(fieldId);
-  if (el) return el.value;
-
-  // Otherwise get from localStorage (if on env page)
-  const data = localStorage.getItem('omni_form_state');
-  if (!data) return '';
-  try {
-    const formData = JSON.parse(data);
-    return formData[fieldId] || '';
-  } catch (e) {
-    return '';
-  }
-}
-
-function getRequiredApiKeys() {
-  const keys = [];
-  const dataSource = getFormStateValue('f-data-source');
-
-  if (dataSource === 'kaggle') {
-    keys.push({
-      name: 'KAGGLE_USERNAME',
-      description: 'Kaggle username',
-      url: 'https://www.kaggle.com/settings'
-    });
-    keys.push({
-      name: 'KAGGLE_KEY',
-      description: 'Kaggle API key',
-      url: 'https://www.kaggle.com/settings'
-    });
-  }
-  return keys;
-}
-
-function generateEnvTemplate(keys) {
-  if (keys.length === 0) return '';
-
-  let template = '# OMNI-Train Environment Variables\n';
-  template += '# Copy this to a .env file in your project root\n\n';
-
-  const groupedKeys = {};
-  keys.forEach(key => {
-    const group = key.url || 'other';
-    if (!groupedKeys[group]) groupedKeys[group] = [];
-    groupedKeys[group].push(key);
-  });
-
-  Object.entries(groupedKeys).forEach(([url, groupKeys]) => {
-    groupKeys.forEach((key, idx) => {
-      template += `# ${key.description}\n`;
-      if (idx === 0 && url !== 'other') {
-        template += `# Get yours at: ${url}\n`;
-      }
-      template += `${key.name}=your_${key.name.toLowerCase()}_here\n\n`;
-    });
-  });
-
-  return template.trim();
-}
-
-function showEnvPage() {
-  loadFormState();
-  const cfg = buildConfigFromForm();
-  localStorage.setItem('yaml_from_form', 'true');
-  localStorage.setItem('omni_yaml_config', JSON.stringify(cfg));
-  saveFormState();
-  navigateTo('yaml.html');
-}
-
-function proceedToEnvPage() {
-  loadFormState();
-  const cfg = buildConfigFromForm();
-  localStorage.setItem('yaml_from_form', 'true');
-  localStorage.setItem('omni_yaml_config', JSON.stringify(cfg));
-  saveFormState();
-  navigateTo('yaml.html');
-}
-
-
-async function initEnvPage() {
-  loadFormState();
-  const keys = getRequiredApiKeys();
-  const container = document.getElementById('env-keys-container');
-  if (!container) return;
-
-  // Get the parent form-section to update title and description
-  const formSection = container.closest('.form-section');
-  const titleEl = formSection ? formSection.querySelector('h3') : null;
-  const descEl = formSection ? formSection.querySelector('.env-page-description') : null;
-  const privacyEl = formSection ? formSection.querySelector('.env-privacy-notice') : null;
-
-  if (keys.length === 0) {
-    // Update title and hide unnecessary elements for "no keys needed" state
-    if (titleEl) titleEl.innerHTML = '<span class="icon" style="background: var(--green-dim); color: var(--green);">✅</span> No API Keys Required';
-    if (descEl) descEl.textContent = 'Your configuration doesn\'t require any external API keys. You can proceed directly to the YAML editor.';
-    if (privacyEl) privacyEl.style.display = 'none';
-
-    container.innerHTML = `
-      <div class="env-no-keys">
-        <p>You're using local files or built-in datasets that don't require authentication.</p>
-      </div>
-    `;
-    return;
-  }
-
-  // Try to load keys from the project's .env file
-  let dotenvKeys = {};
-  try {
-    const keyNames = keys.map(k => k.name).join(',');
-    const resp = await fetch(`/api/env?keys=${encodeURIComponent(keyNames)}`);
-    if (resp.ok) {
-      const data = await resp.json();
-      dotenvKeys = data.keys || {};
-    }
-  } catch (e) {
-    // .env fetch failed — fall through to manual entry
-  }
-
-  // If all required keys are present in .env, store and auto-proceed
-  const allFound = keys.every(k => dotenvKeys[k.name]);
-  if (allFound) {
-    localStorage.setItem('env_api_keys', JSON.stringify(dotenvKeys));
-    navigateTo('yaml.html');
-    return;
-  }
-
-  // Merge .env values over any previously saved keys; show inputs for missing ones
-  const savedKeys = JSON.parse(localStorage.getItem('env_api_keys') || '{}');
-  const merged = Object.assign({}, savedKeys, Object.fromEntries(
-    Object.entries(dotenvKeys).filter(([, v]) => v)
-  ));
-
-  const anyFromDotenv = keys.some(k => dotenvKeys[k.name]);
-  if (anyFromDotenv && descEl) {
-    descEl.textContent = 'Some keys were loaded from your .env file. Please fill in any missing ones.';
-  }
-
-  container.innerHTML = keys.map(key => `
-    <div class="env-key-group">
-      <label for="env-${key.name}">${key.name}</label>
-      <div class="key-description">${key.description}</div>
-      ${key.url ? `<a href="${key.url}" target="_blank" class="key-link">Get your key here →</a>` : ''}
-      <input
-        type="password"
-        id="env-${key.name}"
-        name="${key.name}"
-        placeholder="Enter your ${key.name}..."
-        value="${merged[key.name] || ''}"
-        autocomplete="off"
-      >
-    </div>
-  `).join('');
-}
-
-function getEnteredApiKeys() {
-  const keys = getRequiredApiKeys();
-  const enteredKeys = {};
-
-  keys.forEach(key => {
-    const input = document.getElementById(`env-${key.name}`);
-    if (input && input.value.trim()) {
-      enteredKeys[key.name] = input.value.trim();
-    }
-  });
-
-  return enteredKeys;
-}
-
-function proceedToYaml() {
-  const keys = getRequiredApiKeys();
-  const enteredKeys = getEnteredApiKeys();
-
-  // Check if all required keys are provided
-  const missingKeys = keys.filter(key => !enteredKeys[key.name]);
-
-  if (missingKeys.length > 0) {
-    const missing = missingKeys.map(k => k.name).join(', ');
-    showMessage('Missing API Keys', `Please enter the following keys: ${missing}`, 'warning');
-    return;
-  }
-
-  // Store keys temporarily in localStorage (will be used to generate .env content)
-  localStorage.setItem('env_api_keys', JSON.stringify(enteredKeys));
-
-  navigateTo('yaml.html');
-}
-
-// =========================================================================
-// YAML Editor
-// =========================================================================
-function generateYamlTemplate(config = null) {
-  if (config) {
-    return configToYaml(config);
-  }
-
-  return `# ===================== MODEL =====================
-model_name: facebook/opt-350m  # Model name (e.g., opt-125m, opt-350m, llama-3-8b, gpt2 variants)
-
-# ===================== DATASET =====================
-dataset:
-  name: wikitext              # Dataset name (wikitext, wikitext-103, PennTreebank, c4, squad)
-  subset: wikitext-2-raw-v1   # Dataset subset (e.g., wikitext-2-raw-v1, wikitext-103-raw-v1)
-  split: train[:1%]           # Data split (train, validation, or slice like train[:1%])
-
-# ===================== TRAINING =====================
-training:
-  epochs: 4                     # Number of training epochs
-  batch_size: 32                # Batch size per step
-  max_length: 128               # Maximum sequence length
-  learning_rate: 1e-5           # Optimizer learning rate
-  warmup_steps: 100             # LR warmup steps before reaching target learning rate
-  weight_decay: 0.01            # AdamW weight decay coefficient
-  grad_clip: 1.0                # Max gradient norm for clipping (0 to disable)
-  gradient_checkpointing: true  # Enable checkpointing to save memory (adds compute cost)
-
-# ===================== SYSTEM / DISTRIBUTION =====================
-strategy: fsdp        # Training mode: solo (1 GPU), ddp (multi-GPU), fsdp (sharded)
-num_gpus: 1           # Number of GPUs (used with torchrun for ddp/fsdp)
-checkpoint_dir: checkpoints  # Directory to save checkpoints
-save: true            # Enable checkpoint saving
-
-# ===================== FSDP / DISTRIBUTED SETTINGS =====================
-dist_parameters:
-  mixed_precision: true        # Enable mixed precision training
-  param_dtype: bfloat16        # Parameter dtype (used mainly in FSDP)
-  reduce_dtype: float32        # Gradient reduction dtype (FSDP)
-  output_dtype: bfloat16       # Output dtype (FSDP)
-  cast_forward_inputs: false   # Cast inputs to module dtype before forward pass
-  dcp_api: true                # Use Distributed Checkpoint API (FSDP)
-  dtensor_api: false           # Use DTensor API (experimental)
-
-# ===================== CHECKPOINT LOAD / RESUME =====================
-save_load:
-  resume: false                # Resume training from checkpoint
-  resume_path: ""              # Path to checkpoint (if resume=true)
-  load_model_from_hf: true     # Load pretrained model from Hugging Face
-
-# ===================== PREFETCH (FSDP PERFORMANCE) =====================
-prefetch:
-  explicit: true    # Enable explicit prefetching (FSDP only)
-  forward: 2        # Number of forward prefetch steps
-  backward: 2       # Number of backward prefetch steps
-
-# ===================== PEFT (LoRA / QLoRA) =====================
-peft:
-  enabled: false              # Enable parameter-efficient fine-tuning
-  type: lora                  # Adapter type: lora or qlora (qlora implies quantization)
-  r: 16                       # LoRA rank (typical: 4, 8, 16)
-  alpha: 32                   # LoRA scaling factor (usually 2–4× r)
-  dropout: 0.05               # LoRA dropout rate
-  target_modules: all-linear  # Target modules ("all-linear" or list of module names)
-  bias: none                  # Bias mode: none, all, or lora_only
-
-# ===================== QUANTIZATION (QLoRA ONLY) =====================
-quantization:
-  enabled: false              # Enable quantization (requires PEFT; not supported with FSDP)
-  bits: 4                     # Quantization bits (4 or 8)
-  quant_type: nf4             # 4-bit type: nf4 or fp4
-  compute_dtype: bfloat16     # Compute dtype for quantized ops
-  double_quant: true          # Enable nested (double) quantization
-
-# ===================== LOGGING (W&B) =====================
-wandb:
-  wandb_log_with_train: false        # Enable Weights & Biases logging
-  wandb_entity: "dist-train-project"  # W&B entity (user or team)
-  wandb_project: "dist-train-project" # W&B project name
-`;
-}
-
-function configToYaml(cfg) {
-  const modelName = cfg.model?.name || 'facebook/opt-350m';
-  const dataSource = cfg.data?._source || 'huggingface';
-  const dataPath = cfg.data?._path || '';
-  const dataUrl = cfg.data?._url || '';
-  const dataName = dataSource === 'local' ? '' : (cfg.data?.name || 'wikitext');
-  const dataSubset = cfg.data?.subset || 'wikitext-2-raw-v1';
-  const dataSplit = cfg.data?.split || cfg.data?.train_split || 'train[:1%]';
-
-  const epochs = cfg.training?.epochs ?? 4;
-  const batchSize = cfg.training?.batch_size ?? 32;
-  // For custom_transformer, the toy model has no tokenizer — its positional embedding
-  // table caps seq_len at arch.max_seq_len, so the YAML's max_length must match it.
-  const customArch = (cfg.model?.type || '').toLowerCase() === 'custom_transformer' ? (cfg.model?.arch || {}) : null;
-  const maxLength = customArch?.max_seq_len ?? cfg.training?.max_length ?? cfg.data?.max_seq_len ?? 128;
-  const learningRate = cfg.training?.learning_rate ?? cfg.training?.lr ?? '1e-5';
-  const warmupSteps = cfg.training?.warmup_steps ?? 100;
-  const weightDecay = cfg.training?.weight_decay ?? 0.01;
-  const gradClip = cfg.training?.grad_clip ?? 1.0;
-  const gradientCheckpointing = cfg.training?.gradient_checkpointing ?? cfg.distributed?.activation_checkpointing ?? true;
-
-  let strategy = cfg.distributed?.strategy || cfg.strategy || 'fsdp';
-  if (strategy === 'none') strategy = 'solo';
-  const numGpus = cfg.num_gpus ?? 1;
-
-  const checkpointDir = cfg.training?.checkpoint_dir || cfg.checkpoint_dir || 'checkpoints';
-  const save = cfg.save ?? true;
-
-  const mixedPrecision = cfg.distributed?.mixed_precision ?? cfg.dist_parameters?.mixed_precision ?? true;
-  const paramDtype = cfg.dist_parameters?.param_dtype || 'bfloat16';
-  const reduceDtype = cfg.dist_parameters?.reduce_dtype || 'float32';
-  const outputDtype = cfg.dist_parameters?.output_dtype || 'bfloat16';
-  const castForwardInputs = cfg.dist_parameters?.cast_forward_inputs ?? false;
-  const dcpApi = cfg.dist_parameters?.dcp_api ?? true;
-  const dtensorApi = cfg.dist_parameters?.dtensor_api ?? false;
-
-  const resume = cfg.save_load?.resume ?? false;
-  const resumePath = cfg.save_load?.resume_path ?? '';
-  const loadModelFromHf = cfg.save_load?.load_model_from_hf ?? true;
-
-  const explicit = cfg.prefetch?.explicit ?? true;
-  const forward = cfg.prefetch?.forward ?? 2;
-  const backward = cfg.prefetch?.backward ?? 2;
-
-  const finetuneMode = (cfg.model?.finetune_mode || '').toLowerCase();
-  const peftEnabled = cfg.peft?.enabled ?? (finetuneMode === 'lora' || finetuneMode === 'qlora') ?? true;
-  const peftType = cfg.peft?.type || (finetuneMode === 'qlora' ? 'qlora' : 'lora') || 'lora';
-  const peftR = cfg.peft?.r ?? cfg.model?.lora_r ?? 16;
-  const peftAlpha = cfg.peft?.alpha ?? cfg.model?.lora_alpha ?? 32;
-  const peftDropout = cfg.peft?.dropout ?? cfg.model?.lora_dropout ?? 0.05;
-  const peftTargetModules = cfg.peft?.target_modules || 'all-linear';
-  const peftBias = cfg.peft?.bias || 'none';
-
-  const quantEnabled = cfg.quantization?.enabled ?? cfg.model?.quantize ?? (finetuneMode === 'qlora') ?? true;
-  const quantBits = cfg.quantization?.bits ?? cfg.model?.quant_bits ?? 4;
-  const quantType = cfg.quantization?.quant_type || 'nf4';
-  const computeDtype = cfg.quantization?.compute_dtype || 'bfloat16';
-  const doubleQuant = cfg.quantization?.double_quant ?? true;
-
-  const wandbLog = cfg.wandb?.wandb_log_with_train ?? false;
-  const wandbEntity = cfg.wandb?.wandb_entity || 'dist-train-project';
-  const wandbProject = cfg.wandb?.wandb_project || 'dist-train-project';
-
-  const datasetNameLine = dataSource === 'local'
-    ? `  path: ${dataPath}  # local image folder`
-    : dataSource === 'url'
-    ? `  name: ${dataUrl}`
-    : dataSource === 'torchvision'
-    ? `  name: ${dataName}  # torchvision built-in dataset`
-    : `  name: ${dataName} # other datasets: wikitext-103, PennTreebank, c4, squad`;
-  const datasetSubsetLine = dataSource === 'local' || dataSource === 'torchvision' || dataSource === 'url'
-    ? ''
-    : `  subset: ${dataSubset} # other subsets: wikitext-103-raw-v1, PennTreebank (no subset)\n`;
-
-  // Map UI model type to backend model_type (mirrors config_adapter.py _ui_to_model_type)
-  const uiModelType = (cfg.model?.type || 'llm').toLowerCase();
-  const _uiToMiniType = { llm: 'llm', vlm: 'vlm', vision: 'vision', embedding: 'encoder',
-    detection: 'yolo', cnn: 'llm', custom_transformer: 'custom_transformer' };
-  const miniModelType = _uiToMiniType[uiModelType] || 'llm';
-
-  // Build model-type-specific extra lines for the YAML
-  let modelTypeExtras = '';
-  if (uiModelType === 'cnn') {
-    const numClasses = cfg.model?.num_classes || 10;
-    const imgSize = cfg.data?.image_size || 224;
-    modelTypeExtras = `model_type: vision  # cnn model loaded via torchvision\nnum_classes: ${numClasses}\nimage_size: ${imgSize}\n`;
-  } else if (uiModelType === 'vision') {
-    const imgSize = cfg.data?.image_size || 224;
-    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
-  } else if (uiModelType === 'vlm') {
-    const imgSize = cfg.data?.image_size || 448;
-    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
-  } else if (uiModelType === 'detection') {
-    const imgSize = cfg.data?.image_size || 640;
-    modelTypeExtras = `model_type: ${miniModelType}\nimage_size: ${imgSize}\n`;
-  } else if (uiModelType !== 'llm') {
-    modelTypeExtras = `model_type: ${miniModelType}\n`;
-  }
-
-  const modelNameLine = customArch
-    ? ''
-    : `model_name: ${modelName} # other models: facebook/opt-125m, facebook/opt-350m,  llama-3-8b, gpt2, gpt2-medium, gpt2-large, gpt2-xl\n`;
-  return `${modelNameLine}${modelTypeExtras}
-dataset:
-${datasetNameLine}
-${datasetSubsetLine}  split: ${dataSplit}  ##
-
-training:
-  epochs: ${epochs}                     ## Number of epochs to train
-  batch_size: ${batchSize}                ## Batch size for training 
-  max_length: ${maxLength}               ## Maximum sequence length for training
-  learning_rate: ${learningRate}           ## Learning rate for training
-  warmup_steps: ${warmupSteps}               ## LR warmup steps before target LR is reached
-  weight_decay: ${weightDecay}               ## AdamW weight decay
-  grad_clip: ${gradClip}               ## max gradient norm (set 0 to disable clipping)
-  gradient_checkpointing: ${gradientCheckpointing}  ## whether to use gradient checkpointing
-
-strategy: ${strategy} ## choose from {ddp, fsdp, solo}
-num_gpus: ${numGpus} ## number of GPUs to launch with torchrun for ddp/fsdp
-checkpoint_dir: ${checkpointDir} ## directory to save checkpoints
-save: ${save}  ## whether to save checkpoints
-
-dist_parameters:
-  mixed_precision: ${mixedPrecision}       ## Use Mixed Precision? 
-  param_dtype: ${paramDtype}       ## what dtype to use for parameters?  
-  reduce_dtype: ${reduceDtype}       ## what dtype to use for reduction?  
-  output_dtype: ${outputDtype}      ## what dtype to use for output? 
-  cast_forward_inputs: ${castForwardInputs}  ## whether to cast forward inputs to the dtype of the wrapped module
-  dcp_api: ${dcpApi}             ## whether to use DCP API
-  dtensor_api: ${dtensorApi}        ## whether to use DTensor API
-
-save_load:
-  resume: ${resume}  ## whether to resume from a checkpoint
-  resume_path: "${resumePath}"  ## path to checkpoint to resume from
-  load_model_from_hf: ${loadModelFromHf}  ## whether to load  from HFace 
-
-prefetch:
-  explicit: ${explicit}  ## explicit prefetching?
-  forward: ${forward}  ## number of forward passes to prefetch
-  backward: ${backward}   ## number of backward passes to prefetch
-
-peft: ## Parameter Efficient Fine Tuning
-  enabled: ${peftEnabled}  ## whether to apply PEFT 
-  type: ${peftType}  ## LoRA or QLoRA
-  r: ${peftR}  ## rank for LoRA, often set to a small value like 4, 8, 16, etc.
-  alpha: ${peftAlpha} ## scaling factor for LoRA, often set to r*2 or r*4
-  dropout: ${peftDropout} ## dropout rate for LoRA layers
-  target_modules: ${peftTargetModules} ## "all-linear" or list/comma-separated module names
-  bias: ${peftBias} ## whether to include bias in LoRA, options: "none", "all", "lora_only"
-
-quantization:
-  enabled: ${quantEnabled}  ## whether to apply quantization
-  bits: ${quantBits}  ## number of bits for quantization, typically 4 or 8
-  quant_type: ${quantType} ## nf4 or fp4 for 4-bit
-  compute_dtype: ${computeDtype} ## dtype for computations with quantized models
-  double_quant: ${doubleQuant} ## whether to apply double quantization (for 4-bit)
-  
-wandb:
-  wandb_log_with_train: ${wandbLog}  ## whether to log training metrics to Weights & Biases
-  wandb_entity: "${wandbEntity}"   ## your W&B entity (username or team)
-  wandb_project: "${wandbProject}"  ## your W&B project name
-${customArch ? `
-custom_transformer_args:
-  n_layers: ${customArch.n_layers ?? 6}
-  vocab_size: ${customArch.vocab_size ?? 8192}
-  max_seq_len: ${customArch.max_seq_len ?? 512}
-  dim: ${customArch.dim ?? 512}
-  n_heads: ${customArch.n_heads ?? 8}
-  dropout_p: ${customArch.dropout_p ?? 0.1}
-` : ''}`;
-}
-
-function initYamlPage() {
-  const fromForm = localStorage.getItem('yaml_from_form') === 'true';
-  const editor = document.getElementById('yaml-editor');
-  if (!editor) return;
-
-  setupYamlCodeEditor();
-
-  if (fromForm) {
-    let yamlContent = null;
-    const savedConfig = localStorage.getItem('omni_yaml_config');
-    if (savedConfig) {
-      try {
-        const cfg = JSON.parse(savedConfig);
-        yamlContent = configToYaml(cfg);
-      } catch (e) {
-        console.error('Failed to parse saved config:', e);
-      }
-    }
-    setYamlEditorValue(yamlContent || generateYamlTemplate());
-    yamlFromForm = true;
-  } else {
-    setYamlEditorValue(generateYamlTemplate());
-    yamlFromForm = false;
-  }
-
-  // Keyboard shortcut: Ctrl/Cmd+Enter → Start Training
-  document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      const yamlPage = document.querySelector('.yaml-page');
-      if (yamlPage) startTrainingFromYaml();
-    }
-  });
-}
-
-function resetYamlTemplate() {
-  const editor = document.getElementById('yaml-editor');
-  if (!editor) return;
-  setYamlEditorValue(generateYamlTemplate());
-}
-
-function parseYaml(yamlStr) {
-  // Use js-yaml when available for accurate, spec-compliant parsing.
-  if (typeof window.jsyaml !== 'undefined') {
-    return window.jsyaml.load(yamlStr) || {};
-  }
-  // Fallback: hand-rolled parser (no js-yaml CDN loaded).
-  const lines = yamlStr.split('\n');
-  const result = {};
-  const stack = [{ obj: result, indent: -1 }];
-
-  for (let line of lines) {
-    if (line.trim().startsWith('#') || line.trim() === '') continue;
-
-    // Remove inline comments like "## note" and "# note" while preserving hashes inside quoted values.
-    line = line.replace(/\s+#.*$/, '');
-    if (line.trim() === '') continue;
-
-    const match = line.match(/^(\s*)([^:]+):\s*(.*)$/);
-    if (!match) {
-      const arrayMatch = line.match(/^(\s*)-\s*(.+)$/);
-      if (arrayMatch) {
-        const indent = arrayMatch[1].length;
-        const value = arrayMatch[2].trim();
-        while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-          stack.pop();
-        }
-        const parent = stack[stack.length - 1];
-        if (Array.isArray(parent.currentArray)) {
-          parent.currentArray.push(value);
-        }
-      }
-      continue;
-    }
-
-    const indent = match[1].length;
-    const key = match[2].trim();
-    let value = match[3].trim();
-
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-
-    const parent = stack[stack.length - 1].obj;
-
-    if (value === '') {
-      parent[key] = {};
-      stack.push({ obj: parent[key], indent: indent });
-    } else {
-      if (value === 'true') value = true;
-      else if (value === 'false') value = false;
-      else if (value === 'null') value = null;
-      else if (!isNaN(value) && value !== '') value = parseFloat(value);
-
-      parent[key] = value;
-
-      const nextLineIdx = lines.indexOf(line) + 1;
-      if (nextLineIdx < lines.length) {
-        const nextLine = lines[nextLineIdx];
-        if (nextLine.trim().startsWith('-')) {
-          parent[key] = [];
-          stack.push({ obj: parent, indent: indent, currentArray: parent[key] });
-        }
-      }
-    }
-  }
-
-  return result;
+  };
+  await draw();
+  every(3000, draw);
 }
 
 // ---------------------------------------------------------------------------
-// Validation helpers
+// Run detail
 // ---------------------------------------------------------------------------
 
-/**
- * Format a raw server-side validation error into a clean, readable message.
- * Strips Python exception class prefixes and trims overly long strings.
- */
-function formatValidationError(raw) {
-  let msg = String(raw).replace(/^(ValueError|TypeError|KeyError|AttributeError|RuntimeError|Exception):\s*/i, '');
-  // Collapse any nested "caused by" chain to just the outermost message.
-  const firstLine = msg.split('\n')[0].trim();
-  msg = firstLine || msg;
-  if (msg.length > 300) msg = msg.slice(0, 297) + '…';
-  return msg;
+function classifyLine(line) {
+  if (/Traceback|Error|❌|FAILED|exited with code [1-9]/.test(line)) return 'e';
+  if (/Warning|WARN/i.test(line)) return 'w';
+  if (/✅|complete|saved/i.test(line)) return 's';
+  if (/Epoch \d+\/\d+ \[/.test(line)) return 'p';
+  return '';
 }
 
-/**
- * Show a rich, field-by-field summary of a successfully validated config.
- * Safely builds the content with textContent (no innerHTML).
- */
-function showValidationSuccess(cfg) {
-  // Support both UI-format (model/distributed/data) and mini-project format.
-  const model    = (typeof cfg.model === 'object' && cfg.model)    || {};
-  const dist     = (typeof cfg.distributed === 'object' && cfg.distributed) || {};
-  const training = (typeof cfg.training === 'object' && cfg.training) || {};
-  const data     = (typeof cfg.data === 'object' && cfg.data)
-                || (typeof cfg.dataset === 'object' && cfg.dataset) || {};
-
-  const modelName  = model.name        || cfg.model_name          || '—';
-  const strategy   = (dist.strategy    || cfg.strategy            || 'solo').toUpperCase();
-  const gpus       = dist.gpu_count    || cfg.num_gpus            || 1;
-  const epochs     = training.epochs                              || '—';
-  const batchSize  = training.batch_size                          || '—';
-  const lr         = training.learning_rate || training.lr        || '—';
-  const dataName   = data.name         || cfg.dataset?.name       || '—';
-  const ftMode     = model.finetune_mode
-                  || (cfg.peft?.enabled ? (cfg.peft.type || 'lora') : 'full');
-
-  const pad = (s, n) => String(s).padEnd(n);
-  const lines = [
-    `${pad('Model',     12)}${modelName}`,
-    `${pad('Strategy',  12)}${strategy}  ·  ${gpus} GPU${gpus > 1 ? 's' : ''}`,
-    `${pad('Dataset',   12)}${dataName}`,
-    `${pad('Training',  12)}${epochs} epoch(s)  ·  batch ${batchSize}  ·  lr ${lr}`,
-    `${pad('Fine-tune', 12)}${ftMode}`,
-  ];
-
-  const iconEl  = document.getElementById('message-modal-icon');
-  const titleEl = document.getElementById('message-modal-title');
-  const textEl  = document.getElementById('message-modal-text');
-  const modal   = document.getElementById('message-modal');
-
-  if (iconEl)  iconEl.textContent  = 'check';
-  if (titleEl) titleEl.textContent = 'Validation Passed';
-  if (textEl) {
-    textEl.textContent = lines.join('\n');
-    textEl.classList.add('validation-summary');
-  }
-  if (modal) modal.classList.add('active');
-}
-
-async function validateYaml() {
-  const yamlStr = getYamlEditorValue().trim();
-  if (!yamlStr) {
-    showMessage('Empty Configuration', 'The editor is empty. Please enter a YAML configuration.', 'warning');
-    return;
-  }
-
-  // Button loading state
-  const btn = document.querySelector('.yaml-action-bar .btn-secondary');
-  const origLabel = btn ? btn.textContent : null;
-  if (btn) { btn.disabled = true; btn.textContent = 'Validating…'; }
-
-  // ── Step 1: client-side YAML syntax check ───────────────────────────────
-  let cfg;
-  try {
-    cfg = parseYaml(yamlStr);
-  } catch (e) {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-    // js-yaml provides e.mark with 0-based line/column
-    const loc = (e.mark != null)
-      ? ` at line ${e.mark.line + 1}, column ${e.mark.column + 1}`
-      : '';
-    const reason = e.reason || e.message || 'Syntax error';
-    showMessage('YAML Syntax Error', `${reason}${loc}`, 'error');
-    return;
-  }
-
-  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-    showMessage('Invalid YAML', 'The configuration must be a YAML mapping (key: value pairs), not a scalar or list.', 'error');
-    return;
-  }
-
-  // ── Step 2: server-side schema + logic validation ────────────────────────
-  try {
-    const res = await fetch('/api/config/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg }),
-    });
-    const data = await res.json();
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-
-    if (data.valid) {
-      showValidationSuccess(cfg);
-    } else {
-      showMessage('Validation Error', formatValidationError(data.error || 'Unknown error'), 'error');
-    }
-  } catch (e) {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-    showMessage('Connection Error', 'Could not reach the server. Make sure the app is running.', 'error');
-  }
-}
-
-// Track if we're currently polling on yaml page
-let yamlPollInterval = null;
-
-// Loss tracking for chart
-let epochLossPoints = [];   // [{epoch, loss}] from "Epoch N complete | avg loss: X"
-let stepLossPoints  = [];   // [{step, loss}]  from step-level progress lines
-
-async function startTrainingFromYaml() {
-  const editor = document.getElementById('yaml-editor');
-  if (!editor) return;
-
-  const yamlStr = getYamlEditorValue();
-  let cfg;
-  try {
-    cfg = parseYaml(yamlStr);
-  } catch (e) {
-    showMessage('YAML Syntax Error', e.message || String(e), 'error');
-    return;
-  }
-
-  // Reset loss accumulators for this run
-  epochLossPoints = [];
-  stepLossPoints  = [];
-
-  startedFromYaml = true;
-  const strategy = cfg.distributed?.strategy || 'none';
-  showTrainingOverlay(strategy);
-  startTrainingTimer(cfg);
-
-  try {
-    const res = await fetch('/api/train/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg }),
-    });
-
-    if (!res.ok) {
-      hideTrainingOverlay();
-      stopTrainingTimer();
-      const err = await res.json().catch(() => ({}));
-      showMessage('Training Error', err.detail || 'Failed to start training', 'error');
-      return;
-    }
-
-    // Start polling with setInterval (doesn't block)
-    startYamlPagePolling();
-
-  } catch (e) {
-    hideTrainingOverlay();
-    stopTrainingTimer();
-    showMessage('Training Error', e.message || String(e), 'error');
-  }
-}
-
-function startYamlPagePolling() {
-  // Clear any existing interval
-  if (yamlPollInterval) {
-    clearInterval(yamlPollInterval);
-  }
-
-  // Poll every second
-  yamlPollInterval = setInterval(async () => {
-    try {
-      const res = await fetch('/api/train/status');
-      const data = await res.json();
-
-      const title = document.getElementById('training-title');
-      const subtitle = document.getElementById('training-subtitle');
-      const progressFill = document.getElementById('progress-fill');
-      const progressText = document.getElementById('progress-text');
-
-      console.log('Training status:', data.status, 'Logs:', data.logs?.length || 0);
-      renderOverlayLogs(data.logs || []);
-
-      if (data.status === 'running') {
-        if (title) title.textContent = 'Training in Progress...';
-
-        // Show last log line in subtitle
-        if (data.logs && data.logs.length > 0) {
-          const lastLog = data.logs[data.logs.length - 1];
-          if (subtitle) subtitle.textContent = lastLog.substring(0, 100);
-
-          // Parse epoch-level losses: "Epoch N complete | avg loss: X.XXXX"
-          for (const line of data.logs) {
-            const em = line.match(/Epoch (\d+) complete \| avg loss: ([\d.]+)/);
-            if (em) {
-              const ep = parseInt(em[1]);
-              const lv = parseFloat(em[2]);
-              if (!epochLossPoints.find(p => p.epoch === ep)) {
-                epochLossPoints.push({ epoch: ep, loss: lv });
-              }
-            }
-          }
-
-          // Parse step-level losses from progress bar lines when no epoch points yet
-          if (epochLossPoints.length === 0) {
-            for (const line of data.logs) {
-              const sm = line.match(/step (\d+)\/\d+ \| batch_loss: [\d.]+ \| avg: ([\d.]+)/);
-              if (sm) {
-                const st = parseInt(sm[1]);
-                const lv = parseFloat(sm[2]);
-                if (!stepLossPoints.find(p => p.step === st)) {
-                  stepLossPoints.push({ step: st, loss: lv });
-                }
-              }
-            }
-          }
-
-          // Try to parse epoch progress
-          const epochMatch = lastLog.match(/Epoch (\d+)\/(\d+)/);
-          if (epochMatch) {
-            const current = parseInt(epochMatch[1]);
-            const total = parseInt(epochMatch[2]);
-            const progress = (current / total) * 100;
-            if (progressFill) progressFill.style.width = progress + '%';
-            if (progressText) progressText.textContent = `Epoch ${current} of ${total}`;
-          }
-
-          // Update timer from logs
-          updateTimerFromLogs(data.logs);
-        }
-
-      } else if (data.status === 'error' || data.status === 'stopped') {
-        stopYamlPagePolling();
-        stopTrainingTimer();
-        showTrainingError(data.logs || [], data.error_summary, data.exit_code);
-
-      } else if (data.status === 'finished') {
-        stopYamlPagePolling();
-        hideTrainingOverlay();
-        stopTrainingTimer();
-
-        showTrainingSuccess(data.logs || []);
-
-      } else if (data.status === 'idle') {
-        // Check if we have error logs (training failed very quickly)
-        if (data.logs && data.logs.length > 0) {
-          const hasError = data.logs.some(l =>
-            l.includes('Error') || l.includes('Traceback') || l.includes('Exception') || l.includes('exited with code')
-          );
-          if (hasError) {
-            stopYamlPagePolling();
-            stopTrainingTimer();
-            showTrainingError(data.logs, data.error_summary, data.exit_code);
-          }
-        }
-      }
-
-    } catch (e) {
-      console.error('Poll error:', e);
-    }
-  }, 1000);
-}
-
-function stopYamlPagePolling() {
-  if (yamlPollInterval) {
-    clearInterval(yamlPollInterval);
-    yamlPollInterval = null;
-  }
-}
-
-/**
- * Extract the most meaningful error from a list of log lines.
- * Returns { headline, contextLines } where headline is the exception message
- * and contextLines is the relevant traceback/error block.
- */
-function extractTrainingError(logs, serverErrorSummary) {
-  // Prefer the pre-extracted summary from the backend
-  const headline = serverErrorSummary && serverErrorSummary.trim() ? serverErrorSummary.trim() : null;
-
-  // Find the last "Traceback (most recent call last)" in all logs
-  let tracebackStart = -1;
+function errorSummary(logs) {
   for (let i = logs.length - 1; i >= 0; i--) {
-    if (logs[i].includes('Traceback (most recent call last)')) {
-      tracebackStart = i;
-      break;
-    }
+    if (/^[A-Za-z_.]*(Error|Exception)\b.*:/.test(logs[i].trim())) return logs[i].trim();
   }
-
-  if (tracebackStart !== -1) {
-    // Show from traceback start to end (up to 80 lines)
-    const contextLines = logs.slice(tracebackStart, tracebackStart + 80);
-    // If no backend headline, derive it from the last non-indented line in the traceback
-    if (!headline) {
-      for (let i = contextLines.length - 1; i >= 0; i--) {
-        const line = contextLines[i].trim();
-        if (line && !/^\s/.test(contextLines[i]) && contextLines[i] !== contextLines[tracebackStart]) {
-          return { headline: line, contextLines };
-        }
-      }
-    }
-    return { headline, contextLines };
-  }
-
-  // No traceback — look for any line with a known error keyword
-  const errorPattern = /Error:|Exception:|CUDA error|RuntimeError|ValueError|TypeError|KeyError|ImportError|ModuleNotFoundError/i;
-  let fallbackHeadline = headline;
-  let fallbackContext = logs.slice(-30);
-  if (!fallbackHeadline) {
-    for (let i = logs.length - 1; i >= 0; i--) {
-      if (errorPattern.test(logs[i])) {
-        fallbackHeadline = logs[i].trim();
-        // Show surrounding context
-        fallbackContext = logs.slice(Math.max(0, i - 5), Math.min(logs.length, i + 15));
-        break;
-      }
-    }
-  }
-  return { headline: fallbackHeadline, contextLines: fallbackContext };
+  return '';
 }
 
-function showTrainingError(logs, serverErrorSummary, exitCode) {
-  const { headline } = extractTrainingError(logs, serverErrorSummary);
-
-  // Turn the existing overlay red — keep it open with all output visible
-  const modal = document.querySelector('.training-modal');
-  if (modal) modal.classList.add('training-modal--error');
-
-  // Replace spinner/animation with a failure icon
-  const animation = document.getElementById('training-animation');
-  if (animation) {
-    animation.innerHTML = '<div style="font-size:56px;line-height:1;">✖</div>';
+function lossChart(points, width) {
+  if (!points || points.length < 2) return '<p class="faint" style="padding:40px 0;text-align:center">The loss curve appears after the first logged steps.</p>';
+  const W = Math.max(320, width), H = 260, L = 48, R = 12, T = 12, B = 28;
+  const xs = points.map((p) => p.global_step);
+  const ys = points.flatMap((p) => [p.loss, p.avg]).filter((v) => v != null);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const pad = (y1 - y0) * 0.08 || 0.5; y0 -= pad; y1 += pad;
+  const sx = (x) => L + ((x - x0) / Math.max(1, x1 - x0)) * (W - L - R);
+  const sy = (y) => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
+  const path = (key) => points.filter((p) => p[key] != null).map((p, i) => `${i ? 'L' : 'M'}${sx(p.global_step).toFixed(1)},${sy(p[key]).toFixed(1)}`).join('');
+  const ticks = 4;
+  let grid = '';
+  for (let i = 0; i <= ticks; i++) {
+    const v = y0 + ((y1 - y0) * i) / ticks;
+    grid += `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}"/><text class="axis-text" x="${L - 8}" y="${sy(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`;
   }
-
-  // Update title
-  const title = document.getElementById('training-title');
-  const titleSuffix = exitCode != null ? ` (exit ${exitCode})` : '';
-  if (title) {
-    title.textContent = `Training Failed${titleSuffix}`;
-    title.style.color = '#e74c3c';
+  for (let i = 0; i <= 4; i++) {
+    const v = Math.round(x0 + ((x1 - x0) * i) / 4);
+    grid += `<text class="axis-text" x="${sx(v)}" y="${H - 8}" text-anchor="middle">${v}</text>`;
   }
-
-  // Show headline under the title if we have one
-  const subtitle = document.getElementById('training-subtitle');
-  if (subtitle && headline) {
-    subtitle.textContent = headline;
-    subtitle.style.color = '#ff8080';
-    subtitle.style.fontFamily = 'monospace';
-    subtitle.style.fontSize = '12px';
-  } else if (subtitle) {
-    subtitle.textContent = 'See console output above for details.';
-    subtitle.style.color = '#e74c3c';
-  }
-
-  // Hide progress bar and timer
-  const progress = document.querySelector('.training-progress');
-  if (progress) progress.style.display = 'none';
-  const timer = document.getElementById('training-timer');
-  if (timer) timer.style.display = 'none';
-
-  // Swap the Stop button into a Close button
-  const btnStop = document.getElementById('btn-stop-training');
-  if (btnStop) {
-    btnStop.textContent = 'Close';
-    btnStop.style.background = '#e74c3c';
-    btnStop.onclick = hideTrainingOverlay;
-  } else {
-    // Fallback: add a Close button after the live log panel
-    const livePanel = document.querySelector('.training-live-panel');
-    if (livePanel && !document.getElementById('training-error-close-btn')) {
-      const closeBtn = document.createElement('button');
-      closeBtn.id = 'training-error-close-btn';
-      closeBtn.className = 'btn btn-danger';
-      closeBtn.textContent = 'Close';
-      closeBtn.style.marginTop = '20px';
-      closeBtn.onclick = hideTrainingOverlay;
-      livePanel.insertAdjacentElement('afterend', closeBtn);
-    }
-  }
+  const line = path('loss');
+  const area = `${line}L${sx(x1)},${H - B}L${sx(x0)},${H - B}Z`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Training loss by step">
+    ${grid}<path class="area" d="${area}"/><path class="line avg" d="${path('avg')}"/><path class="line" d="${line}"/></svg>
+    <div class="legend"><span><i style="background:var(--signal)"></i>Step loss</span><span><i style="background:var(--ink-3)"></i>Running average</span></div>`;
 }
 
-function copyTrainingError(btn) {
-  const pre = document.getElementById('training-error-pre');
-  if (!pre) return;
-  navigator.clipboard.writeText(pre.textContent).then(() => {
-    btn.textContent = '✅ Copied';
-    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
-  }).catch(() => {
-    btn.textContent = '❌ Failed';
-    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
-  });
-}
+async function renderRun(main, id) {
+  main.innerHTML = `<div class="page"><div class="skeleton" style="width:40%;height:28px"></div></div>`;
+  let tab = 'logs';
+  let stick = true;
+  let lastYaml = null;
 
-function extractWandbUrl(logs) {
-  for (const line of logs) {
-    const m = line.match(/https:\/\/wandb\.ai\/\S+\/runs\/\S+/);
-    if (m) return m[0];
-  }
-  return null;
-}
-
-function buildLossChartSvg(points, xKey, xLabel) {
-  if (!points || points.length < 2) return '';
-
-  const W = 460, H = 200;
-  const pad = { top: 18, right: 20, bottom: 44, left: 52 };
-  const iW = W - pad.left - pad.right;
-  const iH = H - pad.top  - pad.bottom;
-
-  const xs = points.map(p => p[xKey]);
-  const ys = points.map(p => p.loss);
-  const xMin = xs[0], xMax = xs[xs.length - 1];
-  const yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const yRange = yMax - yMin || 1;
-
-  const px = x => pad.left + ((x - xMin) / (xMax - xMin || 1)) * iW;
-  const py = y => pad.top  + (1 - (y - yMin) / yRange) * iH;
-
-  // Build polyline
-  const pts = points.map(p => `${px(p[xKey]).toFixed(1)},${py(p.loss).toFixed(1)}`).join(' ');
-
-  // Area fill path
-  const areaPath = [
-    `M ${px(xs[0]).toFixed(1)},${(pad.top + iH).toFixed(1)}`,
-    ...points.map(p => `L ${px(p[xKey]).toFixed(1)},${py(p.loss).toFixed(1)}`),
-    `L ${px(xs[xs.length-1]).toFixed(1)},${(pad.top + iH).toFixed(1)}`,
-    'Z'
-  ].join(' ');
-
-  // Y-axis ticks (5 levels)
-  const yTicks = Array.from({length: 5}, (_, i) => yMin + (yRange * i / 4));
-  const yTickLines = yTicks.map(v => {
-    const y = py(v).toFixed(1);
-    return `
-      <line x1="${pad.left}" y1="${y}" x2="${pad.left + iW}" y2="${y}" stroke="#2a2a4a" stroke-width="1"/>
-      <text x="${pad.left - 6}" y="${y}" fill="#888" font-size="9" text-anchor="end" dominant-baseline="middle">${v.toFixed(3)}</text>`;
-  }).join('');
-
-  // X-axis ticks (up to 8)
-  const step = Math.max(1, Math.ceil(points.length / 8));
-  const xTickLines = points.filter((_, i) => i % step === 0 || i === points.length - 1).map(p => {
-    const x = px(p[xKey]).toFixed(1);
-    return `
-      <line x1="${x}" y1="${pad.top + iH}" x2="${x}" y2="${pad.top + iH + 4}" stroke="#555" stroke-width="1"/>
-      <text x="${x}" y="${pad.top + iH + 14}" fill="#888" font-size="9" text-anchor="middle">${p[xKey]}</text>`;
-  }).join('');
-
-  // Dots on data points
-  const dots = points.map(p =>
-    `<circle cx="${px(p[xKey]).toFixed(1)}" cy="${py(p.loss).toFixed(1)}" r="3" fill="#4ade80" stroke="#1a1a2e" stroke-width="1.5"/>`
-  ).join('');
-
-  return `
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;margin:0 auto;">
-    <defs>
-      <linearGradient id="lossGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%"  stop-color="#4ade80" stop-opacity="0.25"/>
-        <stop offset="100%" stop-color="#4ade80" stop-opacity="0"/>
-      </linearGradient>
-    </defs>
-    <rect width="${W}" height="${H}" fill="#0d0d1a" rx="8"/>
-    ${yTickLines}
-    ${xTickLines}
-    <path d="${areaPath}" fill="url(#lossGrad)"/>
-    <polyline points="${pts}" fill="none" stroke="#4ade80" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    ${dots}
-    <text x="${pad.left + iW / 2}" y="${H - 4}" fill="#666" font-size="10" text-anchor="middle">${xLabel}</text>
-    <text x="12" y="${pad.top + iH / 2}" fill="#666" font-size="10" text-anchor="middle" transform="rotate(-90,12,${pad.top + iH / 2})">Loss</text>
-    <text x="${pad.left + iW / 2}" y="12" fill="#aaa" font-size="11" text-anchor="middle" font-weight="600">Training Loss</text>
-  </svg>`;
-}
-
-function showTrainingSuccess(logs = []) {
-  const container = document.querySelector('.yaml-page') || document.body;
-
-  const wandbUrl = extractWandbUrl(logs);
-
-  // Final pass to catch any epoch losses that arrived in the last batch of logs
-  for (const line of logs) {
-    const em = line.match(/Epoch (\d+) complete \| avg loss: ([\d.]+)/);
-    if (em) {
-      const ep = parseInt(em[1]);
-      const lv = parseFloat(em[2]);
-      if (!epochLossPoints.find(p => p.epoch === ep)) {
-        epochLossPoints.push({ epoch: ep, loss: lv });
-      }
-    }
-  }
-  epochLossPoints.sort((a, b) => a.epoch - b.epoch);
-  stepLossPoints.sort((a, b) => a.step - b.step);
-
-  // Choose which points to chart: prefer epoch-level; fall back to step-level
-  const chartPoints = epochLossPoints.length >= 2 ? epochLossPoints
-                    : stepLossPoints.length  >= 2 ? stepLossPoints
-                    : null;
-  const chartSvg = chartPoints
-    ? buildLossChartSvg(
-        chartPoints,
-        epochLossPoints.length >= 2 ? 'epoch' : 'step',
-        epochLossPoints.length >= 2 ? 'Epoch'  : 'Step'
-      )
-    : '';
-
-  const successDiv = document.createElement('div');
-  successDiv.id = 'training-error-display';
-  successDiv.style.cssText = `
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: #1a1a2e;
-    border: 2px solid #27ae60;
-    border-radius: 12px;
-    padding: 24px 28px;
-    z-index: 10000;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-    text-align: center;
-    min-width: 340px;
-    max-width: 90vw;
-  `;
-
-  // Get checkpoint directory from config
-  const checkpointDir = (typeof getVal === 'function' ? getVal('f-checkpoint-dir') : '') || 'checkpoints';
-  const strategy = (typeof getVal === 'function' ? getVal('f-strategy') : '') || 'none';
-  const strategyFolder = strategy === 'fsdp' ? 'fsdp/dcp_api' : (strategy === 'ddp' ? 'ddp' : 'solo');
-  const fullCheckpointPath = `${checkpointDir}/${strategyFolder}/`;
-
-  const checkpointSection = `
-    <div style="margin: 12px 0; padding: 12px 16px; background: rgba(124, 108, 255, 0.10); border: 1px solid rgba(124, 108, 255, 0.30); border-radius: 8px; text-align: left;">
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-        <span style="font-size: 16px;">💾</span>
-        <span style="color: #a78bfa; font-weight: 600; font-size: 13px;">Model saved to:</span>
+  const shell = (job) => `
+    <div class="page">
+      <a href="#/runs" class="btn ghost small" style="margin-bottom:12px">Back to runs</a>
+      <div class="run-head">
+        <div>
+          <h1><span>${esc(runTitle(job))}</span><span id="run-status">${statusPill(job.status)}</span></h1>
+          <div class="meta" id="run-meta"></div>
+        </div>
+        <div class="btn-row" id="run-actions"></div>
       </div>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <code id="checkpoint-path-text" style="flex: 1; background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #e2e6ff; word-break: break-all; font-family: 'JetBrains Mono', 'Fira Code', monospace;">${fullCheckpointPath}</code>
-        <button onclick="openCheckpointFolder()" style="padding: 8px 12px; background: rgba(124, 108, 255, 0.55); border: 1px solid rgba(124, 108, 255, 0.75); border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; font-weight: 500;" title="Open checkpoints">📂 Open</button>
+      <div id="run-error"></div>
+      <div class="stats" id="run-stats" style="margin-bottom:20px"></div>
+      <div class="panel" style="margin-bottom:20px">
+        <div class="panel-head"><h2>Loss</h2><span class="faint" id="chart-meta"></span></div>
+        <div class="panel-pad" id="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="logs" aria-selected="true">Logs</button>
+          <button role="tab" data-tab="config" aria-selected="false">Config</button>
+        </div>
+        <div id="tab-body"></div>
       </div>
     </div>`;
 
-  const wandbSection = wandbUrl ? `
-    <div style="margin: 12px 0; padding: 10px 16px; background: rgba(255,149,0,0.08); border: 1px solid rgba(255,149,0,0.25); border-radius: 8px; display: flex; align-items: center; gap: 10px; justify-content: center;">
-      <span style="font-size: 18px;">📊</span>
-      <a href="${wandbUrl}" target="_blank" rel="noopener noreferrer"
-        style="color: #f59e0b; font-weight: 600; font-size: 13px; text-decoration: none; word-break: break-all;"
-        onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
-        View run on Weights &amp; Biases ↗
-      </a>
-    </div>` : '';
+  let job = await api(`/api/queue/jobs/${encodeURIComponent(id)}`);
+  main.innerHTML = shell(job);
+  $$('.tabs button', main).forEach((b) => { b.onclick = () => { tab = b.dataset.tab; $$('.tabs button', main).forEach((x) => x.setAttribute('aria-selected', String(x === b))); drawTab(); }; });
 
-  const chartSection = chartSvg ? `
-    <div style="margin: 14px 0 4px 0; border-radius: 8px; overflow: hidden;">
-      ${chartSvg}
-    </div>` : '';
+  const actions = () => {
+    const bar = $('#run-actions');
+    const active = job.status === 'running' || job.status === 'pending';
+    bar.innerHTML = `
+      ${active ? `<button class="btn danger" data-act="stop">${job.status === 'pending' ? 'Cancel' : 'Stop run'}</button>` : ''}
+      <button class="btn" data-act="clone">Clone and edit</button>
+      <button class="btn" data-act="yaml">Download YAML</button>
+      ${active ? '' : '<button class="btn ghost danger" data-act="delete">Delete</button>'}`;
+    bar.onclick = async (e) => {
+      const act = e.target.closest('button') && e.target.closest('button').dataset.act;
+      if (act === 'stop') {
+        dialog({ title: job.status === 'pending' ? 'Cancel this queued run?' : 'Stop this run?',
+          body: '<p class="muted">The process is terminated. Checkpoints already saved stay on disk.</p>',
+          actions: [{ label: 'Keep running' }, { label: job.status === 'pending' ? 'Cancel run' : 'Stop run', kind: 'primary', onClick: async () => {
+            try { await api(`/api/queue/jobs/${id}/cancel`, { method: 'POST' }); toast('Run stopped'); refresh(); } catch (err) { toast(err.message, 'error'); }
+          } }] });
+      } else if (act === 'clone') {
+        const cfg = deepMerge(defaultConfig(), job.config);
+        store.set('omni-draft', { cfg, ui: { name: `${runTitle(job)} (copy)` }, step: 0 });
+        location.hash = '#/new';
+      } else if (act === 'yaml') {
+        const r = await api('/api/config/render', { json: { config: job.config } });
+        download(`${(job.name || 'run').replace(/[^\w.-]+/g, '_')}.yaml`, r.yaml);
+      } else if (act === 'delete') {
+        dialog({ title: 'Delete this run from history?', body: '<p class="muted">Its log is deleted. Checkpoints on disk are kept.</p>',
+          actions: [{ label: 'Keep' }, { label: 'Delete run', kind: 'primary', onClick: async () => {
+            try { await api(`/api/queue/jobs/${id}`, { method: 'DELETE' }); toast('Run deleted'); location.hash = '#/runs'; } catch (err) { toast(err.message, 'error'); }
+          } }] });
+      }
+    };
+  };
 
-  successDiv.innerHTML = `
-    <h3 style="color: #27ae60; margin: 0 0 8px 0; font-size: 18px;">✅ Training Completed Successfully!</h3>
-    ${checkpointSection}
-    ${wandbSection}
-    ${chartSection}
-    <button onclick="closeTrainingError()" style="margin-top: 14px; padding: 10px 24px; background: #27ae60; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">Close</button>
-  `;
-
-  container.appendChild(successDiv);
-
-  const backdrop = document.createElement('div');
-  backdrop.id = 'training-error-backdrop';
-  backdrop.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 9999;
-  `;
-  backdrop.onclick = closeTrainingError;
-  container.appendChild(backdrop);
-}
-
-function closeTrainingError() {
-  const modal   = document.getElementById('training-error-display');
-  const backdrop = document.getElementById('training-error-backdrop');
-  if (modal)   modal.remove();
-  if (backdrop) backdrop.remove();
-  hideTrainingOverlay();
-}
-
-function openCheckpointFolder() {
-  const pathEl = document.getElementById('checkpoint-path-text');
-  if (!pathEl) return;
-  const path = pathEl.textContent.replace(/\/+$/, ''); // Remove trailing slash
-  const dir = path.split('/')[0] || 'checkpoints'; // Get base checkpoint dir
-  closeTrainingError();
-  window.location.href = `/static/checkpoints.html?dir=${encodeURIComponent(dir)}`;
-}
-
-let _toastTimer = null;
-function showToast(message, type = 'info') {
-  let el = document.getElementById('app-toast');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'app-toast';
-    el.className = 'toast';
-    document.body.appendChild(el);
-  }
-  el.textContent = message;
-  el.className = `toast toast--${type}`;
-  // Force reflow so the transition fires even on rapid repeat calls
-  void el.offsetWidth;
-  el.classList.add('toast--visible');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => el.classList.remove('toast--visible'), 2200);
-}
-
-// =========================================================================
-// Training
-// =========================================================================
-async function startTraining() {
-  // Use queue-based submission
-  await submitJobToQueue();
-}
-
-async function stopTraining() {
-  try {
-    // If we have a current job ID, cancel it via queue
-    if (currentJobId) {
-      await fetch(`/api/queue/jobs/${currentJobId}/cancel`, { method: 'POST' });
-      stopJobPolling();
-      currentJobId = null;
+  const drawTab = async () => {
+    const body = $('#tab-body');
+    if (tab === 'logs') {
+      if (!$('#console', body)) {
+        body.innerHTML = '<div class="console" id="console" tabindex="0" aria-label="Run log"></div>';
+        $('#console').onscroll = (e) => { const el = e.target; stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 30; };
+      }
+      const el = $('#console');
+      const logs = job.logs || [];
+      el.innerHTML = logs.length ? logs.map((l) => { const c = classifyLine(l); return c ? `<span class="${c}">${esc(l)}</span>` : esc(l); }).join('\n') : '<span class="p">Waiting for output…</span>';
+      if (stick) el.scrollTop = el.scrollHeight;
     } else {
-      // Fallback to legacy stop
-      await fetch('/api/train/stop', { method: 'POST' });
+      if (lastYaml === null) lastYaml = (await api('/api/config/render', { json: { config: job.config } })).yaml;
+      body.innerHTML = `<div class="panel-pad"><pre class="code">${esc(lastYaml)}</pre></div>`;
     }
-    hideTrainingOverlay();
-    stopTrainingTimer();
-    isJobQueued = false;
-  } catch (e) {
-    console.error('Failed to stop:', e);
-  }
+  };
+
+  const draw = () => {
+    $('#run-status').innerHTML = statusPill(job.status);
+    const c = job.config || {};
+    const started = job.started_at ? new Date(job.started_at) : null;
+    const ended = job.finished_at ? new Date(job.finished_at) : null;
+    const elapsed = started ? ((ended || new Date()) - started) / 1000 : null;
+    $('#run-meta').innerHTML = esc([
+      c.model_type === 'custom_transformer' ? 'custom_transformer' : c.model_name,
+      ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'],
+      `${strategyLabel(c)} on ${job.gpu_count} GPU${job.gpu_count > 1 ? 's' : ''}${job.gpu_indices && job.gpu_indices.length ? ` (${job.gpu_indices.join(', ')})` : ''}`,
+      (c.dataset || {}).name,
+    ].filter(Boolean).join(', '));
+
+    const m = job.metrics || {};
+    const p = m.progress;
+    const frac = job.status === 'completed' ? 1 : p ? p.fraction : 0;
+    const eta = job.status === 'running' && p && frac > 0 && elapsed ? (elapsed * (1 - frac)) / frac : null;
+    const stats = [
+      ['Progress', `${Math.round(frac * 100)}%`],
+      ['Step', p ? `${fmt.int(p.global_step)} / ${fmt.int(p.total_steps)}` : '–'],
+      ['Epoch', p ? `${p.epoch} / ${p.epochs}` : '–'],
+      ['Loss', p ? p.loss.toFixed(4) : '–'],
+      [p && p.tokens_per_s ? 'Tokens / s' : 'Avg loss', p ? (p.tokens_per_s ? fmt.int(p.tokens_per_s) : (p.avg != null ? p.avg.toFixed(4) : '–')) : '–'],
+      ['Elapsed', fmt.dur(elapsed)],
+      job.status === 'running' ? ['Time left', fmt.dur(eta)]
+        : job.status === 'pending' ? ['Queue', 'waiting for GPUs']
+        : ['Finished', fmt.ago(job.finished_at)],
+    ];
+    $('#run-stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+
+    const chart = $('#chart');
+    chart.innerHTML = lossChart(m.points, chart.clientWidth - 44);
+    $('#chart-meta').textContent = m.epochs && m.epochs.length ? `epoch averages: ${m.epochs.map((e) => e.loss.toFixed(3)).join(', ')}` : '';
+
+    const err = job.status === 'failed' ? (errorSummary(job.logs || []) || job.error_message) : '';
+    $('#run-error').innerHTML = err ? `<div class="notice error" style="margin-bottom:20px"><div><strong>The run failed.</strong> <code>${esc(err)}</code></div></div>` : '';
+    actions();
+    drawTab();
+  };
+
+  const refresh = async () => {
+    try { job = await api(`/api/queue/jobs/${encodeURIComponent(id)}`); draw(); } catch (e) { /* transient */ }
+  };
+  draw();
+  every(2000, () => { if (job.status === 'running' || job.status === 'pending') refresh(); });
 }
 
-function showTrainingOverlay(strategy, gpuCount = null) {
-  const overlay = document.getElementById('training-overlay');
-  const animation = document.getElementById('training-animation');
-  const title = document.getElementById('training-title');
-  const subtitle = document.getElementById('training-subtitle');
-  const queueBox = document.getElementById('queue-status-box');
-  const btnStop = document.getElementById('btn-stop-training');
-  const btnCancel = document.getElementById('btn-cancel-queued');
-  const progressContainer = document.querySelector('.training-progress');
-  const timerContainer = document.getElementById('training-timer');
+// ===========================================================================
+// Plan rendering (shared by the wizard and the planner page)
+// ===========================================================================
 
-  if (!overlay) return;
+const SEGMENTS = [
+  ['weights', 'Weights', 'var(--m-weights)'],
+  ['gradients', 'Gradients', 'var(--m-grads)'],
+  ['optimizer', 'AdamW states', 'var(--m-optim)'],
+  ['activations', 'Activations', 'var(--m-acts)'],
+  ['logits', 'Logits + loss', 'var(--m-logits)'],
+  ['overhead', 'CUDA + NCCL', 'var(--m-over)'],
+];
 
-  // Reset error state from previous run
-  const modal = document.querySelector('.training-modal');
-  if (modal) modal.classList.remove('training-modal--error');
-  if (title) title.style.color = '';
-  if (subtitle) { subtitle.style.color = ''; subtitle.style.fontFamily = ''; subtitle.style.fontSize = ''; }
-  const oldCloseBtn = document.getElementById('training-error-close-btn');
-  if (oldCloseBtn) oldCloseBtn.remove();
-
-  // Reset to training mode (not queued)
-  if (queueBox) queueBox.style.display = 'none';
-  if (progressContainer) progressContainer.style.display = 'block';
-  if (timerContainer) timerContainer.style.display = 'block';
-  if (btnStop) { btnStop.style.display = 'inline-block'; btnStop.textContent = 'Stop Training'; btnStop.style.background = ''; btnStop.onclick = stopTraining; }
-  if (btnCancel) btnCancel.style.display = 'none';
-
-  // Use provided gpuCount or infer from strategy
-  const numGpus = gpuCount || (strategy === 'fsdp' ? 4 : (strategy === 'ddp' ? 2 : 1));
-
-  if (numGpus > 1) {
-    if (animation) {
-      animation.innerHTML = `
-        <div class="gpu-animation">
-          ${Array.from({length: numGpus}, (_, i) => `
-            <div class="gpu-box" data-id="${i}">
-              <div class="pulse"></div>
-            </div>
-          `).join('')}
-        </div>
-        <div class="connection-lines">
-          ${Array.from({length: numGpus - 1}, () => '<div class="connection-line"></div>').join('')}
-        </div>
-      `;
-    }
-    if (title) title.textContent = strategy === 'fsdp' ? 'Starting FSDP Training...' : 'Starting DDP Training...';
-    if (subtitle) subtitle.textContent = `Synchronizing ${numGpus} GPUs`;
-  } else {
-    if (animation) animation.innerHTML = '<div class="spinner"></div>';
-    if (title) title.textContent = 'Starting Training...';
-    if (subtitle) subtitle.textContent = 'Initializing model and data loaders';
-  }
-
-  renderOverlayLogs([]);
-  overlay.classList.add('active');
+function memColumn(opt, capGb, { chosen = false, big = false, scaleGb } = {}) {
+  const mem = opt.memory_gb;
+  const scale = Math.max(scaleGb || 0, capGb * 1.05);
+  const shown = Math.min(mem.total, scale);
+  const segs = SEGMENTS.map(([k, , color]) => {
+    const h = (Math.max(0, mem[k] || 0) / Math.max(mem.total, 1e-9)) * (shown / scale) * 100;
+    return h > 0.2 ? `<div class="seg" style="height:${h}%;background:${color}" title="${k}: ${fmt.gb(mem[k], 2)}"></div>` : '';
+  }).join('');
+  const capPos = (1 - capGb / scale) * 100;
+  const cls = opt.fits ? (mem.total > capGb * 0.85 ? 'tight' : 'fit') : 'over';
+  return `<div class="memcol ${chosen ? 'chosen' : ''} ${big ? 'big' : ''}">
+    <div class="gb" style="color:var(--${cls === 'over' ? 'over' : cls === 'tight' ? 'tight' : 'fit'})">${fmt.gb(mem.total)}</div>
+    <div class="col" title="${esc(opt.label)}: ${fmt.gb(mem.total, 2)} per GPU">${segs}<div class="cap" style="top:${capPos}%"></div>${mem.total > scale ? '<div class="over-mark"></div>' : ''}</div>
+    <div class="lbl">${esc(opt.label)}</div>
+  </div>`;
 }
 
-function hideTrainingOverlay() {
-  const overlay = document.getElementById('training-overlay');
-  if (overlay) overlay.classList.remove('active');
-  // Reset error state so next run starts clean
-  const modal = document.querySelector('.training-modal');
-  if (modal) modal.classList.remove('training-modal--error');
-  const title = document.getElementById('training-title');
-  if (title) title.style.color = '';
-  const subtitle = document.getElementById('training-subtitle');
-  if (subtitle) { subtitle.style.color = ''; subtitle.style.fontFamily = ''; subtitle.style.fontSize = ''; }
-  const closeBtn = document.getElementById('training-error-close-btn');
-  if (closeBtn) closeBtn.remove();
+function memLegend() {
+  return `<div class="legend">${SEGMENTS.map(([, label, c]) => `<span><i style="background:${c}"></i>${label}</span>`).join('')}<span><i style="border-top:2px dashed var(--ink);height:0;border-radius:0"></i>GPU limit</span></div>`;
 }
 
-// =========================================================================
-// Queue Management
-// =========================================================================
+const VERDICT_TAG = {
+  single_gpu: ['fit', 'Single GPU'],
+  distributed_optional: ['fit', 'Distributed optional'],
+  distributed_required: ['running', 'Distributed required'],
+  infeasible: ['over', 'Does not fit'],
+};
 
 /**
- * Fetch GPU availability and queue status from backend
+ * Render a plan. opts.onApply(option) applies a recommendation, opts.onSuggest(workload) a what-if.
  */
-async function fetchQueueStatus() {
+function renderPlan(plan, opts = {}) {
+  const cap = plan.cluster.gpu_mem_gb;
+  const rec = plan.recommended;
+  const sel = plan.selected;
+  const [tagCls, tagText] = VERDICT_TAG[plan.verdict] || ['', plan.verdict];
+  const options = plan.options.slice();
+  const scale = Math.min(Math.max(...options.map((o) => o.memory_gb.total), cap) , cap * 2.2);
+  const sameAsRec = sel && sel.label === rec.label;
+  const mg = plan.min_gpus;
+  const perf = (sel && sel.fits ? sel : rec).perf;
+
+  let html = `
+    <div class="verdict ${esc(plan.verdict)}">
+      <div class="tag"><span class="pill ${tagCls}">${tagText}</span></div>
+      <h3>${esc(plan.headline)}</h3>
+      <p>${esc(plan.summary)}</p>
+      ${opts.onApply && !sameAsRec && plan.verdict !== 'infeasible' ? `<div class="btn-row" style="margin-top:12px"><button class="btn primary small" data-apply="rec">Use ${esc(rec.label)}</button></div>` : ''}
+    </div>
+    <div class="plan-sec">
+      <h4>Peak memory per GPU</h4>
+      <div class="memcol-row">${options.map((o) => memColumn(o, cap, { chosen: sel && o.label === sel.label, scaleGb: scale })).join('')}
+        ${sel && !options.some((o) => o.label === sel.label) ? memColumn(sel, cap, { chosen: true, scaleGb: scale }) : ''}</div>
+      ${memLegend()}
+    </div>`;
+
+  if (sel) {
+    const m = sel.memory_gb;
+    html += `<div class="plan-sec">
+      <h4>Your selection: ${esc(sel.label)} ${sel.fits ? '<span class="pill fit">fits</span>' : '<span class="pill over">out of memory</span>'}</h4>
+      <table class="mem-table"><tbody>
+        ${SEGMENTS.map(([k, label]) => `<tr><td>${label}</td><td>${fmt.gb(m[k], 2)}</td></tr>`).join('')}
+        <tr class="total"><td>Total per GPU (limit ${fmt.gb(plan.cluster.usable_gb)} usable)</td><td>${fmt.gb(m.total, 2)}</td></tr>
+      </tbody></table></div>`;
+  }
+
+  html += `<div class="plan-sec"><h4>Throughput estimate</h4><ul class="plan-list">
+      <li><span class="muted">Tokens per second</span><span class="num">${fmt.int(perf.tokens_per_second)}</span></li>
+      <li><span class="muted">Step time</span><span class="num">${perf.step_seconds < 1 ? `${Math.round(perf.step_seconds * 1000)} ms` : `${perf.step_seconds.toFixed(2)} s`}</span></li>
+      ${perf.total_seconds ? `<li><span class="muted">Whole run (${fmt.int(perf.total_steps)} steps)</span><span class="num">${fmt.dur(perf.total_seconds)}</span></li>` : ''}
+      <li><span class="muted">Assumed utilisation (MFU)</span><span class="num">${Math.round(perf.mfu * 100)}%</span></li>
+    </ul></div>
+    <div class="plan-sec"><h4>Fewest GPUs that fit (${fmt.gb(cap, 0)} each)</h4><ul class="plan-list">
+      <li><span class="muted">One GPU</span><span>${mg.single ? 'yes' : 'no'}</span></li>
+      <li><span class="muted">FSDP</span><span class="num">${mg.fsdp ? `${mg.fsdp} GPU${mg.fsdp > 1 ? 's' : ''}` : 'not possible'}</span></li>
+      <li><span class="muted">5D</span><span class="num">${mg['5d'] ? `${mg['5d']} GPUs, ${esc(mg['5d_layout'])}` : 'not available'}</span></li>
+    </ul></div>`;
+
+  if (plan.suggestions.length) {
+    html += `<div class="plan-sec"><h4>Ways to make it fit</h4><ul class="plan-list">${plan.suggestions.map((s, i) => `
+      <li class="sugg"><div><strong>${esc(s.change)}</strong> <span class="muted">→ ${esc(s.result)}${s.per_gpu_gb ? `, ${fmt.gb(s.per_gpu_gb)} per GPU` : ''}</span></div>
+      ${opts.onSuggest && Object.keys(s.workload || {}).length ? `<button class="btn small" data-sugg="${i}">Apply</button>` : ''}</li>`).join('')}</ul></div>`;
+  }
+  const notes = plan.notes.slice();
+  const model = plan.model;
+  notes.unshift(`${model.name}: ${fmt.params(model.params)} parameters${model.num_experts ? ` (${fmt.params(model.active_params)} active)` : ''}, ${model.layers} layers, vocab ${fmt.int(model.vocab)} (${model.source === 'hf-config' ? 'from config.json' : model.source}).`);
+  html += `<div class="plan-sec"><h4>Notes</h4><ul class="plan-list">${notes.map((n) => `<li class="muted" style="display:block">${esc(n)}</li>`).join('')}</ul></div>`;
+
+  const root = document.createElement('div');
+  root.innerHTML = html;
+  const applyBtn = $('[data-apply]', root);
+  if (applyBtn) applyBtn.onclick = () => opts.onApply(rec);
+  $$('[data-sugg]', root).forEach((b) => { b.onclick = () => opts.onSuggest(plan.suggestions[Number(b.dataset.sugg)].workload); });
+  return root;
+}
+
+/** Map planner what-if changes back onto a config. */
+function applyWorkload(cfg, w) {
+  if ('grad_ckpt' in w) cfg.training.gradient_checkpointing = w.grad_ckpt;
+  if ('batch_size' in w) cfg.training.batch_size = w.batch_size;
+  if ('seq_len' in w) { cfg.training.max_length = w.seq_len; if (cfg.model_type === 'custom_transformer') cfg.custom_transformer_args.max_seq_len = w.seq_len; }
+  if ('method' in w) setMethod(cfg, w.method);
+  if ('lora_r' in w) { cfg.peft.r = w.lora_r; cfg.peft.alpha = 2 * w.lora_r; }
+  if ('quant_bits' in w) cfg.quantization.bits = w.quant_bits;
+  if (cfg.quantization.enabled && cfg.strategy === 'fsdp') cfg.strategy = cfg.num_gpus > 1 ? 'ddp' : 'solo';
+  if (cfg.peft.enabled && cfg.strategy === '5d') cfg.strategy = cfg.num_gpus > 1 ? 'fsdp' : 'solo';
+}
+
+function setMethod(cfg, method) {
+  if (method === 'full') { cfg.peft.enabled = false; cfg.quantization.enabled = false; }
+  if (method === 'lora') { cfg.peft.enabled = true; cfg.peft.type = 'lora'; cfg.quantization.enabled = false; }
+  if (method === 'qlora') {
+    cfg.peft.enabled = true; cfg.peft.type = 'qlora'; cfg.quantization.enabled = true;
+    if (![4, 8].includes(Number(cfg.quantization.bits))) cfg.quantization.bits = 4;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5D rank grid
+// ---------------------------------------------------------------------------
+
+function rankGrid(par, numGpus, perNode) {
+  const tp = +par.tp || 1, pp = +par.pp || 1, cp = +par.cp || 1;
+  const dp = par.dp === 'auto' || !par.dp ? Math.floor(numGpus / (tp * pp * cp)) : +par.dp;
+  if (dp * tp * pp * cp !== numGpus || numGpus < 1) return '';
+  if (numGpus > 128) return `<p class="muted">${numGpus} ranks: DP ${dp} × PP ${pp} × CP ${cp} × TP ${tp}.</p>`;
+  const nodes = Math.ceil(numGpus / perNode);
+  let html = '<div class="rankgrid">';
+  for (let n = 0; n < nodes; n++) {
+    html += `<div class="node"><div class="node-label">Node ${n}</div><div class="node-gpus" style="grid-template-columns:repeat(${Math.min(perNode, 8) > 4 ? 4 : Math.min(perNode, 4)},34px)">`;
+    for (let r = n * perNode; r < Math.min(numGpus, (n + 1) * perNode); r++) {
+      // rank = ((d * pp + p) * cp + c) * tp + t   (TP fastest)
+      const t = r % tp, c = Math.floor(r / tp) % cp, p = Math.floor(r / (tp * cp)) % pp, d = Math.floor(r / (tp * cp * pp));
+      html += `<div class="gpu" style="background:var(--s${p % 8})" title="rank ${r}: dp ${d}, pp stage ${p}, cp ${c}, tp ${t}">r${r}<small>${tp > 1 ? `t${t}` : ''}${cp > 1 ? `c${c}` : ''}${!(tp > 1 || cp > 1) ? `d${d}` : ''}</small></div>`;
+    }
+    html += '</div></div>';
+  }
+  html += '</div>';
+  html += `<div class="axis-legend">
+    <span><b>Colour</b>: pipeline stage (${pp})</span>
+    <span><b>t</b>: tensor-parallel rank (${tp}), kept adjacent</span>
+    ${cp > 1 ? `<span><b>c</b>: context-parallel rank (${cp})</span>` : ''}
+    <span><b>DP</b>: ${dp} replica${dp > 1 ? 's' : ''}${par.zero1 ? ', ZeRO-1 sharded' : ''}</span>
+  </div>`;
+  return html;
+}
+
+function fiveDErrors(cfg) {
+  const p = cfg.parallelism, n = +cfg.num_gpus;
+  const tp = +p.tp, pp = +p.pp, cp = +p.cp, ep = +p.ep;
+  const errs = [];
+  const mp = tp * pp * cp;
+  if ([tp, pp, cp, ep, +p.micro_batches].some((v) => !(v >= 1))) errs.push('Every size must be at least 1.');
+  if (n % mp) errs.push(`GPU count (${n}) must be divisible by TP × PP × CP (${mp}).`);
+  const dp = p.dp === 'auto' ? Math.floor(n / mp) : +p.dp;
+  if (dp * mp !== n) errs.push(`DP × TP × PP × CP = ${dp * mp}, but the run has ${n} GPUs.`);
+  if (p.sp && tp === 1) errs.push('Sequence parallelism needs TP > 1.');
+  if (dp && dp % ep) errs.push(`EP (${ep}) must divide DP (${dp}).`);
+  const ct = cfg.custom_transformer_args;
+  if (ep > 1 && !(cfg.model_type === 'custom_transformer' && +ct.num_experts > 0)) errs.push('EP > 1 needs a mixture-of-experts model (custom transformer with experts).');
+  const seq = cfg.model_type === 'custom_transformer' ? +ct.max_seq_len : +cfg.training.max_length;
+  if (seq % cp) errs.push(`Sequence length ${seq} must be divisible by CP (${cp}).`);
+  if (p.sp && (seq / cp) % tp) errs.push(`With SP, sequence length ${seq} must be divisible by CP × TP (${cp * tp}).`);
+  if (cfg.model_type === 'custom_transformer' && (+ct.n_heads % tp)) errs.push(`Attention heads (${ct.n_heads}) must be divisible by TP (${tp}).`);
+  if (cfg.model_type === 'custom_transformer' && pp > +ct.n_layers) errs.push(`PP (${pp}) cannot exceed the layer count (${ct.n_layers}).`);
+  const warns = [];
+  if (pp > 1 && +p.micro_batches < pp) warns.push(`Use at least ${pp} micro-batches: the pipeline bubble is (PP − 1) / micro-batches.`);
+  if (tp > 8) warns.push('TP above 8 crosses node boundaries; keep TP within NVLink.');
+  return { errs, warns, dp };
+}
+
+// ===========================================================================
+// New-run wizard
+// ===========================================================================
+
+const STEPS = ['Goal', 'Model', 'Data', 'Compute', 'Training', 'Review'];
+let W = null;
+
+function wizardState() {
+  const draft = store.get('omni-draft', null);
+  const cfg = deepMerge(defaultConfig(), (draft && draft.cfg) || {});
+  return {
+    step: (draft && draft.step) || 0,
+    cfg,
+    ui: deepMerge({ name: '', target: 'local', slurm: { nodes: 2, gpus_per_node: 8, partition: 'gpu', time: '24:00:00', gpu: 'h100' }, algo: 'dpo' }, (draft && draft.ui) || {}),
+    plan: null, planSeq: 0, spec: null, specFor: null, validation: null, yaml: null, editingYaml: false,
+  };
+}
+
+function saveDraft() { store.set('omni-draft', { cfg: W.cfg, ui: W.ui, step: W.step }); }
+
+async function renderWizard(main) {
+  W = wizardState();
+  const catalog = await loadCatalog();
+  W.local = catalog.local_cluster;
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head">
+        <div><h1>New run</h1><p>Choose what to train and on what. The plan on the right updates as you go and tells you whether you need distributed training.</p></div>
+        <div class="btn-row"><button class="btn ghost" id="wiz-reset">Start over</button></div>
+      </div>
+      <nav class="steps" id="steps" aria-label="Steps"></nav>
+      <div class="split">
+        <div class="panel panel-pad" id="step-panel"></div>
+        <aside class="panel sticky" id="plan-panel" aria-live="polite" aria-label="Capacity plan"></aside>
+      </div>
+    </div>`;
+  $('#wiz-reset').onclick = () => {
+    dialog({ title: 'Start over?', body: '<p class="muted">This clears every choice in this draft.</p>', actions: [
+      { label: 'Keep editing' }, { label: 'Start over', kind: 'primary', onClick: () => { store.del('omni-draft'); route(); } }] });
+  };
+  bindStep($('#step-panel'));
+  drawSteps();
+  drawStep();
+  schedulePlan(0);
+}
+
+function drawSteps() {
+  $('#steps').innerHTML = STEPS.map((s, i) => `<button type="button" data-step="${i}" class="${i < W.step ? 'done' : ''}" ${i === W.step ? 'aria-current="step"' : ''}>${s}</button>`).join('');
+  $$('#steps button').forEach((b) => { b.onclick = () => goStep(Number(b.dataset.step)); });
+}
+
+function goStep(i) {
+  W.step = Math.max(0, Math.min(STEPS.length - 1, i));
+  W.editingYaml = false;
+  saveDraft(); drawSteps(); drawStep();
+  $('#step-panel').scrollIntoView({ block: 'nearest' });
+}
+
+function field(label, path, { type = 'text', hint = '', step, min, placeholder = '', rerender = false, cls = '' } = {}) {
+  const v = getPath(W.cfg, path);
+  const kind = type === 'int' || type === 'float' ? 'number' : 'text';
+  const val = type === 'float' && typeof v === 'number' ? fmt.lr(v) : (v ?? '');
+  const id = `f-${path.replace(/\./g, '-')}`;
+  return `<div class="field ${cls}"><label for="${id}">${label}</label>
+    <input id="${id}" type="${type === 'float' ? 'text' : kind}" inputmode="${type === 'float' ? 'decimal' : type === 'int' ? 'numeric' : 'text'}" data-bind="${path}" data-type="${type}" value="${esc(val)}" ${step ? `step="${step}"` : ''} ${min != null ? `min="${min}"` : ''} placeholder="${esc(placeholder)}" ${rerender ? 'data-rerender' : ''}>
+    ${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+}
+function select(label, path, options, { hint = '', rerender = false } = {}) {
+  const v = String(getPath(W.cfg, path));
+  const id = `f-${path.replace(/\./g, '-')}`;
+  return `<div class="field"><label for="${id}">${label}</label><select id="${id}" data-bind="${path}" data-type="str" ${rerender ? 'data-rerender' : ''}>
+    ${options.map(([val, text]) => `<option value="${esc(val)}" ${String(val) === v ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select>
+    ${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+}
+function check(label, path, small = '', { rerender = false } = {}) {
+  return `<label class="check"><input type="checkbox" data-bind="${path}" data-type="bool" ${getPath(W.cfg, path) ? 'checked' : ''} ${rerender ? 'data-rerender' : ''}><span>${label}${small ? `<small>${small}</small>` : ''}</span></label>`;
+}
+function segmented(name, options, value) {
+  return `<div class="segmented" role="group" data-seg="${name}">${options.map(([v, label, disabled, why]) => `<button type="button" data-val="${esc(v)}" aria-pressed="${String(v) === String(value)}" ${disabled ? `disabled title="${esc(why || '')}"` : ''}>${esc(label)}</button>`).join('')}</div>`;
+}
+
+function strategyAvailability() {
+  const c = W.cfg, m = methodOf(c), a = c.algorithm.type;
+  const why5d = !['llm', 'custom_transformer'].includes(c.model_type) ? '5D supports causal LMs and the custom transformer'
+    : m !== 'full' ? '5D does not support LoRA or quantization yet'
+    : a !== 'pretrain' ? 'Post-training does not run under 5D yet'
+    : (c.model_type === 'llm' && W.spec && W.spec.name === c.model_name && !W.spec.five_d_ready) ? `5D loads Llama, Mistral and Qwen2 checkpoints (this is ${W.spec.arch || 'another architecture'})`
+    : '';
+  return {
+    solo: '', ddp: '',
+    fsdp: c.quantization.enabled ? 'FSDP cannot shard bitsandbytes-quantized layers' : '',
+    '5d': why5d,
+  };
+}
+
+function normalise() {
+  const c = W.cfg;
+  const avail = strategyAvailability();
+  if (avail[c.strategy]) c.strategy = c.num_gpus > 1 && !avail.fsdp ? 'fsdp' : (c.num_gpus > 1 ? 'ddp' : 'solo');
+  if (W.ui.target === 'slurm') c.num_gpus = Math.max(1, (+W.ui.slurm.nodes || 1) * (+W.ui.slurm.gpus_per_node || 1));
+  if (c.model_type === 'custom_transformer') { setMethod(c, 'full'); c.training.max_length = +c.custom_transformer_args.max_seq_len; }
+  if (!PEFT_TYPES.has(c.model_type)) setMethod(c, 'full');
+  if (!QLORA_TYPES.has(c.model_type) && c.quantization.enabled) setMethod(c, 'lora');
+}
+
+function drawStep() {
+  normalise();
+  const panel = $('#step-panel');
+  const body = [stepGoal, stepModel, stepData, stepCompute, stepTraining, stepReview][W.step]();
+  panel.innerHTML = `<div class="step-body">${body}
+    <div class="step-nav">
+      <button class="btn" type="button" id="step-back" ${W.step === 0 ? 'disabled' : ''}>Back</button>
+      ${W.step < STEPS.length - 1 ? `<button class="btn primary" type="button" id="step-next">Continue to ${STEPS[W.step + 1].toLowerCase()}</button>` : ''}
+    </div></div>`;
+  $('#step-back').onclick = () => goStep(W.step - 1);
+  const next = $('#step-next');
+  if (next) next.onclick = () => goStep(W.step + 1);
+  if (W.step === 1) inspectModelSoon();
+  if (W.step === 5) loadReview();
+}
+
+function bindStep(panel) {
+  const onInput = (e) => {
+    const el = e.target;
+    if (!el.dataset || !el.dataset.bind) return;
+    const t = el.dataset.type;
+    let v = el.value;
+    if (t === 'bool') v = el.checked;
+    else if (t === 'int') { v = parseInt(v, 10); if (!Number.isFinite(v)) { el.classList.add('invalid'); return; } }
+    else if (t === 'float') { v = Number(String(v).trim()); if (!Number.isFinite(v) || String(el.value).trim() === '') { el.classList.add('invalid'); return; } }
+    el.classList.remove('invalid');
+    if (el.dataset.bind.startsWith('ui.')) setPath(W, el.dataset.bind, v); else setPath(W.cfg, el.dataset.bind, v);
+    if (e.type === 'input' && el.tagName === 'SELECT') return;
+    onCfgChange(el.hasAttribute('data-rerender') && e.type === 'change');
+    if (el.dataset.bind === 'model_name') inspectModelSoon();
+  };
+  panel.addEventListener('input', onInput);
+  panel.addEventListener('change', onInput);
+}
+
+function onCfgChange(rerender) {
+  normalise();
+  saveDraft();
+  W.validation = null; W.yaml = null;
+  schedulePlan();
+  if (rerender) drawStep();
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: goal
+// ---------------------------------------------------------------------------
+
+function stepGoal() {
+  const goal = goalOf(W.cfg);
+  const goals = [
+    ['pretrain', 'Pretrain', 'Next-token training on raw text, or the task loss of a vision, detection, VLM or embedding model. Every strategy, including 5D.', 'Solo, DDP, FSDP, 5D'],
+    ['sft', 'Supervised fine-tuning', 'Teach a model to follow instructions or chat. Loss on the assistant turns only.', 'Solo, DDP, FSDP'],
+    ['preference', 'Preference alignment', 'DPO, SimPO or ORPO on chosen / rejected answer pairs. No reward model needed.', 'DPO, SimPO, ORPO'],
+    ['rl', 'Reinforcement learning', 'GRPO with verifiable rewards and PPO with a reward model.', 'Planned'],
+  ];
+  const algo = W.cfg.algorithm.type;
+  const cat = S.catalog.algorithms;
+  const prefAlgo = ['dpo', 'simpo', 'orpo'].includes(algo) ? algo : W.ui.algo;
+  setTimeout(() => {
+    $$('.choice[data-goal]').forEach((b) => { b.onclick = () => setGoal(b.dataset.goal); });
+    const seg = $('[data-seg="algo"]');
+    if (seg) seg.onclick = (e) => { const b = e.target.closest('button'); if (b && !b.disabled) { W.ui.algo = b.dataset.val; setGoal('preference', b.dataset.val); } };
+    $('#tpl-list') && loadTemplates();
+  });
+  return `
+    <section class="step-section">
+      <h3>What do you want to do?</h3>
+      <p>The goal decides the training objective, the dataset format and which strategies are available.</p>
+      <div class="choices">${goals.map(([id, title, text, meta]) => `
+        <button type="button" class="choice" data-goal="${id}" aria-pressed="${goal === id}" ${id === 'rl' ? 'disabled' : ''}>
+          <span class="choice-title">${title}${id === 'rl' ? '<span class="pill">Planned</span>' : ''}</span>
+          <span class="choice-text">${text}</span>
+          <span class="choice-meta">${id === 'rl' ? 'GRPO, PPO' : meta}</span>
+        </button>`).join('')}</div>
+    </section>
+    ${goal === 'preference' ? `<section class="step-section">
+      <h3>Preference method</h3>
+      <p>${esc((cat.find((a) => a.id === prefAlgo) || {}).summary || '')}</p>
+      ${segmented('algo', [['dpo', 'DPO'], ['simpo', 'SimPO'], ['orpo', 'ORPO']], prefAlgo)}
+    </section>` : ''}
+    <section class="step-section">
+      <h3>Or start from a template</h3>
+      <p>Ready-made configs from <code>configs/</code>. Loading one replaces this draft.</p>
+      <div class="choices" id="tpl-list"><div class="skeleton"></div></div>
+    </section>`;
+}
+
+function setGoal(goal, algo) {
+  const c = W.cfg;
+  const prev = c.algorithm.type;
+  const type = goal === 'pretrain' ? 'pretrain' : goal === 'sft' ? 'sft' : (algo || W.ui.algo || 'dpo');
+  c.algorithm.type = type;
+  const info = S.catalog.algorithms.find((a) => a.id === type);
+  if (goal !== 'pretrain') {
+    if (c.model_type !== 'llm') { c.model_type = 'llm'; c.model_name = DEFAULT_MODELS.llm; }
+    if (info && info.example_dataset && (prev === 'pretrain' || goalOf({ algorithm: { type: prev } }) !== goal)) {
+      c.dataset = { name: info.example_dataset.name, subset: null, split: info.example_dataset.split };
+    }
+    if (info && info.beta) c.algorithm.beta = info.beta;
+    if (c.strategy === '5d') c.strategy = c.num_gpus > 1 ? 'fsdp' : 'solo';
+  } else if (prev !== 'pretrain' && c.model_type === 'llm') {
+    c.dataset = clone(DEFAULT_DATA.llm);
+  }
+  if (info && info.lr) c.training.learning_rate = info.lr[methodOf(c) === 'full' ? 'full' : 'lora'];
+  if (type !== prev) c.training.max_length = Math.max(c.training.max_length, goal === 'preference' ? 512 : c.training.max_length);
+  onCfgChange(true);
+}
+
+async function loadTemplates() {
+  const el = $('#tpl-list');
   try {
-    const res = await fetch('/api/queue/status');
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (e) {
-    console.error('Failed to fetch queue status:', e);
-  }
-  return null;
+    const { configs } = await api('/api/configs');
+    const names = configs.filter((n) => n !== 'config');
+    el.innerHTML = names.map((n) => {
+      const nice = n.replace(/_/g, ' ').replace(/\bllm\b/, 'LLM').replace(/\bfsdp\b/, 'FSDP').replace(/\bddp\b/, 'DDP').replace(/\blora\b/, 'LoRA').replace(/\bsft\b/, 'SFT').replace(/\bdpo\b/, 'DPO').replace(/\b5d\b/, '5D').replace(/\bvlm\b/, 'VLM').replace(/\bcpu\b/, 'CPU').replace(/\bmoe\b/, 'MoE');
+      return `<button type="button" class="choice" data-tpl="${esc(n)}"><span class="choice-title">${esc(nice.charAt(0).toUpperCase() + nice.slice(1))}</span><span class="choice-meta">${esc(n)}.yaml</span></button>`;
+    }).join('') || '<p class="faint">No templates in configs/.</p>';
+    $$('[data-tpl]', el).forEach((b) => { b.onclick = () => applyTemplate(b.dataset.tpl); });
+  } catch (e) { el.innerHTML = `<p class="faint">${esc(e.message)}</p>`; }
 }
 
-/**
- * Update GPU availability display
- */
-async function updateGpuAvailability() {
-  const status = await fetchQueueStatus();
-  if (!status) return;
-
-  const el = document.getElementById('gpu-availability');
-  if (el) {
-    const available = status.available_gpus;
-    const total = status.total_gpus;
-    const statusClass = available > 0 ? 'available' : 'busy';
-    el.innerHTML = `<span class="gpu-status-text ${statusClass}">${available} of ${total} GPUs available</span>`;
-  }
-
-  // Update queue indicator
-  updateQueueIndicator(status);
-}
-
-/**
- * Update queue indicator in header
- */
-function updateQueueIndicator(status) {
-  const indicator = document.getElementById('queue-indicator');
-  const text = document.getElementById('queue-text');
-
-  if (!indicator || !text) return;
-
-  if (status.pending_jobs > 0 || status.running_jobs > 0) {
-    indicator.style.display = 'flex';
-    text.textContent = `${status.running_jobs} running, ${status.pending_jobs} queued`;
-  } else {
-    indicator.style.display = 'none';
-  }
-}
-
-/**
- * Submit job to queue instead of direct start
- */
-async function submitJobToQueue() {
-  const cfg = buildConfigFromForm();
-  const strategy = getVal('f-strategy');
-  const gpuCount = parseInt(cfg.num_gpus || 1);
-
+async function applyTemplate(name) {
   try {
-    const res = await fetch('/api/queue/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        config: cfg,
-        gpu_count: gpuCount,
-        priority: 0
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      alert(err.detail || 'Failed to submit job');
-      return null;
-    }
-
-    const data = await res.json();
-    currentJobId = data.job_id;
-
-    if (data.status === 'running') {
-      // Job started immediately
-      isJobQueued = false;
-      showTrainingOverlay(strategy, gpuCount);
-      startTrainingTimer(cfg);
-      switchSideTab('logs');
-      startJobPolling(data.job_id);
-    } else {
-      // Job is queued
-      isJobQueued = true;
-      showQueuedOverlay(data, gpuCount);
-      startJobPolling(data.job_id);
-    }
-
-    return data;
-  } catch (e) {
-    alert('Failed to submit job: ' + e.message);
-    return null;
-  }
+    const t = await api(`/api/configs/${encodeURIComponent(name)}`);
+    W.cfg = deepMerge(defaultConfig(), t.config || {});
+    W.ui.name = name.replace(/_/g, '-');
+    W.ui.target = 'local';
+    toast(`Loaded ${name}.yaml`);
+    onCfgChange(true);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
-/**
- * Show overlay for queued job
- */
-function showQueuedOverlay(jobData, gpuCount) {
-  const overlay = document.getElementById('training-overlay');
-  const animation = document.getElementById('training-animation');
-  const title = document.getElementById('training-title');
-  const subtitle = document.getElementById('training-subtitle');
-  const queueBox = document.getElementById('queue-status-box');
-  const positionEl = document.getElementById('queue-position-value');
-  const waitEl = document.getElementById('queue-wait-value');
-  const btnStop = document.getElementById('btn-stop-training');
-  const btnCancel = document.getElementById('btn-cancel-queued');
-  const progressContainer = document.querySelector('.training-progress');
-  const timerContainer = document.getElementById('training-timer');
+// ---------------------------------------------------------------------------
+// Step 2: model
+// ---------------------------------------------------------------------------
 
-  if (!overlay) return;
-
-  // Show queue animation
-  if (animation) {
-    animation.innerHTML = `
-      <div class="queue-animation">
-        <div class="queue-icon-large">&#128203;</div>
-        <div class="queue-dots">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
+function stepModel() {
+  const c = W.cfg;
+  const goal = goalOf(c);
+  const types = goal === 'pretrain' ? MODEL_TYPES : MODEL_TYPES.filter((t) => t.id === 'llm');
+  const method = methodOf(c);
+  const ct = c.custom_transformer_args;
+  setTimeout(() => {
+    $$('.choice[data-mtype]').forEach((b) => { b.onclick = () => {
+      const t = b.dataset.mtype;
+      if (t === c.model_type) return;
+      c.model_type = t;
+      if (DEFAULT_MODELS[t]) c.model_name = DEFAULT_MODELS[t];
+      c.dataset = clone(DEFAULT_DATA[t] || DEFAULT_DATA.llm);
+      if (t === 'custom_transformer') { c.training.learning_rate = 3e-4; }
+      onCfgChange(true);
+    }; });
+    const seg = $('[data-seg="method"]');
+    if (seg) seg.onclick = (e) => { const b = e.target.closest('button'); if (b && !b.disabled) {
+      setMethod(c, b.dataset.val);
+      const info = S.catalog.algorithms.find((a) => a.id === c.algorithm.type);
+      if (info && info.lr) c.training.learning_rate = info.lr[b.dataset.val === 'full' ? 'full' : 'lora'];
+      onCfgChange(true);
+    } };
+  });
+  const presets = S.catalog.models;
+  return `
+    <section class="step-section">
+      <h3>Model type</h3>
+      <p>${goal === 'pretrain' ? 'Each type has its own data format and training loss.' : 'Post-training works on causal language models.'}</p>
+      <div class="choices">${types.map((t) => `<button type="button" class="choice" data-mtype="${t.id}" aria-pressed="${c.model_type === t.id}">
+        <span class="choice-title">${t.label}</span><span class="choice-text">${t.hint}</span></button>`).join('')}</div>
+    </section>
+    ${c.model_type === 'custom_transformer' ? `
+    <section class="step-section">
+      <h3>Architecture</h3>
+      <p>Built from random weights. Grouped-query attention and experts apply under strategy 5D.</p>
+      <div class="grid">
+        ${field('Layers', 'custom_transformer_args.n_layers', { type: 'int', min: 1 })}
+        ${field('Hidden size', 'custom_transformer_args.dim', { type: 'int', min: 8 })}
+        ${field('Attention heads', 'custom_transformer_args.n_heads', { type: 'int', min: 1, hint: 'Must divide the hidden size' })}
+        ${field('Key/value heads', 'custom_transformer_args.n_kv_heads', { type: 'int', min: 0, hint: '0 = same as heads (5D only)' })}
+        ${field('Vocabulary', 'custom_transformer_args.vocab_size', { type: 'int', min: 2 })}
+        ${field('Sequence length', 'custom_transformer_args.max_seq_len', { type: 'int', min: 8 })}
+        ${field('Experts', 'custom_transformer_args.num_experts', { type: 'int', min: 0, hint: '0 = dense; MoE runs under 5D' })}
+        ${field('Experts per token', 'custom_transformer_args.top_k', { type: 'int', min: 1 })}
+        ${field('Dropout', 'custom_transformer_args.dropout_p', { type: 'float' })}
+      </div>
+      <div class="model-card" style="margin-top:14px" id="model-card"></div>
+    </section>` : `
+    <section class="step-section">
+      <h3>Checkpoint</h3>
+      <p>Any Hugging Face model id or a local path. Gated models (Llama, Gemma) need <code>HF_TOKEN</code> in <code>.env</code>.</p>
+      <div class="grid two">
+        <div class="field span-all"><label for="f-model_name">Model</label>
+          <input id="f-model_name" type="text" list="model-presets" data-bind="model_name" data-type="str" value="${esc(c.model_name)}" placeholder="org/model-name" autocomplete="off" spellcheck="false">
+          <datalist id="model-presets">${presets.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}${m.five_d_ready ? ', 5D ready' : ''}</option>`).join('')}</datalist>
         </div>
       </div>
-    `;
+      <div class="model-card" style="margin-top:14px" id="model-card"><div class="skeleton"></div></div>
+    </section>`}
+    <section class="step-section">
+      <h3>What to train</h3>
+      <p>Full fine-tuning updates every weight. LoRA trains small adapters on a frozen base; QLoRA also stores the base in 4 or 8 bits.</p>
+      ${segmented('method', [
+        ['full', 'Full fine-tune'],
+        ['lora', 'LoRA', !PEFT_TYPES.has(c.model_type), 'Not available for this model type'],
+        ['qlora', 'QLoRA', !QLORA_TYPES.has(c.model_type), 'Available for language and vision-language models'],
+      ], method)}
+      ${method !== 'full' ? `<div class="grid" style="margin-top:16px">
+        ${field('Rank (r)', 'peft.r', { type: 'int', min: 1, hint: '8–64 typical' })}
+        ${field('Alpha', 'peft.alpha', { type: 'int', min: 1, hint: 'Usually 2 × r' })}
+        ${field('Dropout', 'peft.dropout', { type: 'float' })}
+        ${field('Target modules', 'peft.target_modules', { hint: 'all-linear, or e.g. q_proj,v_proj' })}
+        ${method === 'qlora' ? select('Base precision', 'quantization.bits', [['4', '4-bit NF4'], ['8', '8-bit LLM.int8()']]) : ''}
+      </div>` : ''}
+    </section>`;
+}
+
+let inspectTimer = null;
+function inspectModelSoon() {
+  clearTimeout(inspectTimer);
+  inspectTimer = setTimeout(inspectModel, 450);
+}
+async function inspectModel() {
+  const card = $('#model-card');
+  const c = W.cfg;
+  if (c.model_type === 'custom_transformer') {
+    if (card) card.innerHTML = W.plan ? modelCard(W.plan.model) : '';
+    return;
   }
-
-  if (title) title.textContent = 'Job Queued';
-  if (subtitle) subtitle.textContent = `Waiting for ${gpuCount} GPU${gpuCount > 1 ? 's' : ''} to become available`;
-
-  // Show queue status box
-  if (queueBox) queueBox.style.display = 'flex';
-  if (positionEl) positionEl.textContent = `#${jobData.queue_position || '?'}`;
-  if (waitEl) waitEl.textContent = formatTime(jobData.estimated_wait || 0);
-
-  // Hide progress and timer for queued jobs
-  if (progressContainer) progressContainer.style.display = 'none';
-  if (timerContainer) timerContainer.style.display = 'none';
-
-  // Show cancel button instead of stop
-  if (btnStop) btnStop.style.display = 'none';
-  if (btnCancel) btnCancel.style.display = 'inline-block';
-
-  renderOverlayLogs([
-    `Job queued for ${gpuCount} GPU${gpuCount > 1 ? 's' : ''}`,
-    `Queue position: #${jobData.queue_position || '?'}`,
-    `Estimated wait: ${formatTime(jobData.estimated_wait || 0)}`,
-  ]);
-  overlay.classList.add('active');
-}
-
-/**
- * Transition from queued to running state
- */
-function transitionToRunning(jobData) {
-  isJobQueued = false;
-
-  const animation = document.getElementById('training-animation');
-  const title = document.getElementById('training-title');
-  const subtitle = document.getElementById('training-subtitle');
-  const queueBox = document.getElementById('queue-status-box');
-  const btnStop = document.getElementById('btn-stop-training');
-  const btnCancel = document.getElementById('btn-cancel-queued');
-  const progressContainer = document.querySelector('.training-progress');
-  const timerContainer = document.getElementById('training-timer');
-
-  // Update animation
-  const gpuCount = jobData.gpu_indices?.length || 1;
-  if (animation) {
-    if (gpuCount > 1) {
-      animation.innerHTML = `
-        <div class="gpu-animation">
-          ${Array.from({length: gpuCount}, (_, i) => `
-            <div class="gpu-box" data-id="${i}">
-              <div class="pulse"></div>
-            </div>
-          `).join('')}
-        </div>
-        <div class="connection-lines">
-          ${Array.from({length: gpuCount - 1}, () => '<div class="connection-line"></div>').join('')}
-        </div>
-      `;
-    } else {
-      animation.innerHTML = '<div class="spinner"></div>';
-    }
+  const name = c.model_name;
+  if (!name) { if (card) card.innerHTML = '<span class="faint">Enter a model id.</span>'; return; }
+  if (W.specFor !== name) {
+    try { W.spec = await api(`/api/models/inspect?name=${encodeURIComponent(name)}&model_type=${encodeURIComponent(c.model_type)}`); W.specFor = name; }
+    catch (e) { if (card) card.innerHTML = `<span class="faint">${esc(e.message)}</span>`; return; }
   }
-
-  if (title) title.textContent = 'Training in Progress...';
-  if (subtitle) subtitle.textContent = `Running on ${gpuCount} GPU${gpuCount > 1 ? 's' : ''}`;
-
-  // Hide queue status
-  if (queueBox) queueBox.style.display = 'none';
-
-  // Show progress and timer
-  if (progressContainer) progressContainer.style.display = 'block';
-  if (timerContainer) timerContainer.style.display = 'block';
-
-  // Show stop button
-  if (btnStop) btnStop.style.display = 'inline-block';
-  if (btnCancel) btnCancel.style.display = 'none';
-
-  // Start timer
-  startTrainingTimer(jobData.config || {});
+  if (card && W.cfg.model_name === name) card.innerHTML = modelCard(W.spec);
 }
-
-/**
- * Cancel a queued job
- */
-async function cancelQueuedJob() {
-  if (!currentJobId) return;
-
-  try {
-    const res = await fetch(`/api/queue/jobs/${currentJobId}/cancel`, {
-      method: 'POST'
-    });
-
-    if (res.ok) {
-      hideTrainingOverlay();
-      stopJobPolling();
-      currentJobId = null;
-      isJobQueued = false;
-    } else {
-      const err = await res.json();
-      alert(err.detail || 'Failed to cancel job');
-    }
-  } catch (e) {
-    alert('Failed to cancel job: ' + e.message);
-  }
-}
-
-/**
- * Start polling for job status
- */
-function startJobPolling(jobId) {
-  if (queuePollInterval) clearInterval(queuePollInterval);
-  queuePollInterval = setInterval(() => pollJobStatus(jobId), 2000);
-  pollJobStatus(jobId);
-}
-
-/**
- * Stop job polling
- */
-function stopJobPolling() {
-  if (queuePollInterval) {
-    clearInterval(queuePollInterval);
-    queuePollInterval = null;
-  }
-}
-
-/**
- * Poll job status from queue
- */
-async function pollJobStatus(jobId) {
-  try {
-    const res = await fetch(`/api/queue/jobs/${jobId}`);
-    if (!res.ok) {
-      stopJobPolling();
-      return;
-    }
-
-    const job = await res.json();
-    updateStatusBadge(job.status);
-
-    if (job.status === 'pending') {
-      // Update queue position
-      const positionEl = document.getElementById('queue-position-value');
-      const waitEl = document.getElementById('queue-wait-value');
-      if (positionEl) positionEl.textContent = `#${job.queue_position || '?'}`;
-      if (waitEl) waitEl.textContent = formatTime(job.estimated_wait || 0);
-    } else if (job.status === 'running') {
-      // Transition to running state if was queued
-      if (isJobQueued) {
-        transitionToRunning(job);
-        switchSideTab('logs');
-      }
-      // Update logs and progress
-      renderLogs(job.logs || []);
-      updateTrainingProgress(job.status, job.logs || []);
-    } else if (job.status === 'completed') {
-      hideTrainingOverlay();
-      stopTrainingTimer();
-      stopJobPolling();
-      renderLogs(job.logs || []);
-      showTrainingSuccess(job.logs || []);
-      setTimeout(() => updateStatusBadge('idle'), 3000);
-    } else if (job.status === 'failed' || job.status === 'cancelled') {
-      hideTrainingOverlay();
-      stopTrainingTimer();
-      stopJobPolling();
-      renderLogs(job.logs || []);
-      if (job.error_message) {
-        alert('Job ' + job.status + ': ' + job.error_message);
-      }
-      setTimeout(() => updateStatusBadge('idle'), 3000);
-    }
-  } catch (e) {
-    console.error('Failed to poll job status:', e);
-  }
-}
-
-/**
- * Handle strategy change - adjust GPU count options
- */
-function onStrategyChange() {
-  const strategy = getVal('f-strategy');
-  const gpuInput = document.getElementById('f-gpu-count');
-
-  syncGpuOptionsWithStrategy();
-
-  // Solo always forces 1 GPU. DDP and FSDP leave the count unchanged so the user stays in control.
-  if (strategy === 'none') {
-    if (gpuInput) gpuInput.value = '1';
-  }
-
-  // Solo needs no launch mode — hide it (and SLURM sub-section)
-  const launchModeGroup = document.getElementById('f-launch-mode')?.closest('.form-group');
-  const isSolo = strategy === 'none';
-  if (launchModeGroup) launchModeGroup.style.display = isSolo ? 'none' : '';
-  if (isSolo) {
-    const slurmSection = document.getElementById('slurm-section');
-    if (slurmSection) slurmSection.style.display = 'none';
-  } else {
-    onLaunchModeChange();
-  }
-
-  // Refresh availability display
-  updateGpuAvailability();
-  checkStrategyGpuCompatibility();
-}
-
-function onLaunchModeChange() {
-  const mode = getVal('f-launch-mode') || 'torchrun';
-  const slurmSection = document.getElementById('slurm-section');
-  if (slurmSection) slurmSection.style.display = mode === 'slurm' ? '' : 'none';
-}
-
-/**
- * Handle GPU count change
- */
-function onGpuCountChange() {
-  syncGpuOptionsWithStrategy();
-  updateGpuAvailability();
-  checkStrategyGpuCompatibility();
-}
-
-function classifyLogLine(line) {
-  if (/error|Error|ERROR|Traceback|Exception|failed|FAILED/i.test(line)) return 'log-line-error';
-  if (/✅|success|completed|Training Complete|Saved/i.test(line)) return 'log-line-success';
-  if (/⚠️|warning|Warning/i.test(line)) return 'log-line-warning';
-  if (/rank=|local_rank=|world_size=|CUDA_VISIBLE_DEVICES/i.test(line)) return 'log-line-rank';
-  if (/Step \d+\/\d+|Optimizer step|ETA:|\| Loss:/i.test(line)) return 'log-line-progress';
-  if (/loss|Loss/i.test(line)) return 'log-line-loss';
-  if (/^[=\-]{5,}|Starting|Loading|OMNI-Train|Stage \d+\/\d+|Launch Summary|Training Configuration|Distributed/i.test(line)) return 'log-line-info';
-  return 'log-line';
-}
-
-function getLatestMeaningfulLog(logs) {
-  if (!Array.isArray(logs) || logs.length === 0) return '';
-
-  for (let i = logs.length - 1; i >= 0; i--) {
-    const line = (logs[i] || '').trim();
-    if (!line) continue;
-    if (/^[=\-]{5,}$/.test(line)) continue;
-    return logs[i];
-  }
-
-  return logs[logs.length - 1] || '';
-}
-
-function renderOverlayLogs(lines) {
-  const el = document.getElementById('training-live-log');
-  const metaEl = document.getElementById('training-log-meta');
-  const hintEl = document.getElementById('training-live-hint');
-  if (!el) return;
-
-  const safeLines = Array.isArray(lines) ? lines : [];
-  const wasNearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 24;
-
-  if (safeLines.length === 0) {
-    el.innerHTML = '<div class="training-live-log-empty">Waiting for training output...</div>';
-  } else {
-    el.innerHTML = safeLines.map(line => {
-      const cls = `training-live-log-line ${classifyLogLine(line)}`;
-      return `<div class="${cls}">${escapeHtml(line)}</div>`;
-    }).join('');
-  }
-
-  if (metaEl) {
-    metaEl.textContent = `${safeLines.length} line${safeLines.length === 1 ? '' : 's'} streamed`;
-  }
-
-  if (hintEl) {
-    hintEl.textContent = document.getElementById('side-logs')
-      ? 'Full output is also available in the Logs tab.'
-      : 'Latest training output appears here in real time.';
-  }
-
-  if (wasNearBottom) {
-    el.scrollTop = el.scrollHeight;
-  }
-}
-
-function updateTrainingProgress(status, logs) {
-  const title = document.getElementById('training-title');
-  const subtitle = document.getElementById('training-subtitle');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-  const overlay = document.getElementById('training-overlay');
-  const safeLogs = Array.isArray(logs) ? logs : [];
-
-  renderOverlayLogs(safeLogs);
-
-  if (status === 'running') {
-    // Ensure overlay is visible when training is running
-    if (overlay && !overlay.classList.contains('active')) {
-      showTrainingOverlay('none');
-    }
-    if (title) title.textContent = 'Training in Progress...';
-
-    const lastLog = getLatestMeaningfulLog(safeLogs);
-    if (lastLog && subtitle) {
-      subtitle.textContent = lastLog.substring(0, 140);
-    }
-
-    const recentLog = [...safeLogs].reverse().find(line =>
-      /Stage \d+\/\d+|Step \d+\/\d+|Optimizer step \d+|Epoch \d+\/\d+/.test(line || '')
-    ) || lastLog;
-
-    const stepMatch = recentLog.match(/Step (\d+)\/(\d+)/i);
-    const stageMatch = recentLog.match(/Stage (\d+)\/(\d+)/i);
-    const epochMatch = recentLog.match(/Epoch (\d+)\/(\d+)/i);
-    const optMatch = recentLog.match(/Optimizer step (\d+)/i);
-
-    if (stepMatch) {
-      const current = parseInt(stepMatch[1]);
-      const total = parseInt(stepMatch[2]);
-      const progress = total > 0 ? (current / total) * 100 : 0;
-      if (progressFill) progressFill.style.width = progress + '%';
-      if (progressText) progressText.textContent = `Step ${current} of ${total}`;
-    } else if (stageMatch) {
-      const current = parseInt(stageMatch[1]);
-      const total = parseInt(stageMatch[2]);
-      const progress = total > 0 ? (current / total) * 100 : 0;
-      if (progressFill) progressFill.style.width = progress + '%';
-      if (progressText) progressText.textContent = `Stage ${current} of ${total}`;
-    } else if (epochMatch) {
-      const current = parseInt(epochMatch[1]);
-      const total = parseInt(epochMatch[2]);
-      const progress = total > 0 ? (current / total) * 100 : 0;
-      if (progressFill) progressFill.style.width = progress + '%';
-      if (progressText) progressText.textContent = `Epoch ${current} of ${total}`;
-    } else if (optMatch && progressText) {
-      progressText.textContent = `Optimizer step ${optMatch[1]}`;
-    }
-
-    // Update timer from training logs
-    updateTimerFromLogs(safeLogs);
-  } else if (status === 'finished') {
-    hideTrainingOverlay();
-    stopTrainingTimer();
-    startedFromYaml = false;
-  } else if (status === 'error' || status === 'stopped') {
-    hideTrainingOverlay();
-    stopTrainingTimer();
-  }
-}
-
-// =========================================================================
-// Polling
-// =========================================================================
-function startPolling() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(pollStatus, 1000);
-  pollStatus();
-}
-
-async function pollStatus() {
-  try {
-    const res = await fetch('/api/train/status');
-    const data = await res.json();
-
-    let displayStatus = data.status;
-    if (!pollInterval && data.status !== 'running') {
-      displayStatus = 'idle';
-    }
-
-    updateStatusBadge(displayStatus);
-    updateButtons(data.status);
-    renderLogs(data.logs);
-    updateTrainingProgress(data.status, data.logs);
-
-    if (data.status !== 'running' && pollInterval) {
-      setTimeout(() => {
-        if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-        updateStatusBadge('idle');
-      }, 3000);
-    }
-  } catch (e) {
-    updateStatusBadge('idle');
-  }
-}
-
-function updateStatusBadge(status) {
-  const el = document.getElementById('status-badge');
-  if (el) {
-    el.textContent = status.toUpperCase();
-    el.className = 'status-badge status-' + status;
-  }
-}
-
-function updateButtons(status) {
-  const start = document.getElementById('btn-start-main');
-  const stop = document.getElementById('btn-stop-main');
-  if (status === 'running') {
-    if (start) start.style.display = 'none';
-    if (stop) stop.style.display = 'flex';
-  } else {
-    if (start) start.style.display = 'flex';
-    if (stop) stop.style.display = 'none';
-  }
-}
-
-function renderLogs(lines) {
-  const el = document.getElementById('log-output');
-  const autoscrollEl = document.getElementById('autoscroll');
-  if (!el) return;
-
-  const safeLines = Array.isArray(lines) ? lines : [];
-  const autoScroll = autoscrollEl ? autoscrollEl.checked : true;
-
-  el.innerHTML = safeLines.map(line => {
-    const cls = classifyLogLine(line);
-    return `<div class="${cls}">${escapeHtml(line)}</div>`;
-  }).join('');
-
-  const countEl = document.getElementById('log-count');
-  if (countEl) countEl.textContent = safeLines.length + ' lines';
-
-  if (autoScroll) {
-    el.scrollTop = el.scrollHeight;
-  }
-}
-
-// =========================================================================
-// Helpers
-// =========================================================================
-function setVal(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
-function getVal(id) { const el = document.getElementById(id); return el ? el.value : ''; }
-function toggle(id, show) { const el = document.getElementById(id); if (el) el.style.display = show ? '' : 'none'; }
-function escapeHtml(t) { return String(t ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-/**
- * Toggle the live log panel between normal and expanded height.
- */
-function toggleLogExpand(btn) {
-  const logEl = document.getElementById('training-live-log');
-  if (!logEl) return;
-  const isExpanded = logEl.classList.toggle('expanded');
-  if (btn) btn.textContent = isExpanded ? '⤡' : '⤢';
-  if (isExpanded) logEl.scrollTop = logEl.scrollHeight;
-}
-
-// =========================================================================
-// Drag and Drop
-// =========================================================================
-function setupDragDrop(area, inputId, callback) {
-  if (!area) return;
-
-  area.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    area.classList.add('dragover');
-  });
-
-  area.addEventListener('dragleave', () => {
-    area.classList.remove('dragover');
-  });
-
-  area.addEventListener('drop', (e) => {
-    e.preventDefault();
-    area.classList.remove('dragover');
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const input = document.getElementById(inputId);
-      if (input) {
-        input.files = files;
-        callback(input);
-      }
-    }
-  });
-}
-
-// =========================================================================
-// Page Initialization
-// =========================================================================
-async function initConfigPage() {
-  loadFormState();
-  loadTemplates();
-
-  const uploadArea = document.getElementById('upload-area');
-  if (uploadArea) {
-    setupDragDrop(uploadArea, 'f-model-file', onModelFileSelect);
-  }
-
-  const dataUploadArea = document.getElementById('data-upload-area');
-  if (dataUploadArea) {
-    setupDragDrop(dataUploadArea, 'f-data-file', onDataFileSelect);
-  }
-
-  // Check for selected template from landing page
-  const templateData = localStorage.getItem('selected_template');
-  if (templateData) {
-    try {
-      const template = JSON.parse(templateData);
-      localStorage.removeItem('selected_template');
-
-      // Set pending selection so sidebar highlights it after rendering
-      pendingTemplateSelection = template.name;
-
-      if (template.isExtra) {
-        setVal('f-model-type', template.type);
-        onModelTypeChange();
-        applyExtraTemplate(template.extra);
-      } else {
-        fetch(`/api/configs/${template.name}`)
-          .then(res => res.json())
-          .then(data => {
-            currentConfig = data.config;
-            applyConfigToForm(data.config);
-          })
-          .catch(e => console.error('Failed to load template:', e));
-      }
-    } catch (e) {
-      console.error('Failed to parse template data:', e);
-    }
-  }
-
-  // Check URL for tab parameter
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('tab') === 'logs') {
-    switchSideTab('logs');
-    startPolling();
-
-    // Check if training is already running and show overlay
-    try {
-      const res = await fetch('/api/train/status');
-      const data = await res.json();
-      if (data.status === 'running') {
-        // Determine strategy from config if available
-        const strategy = data.config?.distributed?.strategy || 'none';
-        showTrainingOverlay(strategy);
-        startTrainingTimer(data.config || {});
-        renderLogs(data.logs || []);
-      }
-    } catch (e) {
-      console.error('Failed to check training status:', e);
-    }
-  }
-
-  // Initialize GPU availability and queue status
-  onStrategyChange();
-  updateGpuAvailability();
-  // Refresh availability every 10 seconds
-  setInterval(updateGpuAvailability, 10000);
-
-  pollStatus();
-
-  // Keyboard shortcut: Ctrl/Cmd+Enter → Next (go to YAML editor)
-  document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      const btn = document.getElementById('btn-review-yaml');
-      if (btn && !btn.disabled) btn.click();
-    }
-  });
-}
-
-// Activate non-native clickable elements (role="button") via keyboard, and
-// let Escape dismiss any open lightweight modal. Runs on every page.
-function setupGlobalA11yKeys() {
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-      const el = document.activeElement;
-      if (el && el.getAttribute('role') === 'button' && !el.disabled) {
-        e.preventDefault();
-        el.click();
-      }
-      return;
-    }
-    if (e.key === 'Escape') {
-      // Close visible overlay modals (message/template). The training overlay
-      // uses a different class and is intentionally left untouched.
-      const open = document.querySelector('.modal-overlay.active');
-      if (open) open.classList.remove('active');
-    }
-  });
-}
-
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
-  loadTheme();
-  setupGlobalA11yKeys();
-
-  // Reset FSDP check result when any config field that affects VRAM changes
-  const fsdpResetIds = [
-    'f-model-name', 'f-model-url', 'f-model-path',
-    'f-finetune-mode', 'f-lora-r', 'f-lora-alpha',
-    'f-max-seq-len', 'f-batch-size', 'f-mixed-precision',
-    'f-quantize', 'f-quant-bits', 'f-model-source',
+function modelCard(m) {
+  const kv = [
+    ['Parameters', fmt.params(m.params)], ['Layers', m.layers], ['Hidden', fmt.int(m.hidden)],
+    ['Heads / KV', `${m.heads} / ${m.kv_heads}`], ['Vocabulary', fmt.int(m.vocab)],
+    ['Architecture', m.arch || 'unknown'], ['5D support', m.five_d_ready ? 'yes' : 'no'],
+    ['Source', m.source === 'hf-config' ? 'config.json' : m.source === 'estimate' ? 'guessed from name' : m.source],
   ];
-  fsdpResetIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('change', resetFsdpCheck);
-    if (el && (el.tagName === 'INPUT')) el.addEventListener('input', resetFsdpCheck);
+  if (m.num_experts) kv.splice(1, 0, ['Active / token', fmt.params(m.active_params)], ['Experts', `${m.num_experts}, top ${m.top_k}`]);
+  return kv.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: data
+// ---------------------------------------------------------------------------
+
+function stepData() {
+  const c = W.cfg;
+  const goal = goalOf(c);
+  const hint = goal === 'sft' ? DATA_HINT.sft : goal === 'preference' ? DATA_HINT.preference : DATA_HINT[c.model_type];
+  const info = S.catalog.algorithms.find((a) => a.id === c.algorithm.type);
+  setTimeout(() => {
+    const ex = $('#use-example');
+    if (ex) ex.onclick = () => { c.dataset = { name: info.example_dataset.name, subset: null, split: info.example_dataset.split }; onCfgChange(true); };
   });
+  return `
+    <section class="step-section">
+      <h3>Dataset</h3>
+      <p>Expected columns: ${esc(hint)}</p>
+      <div class="grid">
+        ${field('Dataset', 'dataset.name', { placeholder: 'org/dataset or ./data.jsonl', cls: 'span-all' })}
+        ${field('Subset', 'dataset.subset', { placeholder: 'optional, e.g. wikitext-2-raw-v1' })}
+        ${field('Split', 'dataset.split', { placeholder: 'train', hint: 'Slice for quick runs: train[:2000], train[:5%]' })}
+      </div>
+      ${info && info.example_dataset && c.dataset.name !== info.example_dataset.name ? `<div class="btn-row" style="margin-top:12px"><button class="btn small" id="use-example">Use ${esc(info.example_dataset.name)}</button></div>` : ''}
+    </section>
+    ${goal === 'sft' ? `<section class="step-section"><h3>Loss mask</h3><p>Usually the model should learn to answer, not to repeat the prompt.</p>
+      ${check('Train on the answer tokens only', 'algorithm.completion_only', 'Off = also learn the user and system turns')}</section>` : ''}
+    ${goal === 'preference' ? `<section class="step-section"><h3>Lengths</h3><p>Prompts longer than the limit are cut from the left; chosen and rejected answers share the rest of the sequence.</p>
+      <div class="grid">${field('Max prompt tokens', 'algorithm.max_prompt_length', { type: 'int', min: 1 })}${field('Max sequence tokens', 'training.max_length', { type: 'int', min: 16 })}</div></section>` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: compute
+// ---------------------------------------------------------------------------
+
+function stepCompute() {
+  const c = W.cfg;
+  const avail = strategyAvailability();
+  const local = W.local;
+  const isSlurm = W.ui.target === 'slurm';
+  const names = { solo: 'Single GPU', ddp: 'DDP', fsdp: 'FSDP', '5d': '5D parallel' };
+  const desc = {
+    solo: 'One process, one GPU.',
+    ddp: 'A full copy on every GPU; gradients are averaged. Scales throughput.',
+    fsdp: 'Weights, gradients and optimizer states sharded across GPUs. For models that do not fit on one.',
+    '5d': 'Combine data, tensor, sequence, context, pipeline and expert parallelism for very large models and long sequences.',
+  };
+  setTimeout(() => {
+    $$('.choice[data-strategy]').forEach((b) => { b.onclick = () => {
+      c.strategy = b.dataset.strategy;
+      if (c.strategy !== 'solo' && c.num_gpus < 2 && !isSlurm) c.num_gpus = Math.max(1, Math.min(2, local.gpus_per_node));
+      onCfgChange(true);
+    }; });
+    const seg = $('[data-seg="target"]');
+    seg.onclick = (e) => { const b = e.target.closest('button'); if (b) { W.ui.target = b.dataset.val; if (b.dataset.val === 'local') c.num_gpus = Math.min(c.num_gpus, local.gpus_per_node); onCfgChange(true); } };
+  });
+  const p = c.parallelism;
+  const five = c.strategy === '5d' ? fiveDErrors(c) : null;
+  const gpuOpts = S.catalog.gpus.map((g) => [g.id, `${g.name}`]);
+  return `
+    <section class="step-section">
+      <h3>Where it runs</h3>
+      <p>${local.detected ? `This machine has ${local.gpus_per_node} × ${esc(local.gpu_name)} (${fmt.gb(local.gpu_mem_gb)}).` : 'No CUDA GPU was detected on this machine.'} Runs on this machine go through the job queue.</p>
+      ${segmented('target', [['local', 'This machine'], ['slurm', 'SLURM cluster']], W.ui.target)}
+      ${isSlurm ? `<div class="grid" style="margin-top:16px">
+        <div class="field"><label for="f-ui-slurm-gpu">GPU type</label><select id="f-ui-slurm-gpu" data-bind="ui.slurm.gpu" data-type="str" data-rerender>
+          ${gpuOpts.map(([v, t]) => `<option value="${v}" ${v === W.ui.slurm.gpu ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+        <div class="field"><label for="f-ui-nodes">Nodes</label><input id="f-ui-nodes" type="number" min="1" data-bind="ui.slurm.nodes" data-type="int" value="${W.ui.slurm.nodes}" data-rerender></div>
+        <div class="field"><label for="f-ui-gpn">GPUs per node</label><input id="f-ui-gpn" type="number" min="1" data-bind="ui.slurm.gpus_per_node" data-type="int" value="${W.ui.slurm.gpus_per_node}" data-rerender></div>
+        <div class="field"><label for="f-ui-part">Partition</label><input id="f-ui-part" type="text" data-bind="ui.slurm.partition" data-type="str" value="${esc(W.ui.slurm.partition)}"></div>
+        <div class="field"><label for="f-ui-time">Time limit</label><input id="f-ui-time" type="text" data-bind="ui.slurm.time" data-type="str" value="${esc(W.ui.slurm.time)}" placeholder="HH:MM:SS"></div>
+      </div>` : ''}
+    </section>
+    <section class="step-section">
+      <h3>Strategy</h3>
+      <p>Not sure? The plan on the right recommends one for this model and hardware.</p>
+      <div class="choices">${['solo', 'ddp', 'fsdp', '5d'].map((s) => `
+        <button type="button" class="choice" data-strategy="${s}" aria-pressed="${c.strategy === s}" ${avail[s] ? `disabled title="${esc(avail[s])}"` : ''}>
+          <span class="choice-title">${names[s]}</span><span class="choice-text">${desc[s]}</span>
+          ${avail[s] ? `<span class="choice-meta">${esc(avail[s])}</span>` : ''}
+        </button>`).join('')}</div>
+      <div class="grid" style="margin-top:16px">
+        ${c.strategy !== 'solo' ? (isSlurm
+          ? `<div class="field"><span class="label">GPUs</span><div class="v num" style="padding-top:6px">${c.num_gpus} (${W.ui.slurm.nodes} × ${W.ui.slurm.gpus_per_node})</div></div>`
+          : field('GPUs', 'num_gpus', { type: 'int', min: 1, hint: `Up to ${local.gpus_per_node} on this machine`, rerender: true })) : ''}
+        ${check('Mixed precision (bf16)', 'dist_parameters.mixed_precision', 'fp32 weights, bf16 compute')}
+      </div>
+    </section>
+    ${c.strategy === '5d' ? `
+    <section class="step-section">
+      <h3>5D layout</h3>
+      <p>DP × TP × PP × CP must equal the GPU count. TP splits each layer (keep it inside a node), PP splits the layer stack, CP splits the sequence, EP spreads MoE experts over DP ranks.</p>
+      <div class="grid">
+        ${select('Data parallel (DP)', 'parallelism.dp', [['auto', `auto (${five.dp || '?'})`], ...[1, 2, 4, 8, 16, 32, 64].map((v) => [String(v), String(v)])], { rerender: true })}
+        ${field('Tensor parallel (TP)', 'parallelism.tp', { type: 'int', min: 1, rerender: true })}
+        ${field('Pipeline stages (PP)', 'parallelism.pp', { type: 'int', min: 1, rerender: true })}
+        ${field('Context parallel (CP)', 'parallelism.cp', { type: 'int', min: 1, rerender: true })}
+        ${field('Expert parallel (EP)', 'parallelism.ep', { type: 'int', min: 1, rerender: true })}
+        ${field('Micro-batches', 'parallelism.micro_batches', { type: 'int', min: 1, hint: 'Global batch = batch × micro-batches × DP', rerender: true })}
+        ${select('Pipeline schedule', 'parallelism.pp_schedule', [['1f1b', '1F1B (less memory)'], ['afab', 'All-forward-all-backward']])}
+      </div>
+      <div class="grid" style="margin-top:14px">
+        ${check('Sequence parallel (SP)', 'parallelism.sp', 'Also split norms and dropout over TP ranks', { rerender: true })}
+        ${check('ZeRO-1', 'parallelism.zero1', 'Shard AdamW states over DP ranks', { rerender: true })}
+      </div>
+      ${five.errs.length ? `<div class="notice error" style="margin-top:14px"><div>${five.errs.map(esc).join('<br>')}</div></div>` : ''}
+      ${five.warns.length ? `<div class="notice warn" style="margin-top:14px"><div>${five.warns.map(esc).join('<br>')}</div></div>` : ''}
+      ${!five.errs.length ? `<div style="margin-top:16px">${rankGrid({ ...p, dp: p.dp === 'auto' ? 'auto' : +p.dp }, +c.num_gpus, isSlurm ? +W.ui.slurm.gpus_per_node : Math.max(1, local.gpus_per_node))}</div>` : ''}
+    </section>` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// Step 5: training
+// ---------------------------------------------------------------------------
+
+function stepTraining() {
+  const c = W.cfg;
+  const a = c.algorithm.type;
+  const pref = ['dpo', 'simpo', 'orpo'].includes(a);
+  const betaHint = { dpo: 'KL strength against the reference; 0.1 typical', simpo: 'Reward scale; 2.0 typical', orpo: 'Weight λ of the odds-ratio term; 0.1 typical' }[a];
+  return `
+    <section class="step-section">
+      <h3>Optimisation</h3>
+      <p>${pref ? `${ALGO_LABEL[a]} wants a lower learning rate than SFT: about 1e-5 to 1e-4 with LoRA, 5e-7 to 5e-6 for a full fine-tune.` : 'AdamW with linear warmup, then the chosen schedule.'}</p>
+      <div class="grid">
+        ${field('Epochs', 'training.epochs', { type: 'int', min: 1 })}
+        ${field(pref ? 'Pairs per GPU' : 'Batch per GPU', 'training.batch_size', { type: 'int', min: 1, hint: pref ? 'Each pair runs chosen + rejected' : '' })}
+        ${c.model_type === 'custom_transformer' || pref ? '' : field('Max sequence tokens', 'training.max_length', { type: 'int', min: 8 })}
+        ${field('Learning rate', 'training.learning_rate', { type: 'float' })}
+        ${select('Schedule', 'training.lr_scheduler', [['cosine', 'Cosine'], ['linear', 'Linear'], ['constant', 'Constant']])}
+        ${field('Warmup steps', 'training.warmup_steps', { type: 'int', min: 0 })}
+        ${field('Weight decay', 'training.weight_decay', { type: 'float' })}
+        ${field('Gradient clip', 'training.grad_clip', { type: 'float' })}
+      </div>
+      <div style="margin-top:14px">${check('Gradient checkpointing', 'training.gradient_checkpointing', 'Recompute activations in the backward pass: much less memory, ~30% slower')}</div>
+    </section>
+    ${pref ? `<section class="step-section">
+      <h3>${ALGO_LABEL[a]} settings</h3>
+      <div class="grid">
+        ${field('Beta', 'algorithm.beta', { type: 'float', hint: betaHint })}
+        ${a === 'dpo' ? select('Loss', 'algorithm.dpo_loss', [['sigmoid', 'Sigmoid (standard DPO)'], ['ipo', 'IPO'], ['hinge', 'Hinge']], { rerender: true }) : ''}
+        ${a === 'dpo' && c.algorithm.dpo_loss === 'sigmoid' ? field('Label smoothing', 'algorithm.label_smoothing', { type: 'float', hint: 'Assumed share of flipped labels, < 0.5' }) : ''}
+        ${a === 'simpo' ? field('Target margin (γ)', 'algorithm.simpo_gamma', { type: 'float' }) : ''}
+      </div></section>` : ''}
+    <section class="step-section">
+      <h3>Saving and tracking</h3>
+      <div class="grid">
+        ${field('Checkpoint folder', 'checkpoint_dir')}
+        ${field('W&B project', 'wandb.wandb_project')}
+        ${field('W&B entity', 'wandb.wandb_entity', { placeholder: 'your default entity' })}
+      </div>
+      <div class="grid" style="margin-top:14px">
+        ${check('Save checkpoints', 'save')}
+        ${check('Log to Weights & Biases', 'wandb.wandb_log_with_train', 'Needs WANDB_API_KEY in .env')}
+        ${check('Resume from the latest checkpoint', 'save_load.resume')}
+      </div>
+    </section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Step 6: review & launch
+// ---------------------------------------------------------------------------
+
+function stepReview() {
+  const c = W.cfg;
+  const isSlurm = W.ui.target === 'slurm';
+  const file = `configs/${(W.ui.name || 'my_run').replace(/[^\w.-]+/g, '_')}.yaml`;
+  const cmds = isSlurm
+    ? `python scripts/launch_slurm.py --config ${file} \\\n    --nodes ${W.ui.slurm.nodes} --gpus ${W.ui.slurm.gpus_per_node} --partition ${W.ui.slurm.partition} --time ${W.ui.slurm.time}`
+    : `CONFIG_PATH=${file} bash scripts/launch.sh`;
+  const planCmd = `python planner.py --config ${file} --gpus ${isSlurm ? W.ui.slurm.gpus_per_node : W.local.gpus_per_node}${isSlurm ? ` --nodes ${W.ui.slurm.nodes} --gpu ${W.ui.slurm.gpu}` : ''}`;
+  setTimeout(() => {
+    $('#launch').onclick = launch;
+    $('#dl-yaml').onclick = () => W.yaml && download(file.split('/').pop(), W.yaml);
+    $('#copy-cmd').onclick = () => copyText(`${cmds}\n`);
+    $('#edit-yaml').onclick = () => { W.editingYaml = !W.editingYaml; drawYaml(); };
+  });
+  return `
+    <section class="step-section">
+      <h3>Name</h3>
+      <div class="grid two"><div class="field"><label for="f-ui-name">Run name</label>
+        <input id="f-ui-name" type="text" data-bind="ui.name" data-type="str" value="${esc(W.ui.name)}" placeholder="${esc(defaultRunName())}" maxlength="120"></div></div>
+    </section>
+    <section class="step-section">
+      <h3>Summary</h3>
+      <div class="model-card">${[
+        ['Goal', ALGO_LABEL[c.algorithm.type]], ['Model', c.model_type === 'custom_transformer' ? 'custom transformer' : c.model_name.split('/').pop()],
+        ['Method', { full: 'Full fine-tune', lora: 'LoRA', qlora: `QLoRA ${c.quantization.bits}-bit` }[methodOf(c)]],
+        ['Data', `${c.dataset.name} ${c.dataset.split}`], ['Strategy', strategyLabel(c)], ['GPUs', c.strategy === 'solo' ? 1 : c.num_gpus],
+        ['Batch', `${c.training.batch_size} × ${c.model_type === 'custom_transformer' ? c.custom_transformer_args.max_seq_len : c.training.max_length} tokens`],
+        ['Learning rate', fmt.lr(c.training.learning_rate)],
+      ].map(([k, v]) => `<div><div class="k">${k}</div><div class="v" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v)}">${esc(v)}</div></div>`).join('')}</div>
+    </section>
+    <section class="step-section">
+      <div id="validation"><div class="notice">Checking the config…</div></div>
+    </section>
+    <section class="step-section">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <h3>Training YAML</h3>
+        <div class="btn-row"><button class="btn small" id="edit-yaml">Edit YAML</button><button class="btn small" id="dl-yaml">Download</button></div>
+      </div>
+      <div id="yaml-box"><div class="skeleton"></div></div>
+    </section>
+    <section class="step-section">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
+        <h3>Run it from a terminal</h3><button class="btn small" id="copy-cmd">Copy command</button>
+      </div>
+      <pre class="code">${esc(`# save the YAML above as ${file}, then\n${cmds}\n\n# capacity check from the CLI\n${planCmd}`)}</pre>
+    </section>
+    <div class="btn-row" style="justify-content:flex-end">
+      <button class="btn primary" id="launch" style="height:40px;padding:0 20px">${isSlurm ? 'Submit to SLURM' : 'Launch run'}</button>
+    </div>`;
+}
+
+function defaultRunName() {
+  const c = W.cfg;
+  const model = c.model_type === 'custom_transformer' ? 'custom' : String(c.model_name).split('/').pop();
+  return `${c.algorithm.type}-${model}`.toLowerCase().replace(/[^\w.-]+/g, '-');
+}
+
+async function loadReview() {
+  const cfg = exportConfig(W.cfg);
+  const [val, ren] = await Promise.allSettled([
+    api('/api/config/validate', { json: { config: cfg } }),
+    api('/api/config/render', { json: { config: cfg } }),
+  ]);
+  if (W.step !== 5) return;
+  W.validation = val.status === 'fulfilled' ? val.value : { valid: false, error: val.reason.message };
+  W.yaml = ren.status === 'fulfilled' ? ren.value.yaml : '';
+  const v = W.validation;
+  const plan = W.plan;
+  const fitWarn = plan && plan.selected && !plan.selected.fits
+    ? `<div class="notice warn" style="margin-top:10px"><div><strong>The planner estimates this runs out of memory</strong> (${fmt.gb(plan.selected.per_gpu_gb)} per GPU). You can still launch it.</div></div>` : '';
+  $('#validation').innerHTML = (v.valid
+    ? '<div class="notice ok"><div><strong>The config is valid.</strong> The trainer accepts every option.</div></div>'
+    : `<div class="notice error"><div><strong>The trainer rejects this config.</strong> ${esc(v.error)}</div></div>`) + fitWarn;
+  $('#launch').disabled = !v.valid;
+  drawYaml();
+}
+
+function drawYaml() {
+  const box = $('#yaml-box');
+  if (!box) return;
+  $('#edit-yaml').textContent = W.editingYaml ? 'Cancel editing' : 'Edit YAML';
+  if (!W.editingYaml) { box.innerHTML = `<pre class="code">${esc(W.yaml || '')}</pre>`; return; }
+  box.innerHTML = `<textarea id="yaml-edit" rows="24" spellcheck="false" aria-label="Training YAML">${esc(W.yaml || '')}</textarea>
+    <div class="btn-row" style="margin-top:10px"><button class="btn primary small" id="yaml-apply">Apply YAML</button><span class="faint" style="font-size:.8rem">Replaces every choice in this draft.</span></div>`;
+  $('#yaml-apply').onclick = async () => {
+    try {
+      const { config } = await api('/api/config/parse', { json: { yaml: $('#yaml-edit').value } });
+      W.cfg = deepMerge(defaultConfig(), config);
+      W.editingYaml = false;
+      toast('YAML applied');
+      onCfgChange(true);
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+async function launch() {
+  const btn = $('#launch');
+  btn.disabled = true;
+  const cfg = exportConfig(W.cfg);
+  const name = W.ui.name || defaultRunName();
+  try {
+    if (W.ui.target === 'slurm') {
+      const s = W.ui.slurm;
+      await api('/api/train/start', { json: { config: { ...cfg, launch_mode: 'slurm', slurm: { nodes: s.nodes, gpus_per_node: s.gpus_per_node, partition: s.partition, time: s.time } } } });
+      let st = null;
+      for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 1000)); st = await api('/api/train/status'); if (st.status !== 'running') break; }
+      dialog({ title: st && st.status === 'finished' ? 'Submitted to SLURM' : 'SLURM submission', body: `<pre class="code">${esc((st ? st.logs : []).join('\n') || 'No output yet.')}</pre>` });
+    } else {
+      const r = await api('/api/queue/submit', { json: { config: cfg, name } });
+      toast(r.status === 'running' ? 'Run started' : `Run queued at position ${r.queue_position}`);
+      store.del('omni-draft');
+      location.hash = `#/run/${r.job_id}`;
+    }
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally { if (btn.isConnected) btn.disabled = false; }
+}
+
+// ---------------------------------------------------------------------------
+// Live plan panel
+// ---------------------------------------------------------------------------
+
+let planTimer = null;
+function schedulePlan(delay = 450) {
+  clearTimeout(planTimer);
+  planTimer = setTimeout(refreshPlan, delay);
+}
+
+function wizardCluster() {
+  if (W.ui.target === 'slurm') {
+    const g = S.catalog.gpus.find((x) => x.id === W.ui.slurm.gpu) || S.catalog.gpus[0];
+    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: +W.ui.slurm.gpus_per_node, nodes: +W.ui.slurm.nodes };
+  }
+  return { gpu_mem_gb: W.local.gpu_mem_gb, gpu_name: W.local.gpu_name, gpus_per_node: W.local.gpus_per_node, nodes: 1 };
+}
+
+async function refreshPlan() {
+  const panel = $('#plan-panel');
+  if (!panel || !W) return;
+  const seq = ++W.planSeq;
+  if (!W.plan) panel.innerHTML = '<div class="panel-pad stack"><div class="skeleton"></div><div class="skeleton" style="width:70%"></div><div class="skeleton" style="height:170px"></div></div>';
+  else panel.style.opacity = '.6';
+  try {
+    const plan = await api('/api/plan', { json: { config: exportConfig(W.cfg), cluster: wizardCluster() } });
+    if (seq !== W.planSeq) return;
+    W.plan = plan;
+    panel.style.opacity = '';
+    panel.innerHTML = '';
+    panel.appendChild(renderPlan(plan, {
+      onApply: (rec) => {
+        W.cfg.strategy = rec.strategy;
+        W.cfg.num_gpus = rec.gpus;
+        if (rec.parallelism) W.cfg.parallelism = { ...W.cfg.parallelism, ...rec.parallelism };
+        toast(`Using ${rec.label}`);
+        onCfgChange(true);
+      },
+      onSuggest: (w) => { applyWorkload(W.cfg, w); toast('Applied'); onCfgChange(true); },
+    }));
+    if (W.step === 1 && W.cfg.model_type === 'custom_transformer') inspectModel();
+  } catch (e) {
+    if (seq !== W.planSeq) return;
+    panel.style.opacity = '';
+    panel.innerHTML = `<div class="panel-pad"><div class="notice error"><div><strong>No estimate yet.</strong> ${esc(e.message)}</div></div></div>`;
+  }
+}
+
+// ===========================================================================
+// Planner page
+// ===========================================================================
+
+async function renderPlanner(main) {
+  const catalog = await loadCatalog();
+  const local = catalog.local_cluster;
+  const saved = store.get('omni-planner', null);
+  const P = deepMerge({
+    model: 'meta-llama/Llama-3.1-8B', method: 'full', algorithm: 'pretrain', batch: 1, seq: 4096, ckpt: true,
+    gpu: 'h100', gpus: 8, nodes: 1,
+  }, saved || {});
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head">
+        <div><h1>Capacity planner</h1><p>Does a run need distributed training? Estimates peak GPU memory for single-GPU, DDP, FSDP and 5D layouts, recommends the simplest that fits and shows how many GPUs each would need.</p></div>
+      </div>
+      <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(0,1.25fr)">
+        <div class="panel panel-pad stack" id="planner-form">
+          <h2>Workload</h2>
+          <div class="grid two">
+            <div class="field span-all"><label for="p-model">Model</label>
+              <input id="p-model" type="text" list="p-presets" value="${esc(P.model)}" spellcheck="false" autocomplete="off">
+              <datalist id="p-presets">${catalog.models.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}</option>`).join('')}</datalist>
+              <span class="hint">Presets work offline. Other ids are read from their config.json.</span></div>
+            <div class="field"><label for="p-algorithm">Goal</label><select id="p-algorithm">
+              ${['pretrain', 'sft', 'dpo', 'simpo', 'orpo'].map((a) => `<option value="${a}" ${P.algorithm === a ? 'selected' : ''}>${ALGO_LABEL[a]}</option>`).join('')}</select></div>
+            <div class="field"><label for="p-method">Method</label><select id="p-method">
+              ${[['full', 'Full fine-tune'], ['lora', 'LoRA'], ['qlora', 'QLoRA 4-bit']].map(([v, t]) => `<option value="${v}" ${P.method === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+            <div class="field"><label for="p-batch">Batch per GPU</label><input id="p-batch" type="number" min="1" value="${P.batch}"></div>
+            <div class="field"><label for="p-seq">Sequence length</label><input id="p-seq" type="number" min="16" step="256" value="${P.seq}"></div>
+            <label class="check span-all"><input type="checkbox" id="p-ckpt" ${P.ckpt ? 'checked' : ''}><span>Gradient checkpointing</span></label>
+          </div>
+          <h2 style="margin-top:8px">Hardware</h2>
+          <div class="grid two">
+            <div class="field span-all"><label for="p-gpu">GPU</label><select id="p-gpu">
+              ${local.detected ? `<option value="local" ${P.gpu === 'local' ? 'selected' : ''}>This machine: ${esc(local.gpu_name)} (${fmt.gb(local.gpu_mem_gb)})</option>` : ''}
+              ${catalog.gpus.map((g) => `<option value="${g.id}" ${P.gpu === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></div>
+            <div class="field"><label for="p-gpus">GPUs per node</label><input id="p-gpus" type="number" min="1" value="${P.gpus}"></div>
+            <div class="field"><label for="p-nodes">Nodes</label><input id="p-nodes" type="number" min="1" value="${P.nodes}"></div>
+          </div>
+          <div class="btn-row"><button class="btn" id="p-start">Start a run with this</button></div>
+        </div>
+        <div class="panel" id="planner-out" aria-live="polite"></div>
+      </div>
+    </div>`;
+
+  const read = () => {
+    P.model = $('#p-model').value.trim(); P.method = $('#p-method').value; P.algorithm = $('#p-algorithm').value;
+    P.batch = Math.max(1, +$('#p-batch').value || 1); P.seq = Math.max(16, +$('#p-seq').value || 512); P.ckpt = $('#p-ckpt').checked;
+    P.gpu = $('#p-gpu').value; P.gpus = Math.max(1, +$('#p-gpus').value || 1); P.nodes = Math.max(1, +$('#p-nodes').value || 1);
+    store.set('omni-planner', P);
+  };
+  const toCfg = () => {
+    const c = defaultConfig();
+    c.model_name = P.model; c.algorithm.type = P.algorithm; setMethod(c, P.method);
+    c.training.batch_size = P.batch; c.training.max_length = P.seq; c.training.gradient_checkpointing = P.ckpt;
+    c.strategy = 'solo';
+    return c;
+  };
+  const cluster = () => {
+    if (P.gpu === 'local') return { gpu_mem_gb: local.gpu_mem_gb, gpu_name: local.gpu_name, gpus_per_node: P.gpus, nodes: P.nodes };
+    const g = catalog.gpus.find((x) => x.id === P.gpu) || catalog.gpus[0];
+    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: P.gpus, nodes: P.nodes };
+  };
+  let seq = 0;
+  const run = async () => {
+    read();
+    const my = ++seq;
+    const out = $('#planner-out');
+    out.style.opacity = '.6';
+    try {
+      const plan = await api('/api/plan', { json: { config: exportConfig(toCfg()), cluster: cluster() } });
+      if (my !== seq) return;
+      plan.selected = null;
+      out.innerHTML = '';
+      const rec = plan.recommended;
+      out.appendChild(renderPlan(plan, {
+        onSuggest: (w) => {
+          if ('grad_ckpt' in w) $('#p-ckpt').checked = w.grad_ckpt;
+          if ('batch_size' in w) $('#p-batch').value = w.batch_size;
+          if ('seq_len' in w) $('#p-seq').value = w.seq_len;
+          if ('method' in w) $('#p-method').value = w.method;
+          run();
+        },
+      }));
+      if (rec.parallelism) {
+        const sec = document.createElement('div');
+        sec.className = 'plan-sec';
+        sec.innerHTML = `<h4>Rank layout: ${esc(rec.label)}</h4>${rankGrid(rec.parallelism, rec.gpus, P.gpus)}
+          <pre class="code" style="margin-top:12px">${esc(`strategy: 5d\nnum_gpus: ${rec.gpus}\nparallelism: ${JSON.stringify(rec.parallelism).replace(/"/g, '').replace(/:/g, ': ').replace(/,/g, ', ')}`)}</pre>`;
+        const root = out.firstElementChild;
+        root.insertBefore(sec, root.children[2] || null);
+      }
+      out.style.opacity = '';
+      $('#p-start').onclick = () => {
+        const c = toCfg();
+        if (P.algorithm !== 'pretrain') {
+          const info = catalog.algorithms.find((a) => a.id === P.algorithm);
+          if (info && info.example_dataset) c.dataset = { name: info.example_dataset.name, subset: null, split: info.example_dataset.split };
+        }
+        c.strategy = rec.strategy; c.num_gpus = rec.gpus;
+        if (rec.parallelism) c.parallelism = { ...c.parallelism, ...rec.parallelism };
+        const ui = P.gpu === 'local' && P.nodes === 1 ? { target: 'local' } : { target: 'slurm', slurm: { nodes: P.nodes, gpus_per_node: P.gpus, gpu: P.gpu === 'local' ? 'h100' : P.gpu, partition: 'gpu', time: '24:00:00' } };
+        store.set('omni-draft', { cfg: c, ui, step: 1 });
+        location.hash = '#/new';
+      };
+    } catch (e) {
+      if (my !== seq) return;
+      out.style.opacity = '';
+      out.innerHTML = `<div class="panel-pad"><div class="notice error"><div>${esc(e.message)}</div></div></div>`;
+    }
+  };
+  let t = null;
+  $('#planner-form').addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 400); });
+  $('#planner-form').addEventListener('change', () => { clearTimeout(t); t = setTimeout(run, 50); });
+  run();
+}
+
+// ===========================================================================
+// Checkpoints
+// ===========================================================================
+
+async function renderCheckpoints(main) {
+  let dir = store.get('omni-ckpt-dir', 'checkpoints');
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head"><div><h1>Checkpoints</h1><p>Saved weights under a checkpoint folder, newest first. Resume a run by turning on “Resume from the latest checkpoint”.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><form id="ck-form" class="btn-row" style="flex:1">
+          <label for="ck-dir" class="faint" style="font-size:.85rem">Folder</label>
+          <input id="ck-dir" type="text" value="${esc(dir)}" style="max-width:340px">
+          <button class="btn small" type="submit">Show</button></form><span class="faint" id="ck-meta"></span></div>
+        <div id="ck-body"><div class="panel-pad"><div class="skeleton"></div></div></div>
+      </div>
+    </div>`;
+  const draw = async () => {
+    const body = $('#ck-body');
+    try {
+      const r = await api(`/api/checkpoints?dir=${encodeURIComponent(dir)}`);
+      $('#ck-meta').textContent = `${r.count} checkpoint${r.count === 1 ? '' : 's'}`;
+      if (!r.count) {
+        body.innerHTML = `<div class="empty"><h2>No checkpoints in ${esc(r.base_dir_relative)}</h2><p>Runs with “Save checkpoints” on write here when an epoch ends.</p></div>`;
+        return;
+      }
+      body.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Path</th><th>Strategy</th><th>Tag</th><th class="right">Size</th><th>Saved</th><th></th></tr></thead><tbody>
+        ${r.checkpoints.map((c) => `<tr><td><code>${esc(c.path)}</code></td><td>${esc(c.strategy)}</td><td>${esc(c.tag.replace(/^__/, '') || '–')}</td>
+          <td class="right num">${fmt.bytes(c.size_bytes)}</td><td class="run-sub">${esc(new Date(c.mtime * 1000).toLocaleString())}</td>
+          <td class="right"><button class="btn small ghost" data-copy="${esc(c.path)}">Copy path</button></td></tr>`).join('')}
+        </tbody></table></div>`;
+      $$('[data-copy]', body).forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });
+    } catch (e) { body.innerHTML = `<div class="panel-pad"><div class="notice error"><div>${esc(e.message)}</div></div></div>`; }
+  };
+  $('#ck-form').onsubmit = (e) => { e.preventDefault(); dir = $('#ck-dir').value.trim() || 'checkpoints'; store.set('omni-ckpt-dir', dir); draw(); };
+  draw();
+}
+
+// ===========================================================================
+// System
+// ===========================================================================
+
+async function renderSystem(main) {
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head"><div><h1>System</h1><p>The GPUs this server schedules runs on, and the credentials training needs.</p></div></div>
+      <div class="stack">
+        <div class="panel"><div class="panel-head"><h2>GPUs</h2><span class="faint" id="sys-ver"></span></div><div id="sys-gpus"><div class="panel-pad"><div class="skeleton"></div></div></div></div>
+        <div class="panel"><div class="panel-head"><h2>Credentials</h2></div><div class="panel-pad" id="sys-env"></div></div>
+      </div>
+    </div>`;
+  const [gpus, q, env] = await Promise.allSettled([api('/api/system/gpus'), api('/api/queue/status'), api('/api/env/status')]);
+  const g = gpus.status === 'fulfilled' ? gpus.value : { available: false, error: gpus.reason.message, gpus: [] };
+  const alloc = q.status === 'fulfilled' ? q.value.gpu_details : [];
+  $('#sys-ver').textContent = g.pytorch_version ? `PyTorch ${g.pytorch_version}${g.cuda_version ? `, CUDA ${g.cuda_version}` : ''}` : '';
+  $('#sys-gpus').innerHTML = !g.available
+    ? `<div class="panel-pad"><div class="notice warn"><div><strong>${esc(g.error || 'No CUDA GPU')}.</strong> Runs still start on CPU for small models and tests, one job at a time.</div></div></div>`
+    : `<div class="table-wrap"><table><thead><tr><th>#</th><th>Device</th><th class="right">Memory in use</th><th>Compute</th><th>Queue</th></tr></thead><tbody>
+      ${g.gpus.map((d) => { const a = alloc.find((x) => x.index === d.index) || {}; const frac = d.used_memory_gb / d.total_memory_gb; return `<tr>
+        <td class="num">${d.index}</td><td><div class="run-name">${esc(d.name)}</div><div class="run-sub">${d.multi_processor_count} SMs</div></td>
+        <td class="right" style="min-width:180px"><div class="bar"><span style="width:${(frac * 100).toFixed(1)}%;background:var(--${frac > 0.85 ? 'over' : frac > 0.5 ? 'tight' : 'fit'})"></span></div><div class="run-sub num">${d.used_memory_gb.toFixed(1)} / ${d.total_memory_gb.toFixed(1)} GB</div></td>
+        <td class="num">sm_${esc(d.compute_capability.replace('.', ''))}</td>
+        <td>${a.job_id ? `<a href="#/run/${esc(a.job_id)}">${statusPill('running')}</a>` : '<span class="pill fit">Free</span>'}</td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  const e = env.status === 'fulfilled' ? env.value : { found: false, keys: {} };
+  const row = (k, why) => `<li><span><code>${k}</code> <span class="muted">${why}</span></span>${e.keys[k] ? '<span class="pill fit">Set</span>' : '<span class="pill">Not set</span>'}</li>`;
+  $('#sys-env').innerHTML = `<ul class="plan-list">${row('HF_TOKEN', 'gated models (Llama, Gemma) and rate-limited datasets')}${row('WANDB_API_KEY', 'Weights & Biases logging')}</ul>
+    <p class="faint" style="font-size:.82rem;margin-top:12px">${e.found ? 'Read from .env in the project root.' : 'No .env file in the project root.'} Values are never sent to the browser.</p>`;
+}
+
+// ===========================================================================
+// API
+// ===========================================================================
+
+function renderApi(main) {
+  const o = location.origin;
+  const snippet = (title, text, code) => `<div class="panel"><div class="panel-head"><h3>${title}</h3><button class="btn small" data-copy="${esc(code)}">Copy</button></div>
+    <div class="panel-pad stack"><p class="muted">${text}</p><pre class="code">${esc(code)}</pre></div></div>`;
+  main.innerHTML = `
+    <div class="page">
+      <div class="page-head"><div><h1>API</h1><p>Everything in this console is a REST call, so scripts, CI jobs and other services can plan and launch runs too. Requests must come through a host name the server allows (localhost, an IP, this machine's name or <code>OMNI_UI_ALLOWED_HOSTS</code>).</p></div>
+        <a class="btn" href="/docs" target="_blank" rel="noopener">Open interactive docs</a></div>
+      <div class="stack">
+        ${snippet('Is distributed training needed?', 'POST a training config (config.yaml schema) and optionally the hardware. The response has the verdict, a recommended strategy or 5D layout, per-GPU memory for every option and the minimum GPU counts.',
+          `curl -s ${o}/api/plan -H 'Content-Type: application/json' -d '{
+  "config": {"model_name": "meta-llama/Llama-3.1-8B", "model_type": "llm", "strategy": "solo",
+             "training": {"batch_size": 1, "max_length": 4096, "gradient_checkpointing": true}},
+  "cluster": {"gpu_name": "h100", "gpu_mem_gb": 80, "gpus_per_node": 8, "nodes": 1}
+}' | jq '{verdict, headline, recommended: .recommended.label, min_gpus}'`)}
+        ${snippet('Launch a run', 'Submits to the queue. It starts when enough GPUs are free; the response has the job id.',
+          `python - <<'EOF'
+import requests, yaml
+cfg = yaml.safe_load(open("configs/llm_sft_lora_single_gpu.yaml"))
+r = requests.post("${o}/api/queue/submit", json={"config": cfg, "name": "sft-qwen-demo"})
+print(r.json())
+EOF`)}
+        ${snippet('Follow a run', 'Status, the last log lines, the parsed loss curve and progress.',
+          `curl -s ${o}/api/queue/jobs/<job_id>?tail=50 | jq '{status, progress: .metrics.progress, last: .logs[-1]}'`)}
+        ${snippet('From the command line', 'The same planner runs without the server.',
+          'python planner.py --model Qwen/Qwen2.5-7B-Instruct --method lora --algorithm dpo --gpus 4 --gpu a100-80 --seq 2048')}
+      </div>
+    </div>`;
+  $$('[data-copy]', main).forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });
+}
+
+// ===========================================================================
+// Boot
+// ===========================================================================
+
+async function refreshChip() {
+  try {
+    const q = await api('/api/queue/status');
+    S.queue = q;
+    const dot = $('#cluster-chip .dot');
+    dot.className = `dot ${q.available_gpus ? 'ok' : 'busy'}`;
+    $('#cluster-chip-text').textContent = `${q.available_gpus} of ${q.total_gpus} GPU${q.total_gpus === 1 ? '' : 's'} free${q.pending_jobs ? `, ${q.pending_jobs} queued` : ''}`;
+  } catch (e) { $('#cluster-chip-text').textContent = 'Server unreachable'; }
+}
+
+function initTheme() {
+  $('#theme-btn').onclick = () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('omni-theme', root.dataset.theme); } catch (e) { /* ignore */ }
+  };
+}
+
+window.addEventListener('hashchange', route);
+document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  refreshChip();
+  setInterval(refreshChip, 5000);
+  route();
 });
