@@ -22,7 +22,11 @@ cp .env.example .env   # then add your HF_TOKEN
 
 ## Running Tests
 
-All non-GPU tests must pass before opening a PR.
+All non-GPU tests must pass before opening a PR. GitHub Actions runs them for you
+(`.github/workflows/tests.yml`): the unit suite on every push, the multi-process suite on
+PRs. Both run on CPU with `HF_HUB_OFFLINE=1`, so tests must not download models or datasets.
+Build tiny models from configs instead (see `tests/post_training_helpers.py`). Only the GPU
+smoke tests need your own machine.
 
 ```bash
 # Unit tests — no GPU required
@@ -31,7 +35,10 @@ python -m pytest
 # Single test file
 python -m pytest tests/test_config_validation.py -v
 
-# GPU smoke tests (~30-60s each, requires a GPU)
+# Multi-process equivalence (CPU/gloo, ~5 min): 5d layouts + post-training under DDP
+python -m pytest -m dist
+
+# GPU smoke tests (~30-60s each, requires a GPU) — not run in CI
 python -m pytest -m smoke
 ```
 

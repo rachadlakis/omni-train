@@ -1,5 +1,7 @@
 # OMNI-Train
 
+[![tests](https://github.com/rachadlakis/omni-train/actions/workflows/tests.yml/badge.svg)](https://github.com/rachadlakis/omni-train/actions/workflows/tests.yml)
+
 **A modular PyTorch framework for distributed fine-tuning of LLMs, vision, vision-language, and embedding models.**
 
 Train across multiple GPUs and nodes with a single config file — from a single consumer GPU to a multi-node SLURM cluster.

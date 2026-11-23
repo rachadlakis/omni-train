@@ -46,6 +46,8 @@ python train.py
 
 ## Testing
 
+CI (`.github/workflows/tests.yml`, GitHub's CPU runners, offline: `HF_HUB_OFFLINE=1`) runs the unit suite on every push and the `-m dist` suite on PRs, pushes to `main` and manual runs. Only the GPU tests need a local machine: `-m smoke` and the FSDP cases of `test_post_training_dist.py` (≥ 2 GPUs). Tests in the CI suites must not download anything: build tiny models from configs (see `tests/post_training_helpers.py`).
+
 ```bash
 # Unit tests (no GPU required) — default
 python -m pytest
