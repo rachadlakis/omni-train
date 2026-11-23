@@ -25,17 +25,17 @@ from typing import Optional
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from pydantic import BaseModel
 
 try:
-    from .queue import QueueManager, JobStatus, find_free_port
+    from .queue import QueueManager, JobStatus, find_free_port, summarize_metrics
     from .config_adapter import adapt_ui_config_to_mini, validate_mini_config
 except ImportError:
-    from ui.queue import QueueManager, JobStatus, find_free_port
+    from ui.queue import QueueManager, JobStatus, find_free_port, summarize_metrics
     from ui.config_adapter import adapt_ui_config_to_mini, validate_mini_config
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,29 @@ async def list_configs():
         for f in sorted(CONFIGS_DIR.glob("*.yaml")):
             configs.add(f.stem)
 
-    return {"configs": sorted(configs)}
+    return {"configs": sorted(configs), "templates": [_describe_template(n) for n in sorted(configs) if n != "config"]}
+
+
+def _describe_template(name: str) -> dict:
+    """What a config trains, read from the YAML itself (for the console's template picker)."""
+    path = CONFIGS_DIR / f"{name}.yaml"
+    path = path if path.exists() else PROJECT_ROOT / f"{name}.yaml"
+    try:
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        block = lambda key: cfg.get(key) if isinstance(cfg.get(key), dict) else {}  # noqa: E731
+        peft, quant = block("peft"), block("quantization")
+        method = "full"
+        if peft.get("enabled"):
+            method = "qlora" if (peft.get("type") == "qlora" or quant.get("enabled")) else "lora"
+        return {
+            "name": name, "model_type": str(cfg.get("model_type", "llm")), "model": cfg.get("model_name"),
+            "algorithm": str(block("algorithm").get("type", "pretrain")), "method": method,
+            "bits": int(quant.get("bits", 4)) if quant.get("enabled") else None,
+            "strategy": str(cfg.get("strategy", "solo")), "num_gpus": int(cfg.get("num_gpus") or 1),
+            "dataset": block("dataset").get("name"), "moe": bool(block("custom_transformer_args").get("num_experts")),
+        }
+    except Exception as e:  # a broken file must not hide the others
+        return {"name": name, "error": str(e)[:200]}
 
 
 @app.get("/api/configs/{name}")
@@ -1313,8 +1335,10 @@ async def queue_list_jobs(
     out = []
     for job in jobs:
         item = job.to_dict()
-        if job.status == JobStatus.RUNNING:
-            item["progress"] = queue_manager.get_job_metrics(job.id)["progress"]
+        if job.status != JobStatus.PENDING:
+            metrics = queue_manager.get_job_metrics(job.id)
+            item["progress"] = metrics["progress"] if job.status == JobStatus.RUNNING else None
+            item["summary"] = summarize_metrics(metrics)
         out.append(item)
     return {"jobs": out}
 
@@ -1337,6 +1361,16 @@ async def queue_get_job(job_id: str, tail: int = Query(2000, ge=1, le=20000)):
         result["estimated_wait"] = queue_manager.get_queue_eta(job_id)
 
     return result
+
+@app.get("/api/queue/jobs/{job_id}/log", response_class=PlainTextResponse)
+async def queue_job_log(job_id: str):
+    """The run's complete log as plain text."""
+    if not queue_manager:
+        raise HTTPException(500, "Queue manager not initialized")
+    if not queue_manager.get_job(job_id):   # also keeps arbitrary names out of the file path
+        raise HTTPException(404, f"Job '{job_id}' not found")
+    return PlainTextResponse("\n".join(queue_manager.get_full_log(job_id)) + "\n")
+
 
 @app.post("/api/queue/jobs/{job_id}/cancel")
 async def queue_cancel_job(job_id: str):

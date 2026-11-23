@@ -168,3 +168,72 @@ def test_grpo_example_config_plans_and_validates(client):
     j = client.post("/api/plan", json={"config": cfg, "cluster": {"gpu_mem_gb": 6, "gpus_per_node": 1, "gpu_name": "4050"}}).json()
     assert j["workload"]["algorithm"] == "grpo" and j["workload"]["num_generations"] == 4
     assert j["selected"]["fits"] and j["selected"]["perf"]["generation_seconds"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Console: templates from the configs, run summaries, full log, offline assets
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+from ui.queue import summarize_metrics
+
+STATIC = Path(ui_app.STATIC_DIR)
+
+
+def test_templates_are_described_from_the_config_itself(client):
+    t = {x["name"]: x for x in client.get("/api/configs").json()["templates"]}
+    g = t["llm_grpo_lora_single_gpu"]
+    assert (g["algorithm"], g["method"], g["strategy"], g["num_gpus"]) == ("grpo", "lora", "solo", 1)
+    assert t["llm_5d_tp_pp_dp_8gpu"]["strategy"] == "5d" and t["custom_5d_moe_16gpu"]["moe"]
+    assert not [x for x in t.values() if "error" in x]
+
+
+def test_a_broken_template_does_not_hide_the_others(client, tmp_path, monkeypatch):
+    (tmp_path / "ok.yaml").write_text("model_type: llm\nmodel_name: gpt2\nstrategy: ddp\nnum_gpus: 2\n")
+    (tmp_path / "bad.yaml").write_text("a: [1, 2\n")
+    monkeypatch.setattr(ui_app, "CONFIGS_DIR", tmp_path)
+    t = {x["name"]: x for x in client.get("/api/configs").json()["templates"]}
+    assert t["ok"]["num_gpus"] == 2 and "error" in t["bad"]
+
+
+def test_summary_uses_reward_for_rl_and_loss_otherwise():
+    rl = parse_metrics([f"Epoch 1/1 [x] 1% | step {i}/20 | loss: 0.0 | avg: 0.0 | reward: {i / 20:.2f}" for i in range(1, 21)])
+    s = summarize_metrics(rl)
+    assert s["key"] == "reward" and s["value"] == pytest.approx(sum(range(11, 21)) / 200)   # last 10 steps
+    sft = parse_metrics(["Epoch 1/1 [x] 50% | step 1/2 | loss: 3.0 | avg: 3.0"])
+    assert summarize_metrics(sft) == {"key": "loss", "value": 3.0, "steps": 1}
+    assert summarize_metrics(parse_metrics(["no steps yet"])) is None
+
+
+def test_job_list_has_summaries_and_the_full_log_downloads(client, tmp_queue, monkeypatch):
+    monkeypatch.setattr(tmp_queue, "allocate_gpus", lambda job_id, n: None)
+    job = tmp_queue.submit_job(config={"strategy": "solo"}, gpu_count=1, name="r")
+    for i in range(1, 6001):                                   # more than the 5000-line live buffer
+        tmp_queue._append_job_log(job.id, f"Epoch 1/1 [x] 1% | step {i}/6000 | loss: 1.5 | avg: 1.5")
+    tmp_queue.cancel_job(job.id)
+    row = client.get("/api/queue/jobs").json()["jobs"][0]
+    assert row["summary"]["value"] == 1.5 and row["summary"]["steps"] == 6000
+    r = client.get(f"/api/queue/jobs/{job.id}/log")
+    assert r.headers["content-type"].startswith("text/plain") and len(r.text.strip().split("\n")) == 6000
+    assert client.get("/api/queue/jobs/..%2F..%2Fsecret/log").status_code == 404
+
+
+def test_metrics_are_cached_until_the_log_grows(tmp_queue, monkeypatch):
+    monkeypatch.setattr(tmp_queue, "allocate_gpus", lambda job_id, n: None)
+    job = tmp_queue.submit_job(config={}, gpu_count=1)
+    line = "Epoch 1/1 [x] 1% | step {}/9 | loss: 2.0 | avg: 2.0"
+    tmp_queue._append_job_log(job.id, line.format(1))
+    first = tmp_queue.get_job_metrics(job.id)
+    assert tmp_queue.get_job_metrics(job.id) is first
+    tmp_queue._append_job_log(job.id, line.format(2))
+    assert len(tmp_queue.get_job_metrics(job.id)["points"]) == 2
+
+
+def test_console_works_offline():
+    """No page asset may come from another host: GPU servers are often offline."""
+    for name in ("index.html", "styles.css"):
+        text = (STATIC / name).read_text()
+        assert "googleapis" not in text and "gstatic" not in text and "//cdn" not in text
+    for url in __import__("re").findall(r"/static/([\w./-]+)", (STATIC / "index.html").read_text() + (STATIC / "styles.css").read_text()):
+        assert (STATIC / url).exists(), url

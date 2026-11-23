@@ -65,6 +65,19 @@ def _num(text: str) -> Optional[float]:
     return value if value == value and abs(value) != float("inf") else None
 
 
+def summarize_metrics(metrics: dict) -> Optional[dict]:
+    """One headline number for a run list: the mean reward of the last steps (GRPO) or the last loss."""
+    points = metrics.get("points") or []
+    if not points:
+        return None
+    key = "reward" if any(p.get("reward") is not None for p in points) else "loss"
+    values = [p[key] for p in points if p.get(key) is not None]
+    tail = values[-10:] if key == "reward" else values[-1:]
+    if key == "loss" and metrics.get("epochs"):
+        return {"key": "avg loss", "value": metrics["epochs"][-1]["loss"], "steps": points[-1]["global_step"]}
+    return {"key": key, "value": sum(tail) / len(tail), "steps": points[-1]["global_step"]}
+
+
 def parse_metrics(lines: List[str], max_points: int = 1500) -> dict:
     """Loss curve, epoch losses and latest progress from trainer log lines."""
     points: List[dict] = []
@@ -153,6 +166,7 @@ class QueueManager:
         self._lock = threading.RLock()
         self._running_processes: Dict[str, subprocess.Popen] = {}
         self._job_logs: Dict[str, deque] = {}
+        self._metrics_cache: Dict[str, tuple] = {}
         self._worker_thread: Optional[threading.Thread] = None
         self._shutdown_event = threading.Event()
         self._on_job_status_change: Optional[Callable[[Job], None]] = None
@@ -491,6 +505,7 @@ class QueueManager:
             # Clean up logs
             if job_id in self._job_logs:
                 del self._job_logs[job_id]
+            self._metrics_cache.pop(job_id, None)
             log_file = RUNS_DIR / f"{job_id}.log"
             if log_file.exists():
                 log_file.unlink()
@@ -612,6 +627,10 @@ class QueueManager:
             return list(self._job_logs[job_id])[-tail:]
         return self._read_log_file(job_id)[-tail:]
 
+    def get_full_log(self, job_id: str) -> List[str]:
+        """Every line of the run (the live buffer keeps only the last 5000)."""
+        return self._read_log_file(job_id) or self.get_job_logs(job_id)
+
     def _read_log_file(self, job_id: str) -> List[str]:
         path = RUNS_DIR / f"{job_id}.log"
         if not path.exists():
@@ -619,8 +638,19 @@ class QueueManager:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()
 
     def get_job_metrics(self, job_id: str) -> dict:
-        """Loss curve and progress parsed from the full log file."""
-        return parse_metrics(self._read_log_file(job_id))
+        """Loss curve and progress parsed from the full log file (cached until the file grows)."""
+        path = RUNS_DIR / f"{job_id}.log"
+        try:
+            st = path.stat()
+        except OSError:
+            return parse_metrics([])
+        key = (st.st_mtime_ns, st.st_size)
+        hit = self._metrics_cache.get(job_id)
+        if hit and hit[0] == key:
+            return hit[1]
+        metrics = parse_metrics(self._read_log_file(job_id))
+        self._metrics_cache[job_id] = (key, metrics)
+        return metrics
 
     # =========================================================================
     # Job Execution

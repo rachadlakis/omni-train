@@ -76,7 +76,7 @@ const fmt = {
     if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
     return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   },
-  lr(v) { return typeof v === 'number' ? (v < 0.001 ? v.toExponential(0).replace('e-', 'e-') : String(v)) : String(v ?? ''); },
+  lr(v) { return typeof v === 'number' ? (v !== 0 && Math.abs(v) < 0.001 ? String(+v.toPrecision(6)).includes('e') ? String(v) : v.toExponential().replace('+', '') : String(v)) : String(v ?? ''); },
 };
 
 function toast(message, type = 'info') {
@@ -183,7 +183,7 @@ function defaultConfig() {
     model_type: 'llm',
     dataset: { name: 'wikitext', subset: 'wikitext-2-raw-v1', split: 'train[:2%]' },
     algorithm: { type: 'pretrain', beta: 0.1, dpo_loss: 'sigmoid', label_smoothing: 0, simpo_gamma: 0.5, max_prompt_length: 256, completion_only: true,
-      num_generations: 4, max_completion_length: 256, temperature: 1.0, top_p: 1.0, epsilon: 0.2, epsilon_high: 0.28,
+      num_generations: 4, max_completion_length: 320, temperature: 1.0, top_p: 1.0, epsilon: 0.2, epsilon_high: 0.28,
       loss_type: 'dapo', scale_rewards: true, rewards: { accuracy: 1.0 }, custom_reward: '',
       system_prompt: 'Please reason step by step, and put your final answer within \\boxed{}.' },
     training: { epochs: 1, batch_size: 4, max_length: 512, learning_rate: 2e-4, gradient_checkpointing: true,
@@ -200,6 +200,30 @@ function defaultConfig() {
       dropout_p: 0.0, num_experts: 0, top_k: 2 },
     wandb: { wandb_log_with_train: false, wandb_entity: '', wandb_project: 'omni-train', wandb_run_name: '' },
   };
+}
+
+/** A full draft from a saved config (template, cloned run, pasted YAML, stored draft). Defaults fill
+ *  gaps, except where a default would change what the config trains. */
+function loadConfig(raw) {
+  const src = clone(raw || {});
+  const cfg = deepMerge(defaultConfig(), src);
+  if (!src.peft) cfg.peft.enabled = false;
+  const algo = src.algorithm || {};
+  if (!src.algorithm) cfg.algorithm.type = 'pretrain';
+  if (algo.type === 'grpo') {
+    const spec = algo.rewards ?? ['accuracy'];
+    cfg.algorithm.rewards = Array.isArray(spec) || typeof spec === 'string'
+      ? Object.fromEntries([].concat(spec).map((n) => [String(n), 1])) : { ...spec };
+    if (algo.system_prompt === undefined || algo.system_prompt === null) cfg.algorithm.system_prompt = '';
+    if (algo.beta === undefined) cfg.algorithm.beta = 0;
+    if (algo.custom_reward === undefined) cfg.algorithm.custom_reward = '';
+    const len = (src.training || {}).max_length;
+    if (len && algo.max_prompt_length === undefined) cfg.algorithm.max_prompt_length = Math.floor(len / 2);
+    if (len && algo.max_completion_length === undefined) cfg.algorithm.max_completion_length = len - cfg.algorithm.max_prompt_length;
+    ['epsilon', 'loss_type'].forEach((k) => { if (algo[k] === undefined) cfg.algorithm[k] = { epsilon: 0.2, loss_type: 'grpo' }[k]; });
+    if (algo.epsilon_high === undefined) cfg.algorithm.epsilon_high = cfg.algorithm.epsilon;
+  }
+  return cfg;
 }
 
 const methodOf = (cfg) => (!cfg.peft.enabled ? 'full' : (cfg.peft.type === 'qlora' || cfg.quantization.enabled ? 'qlora' : 'lora'));
@@ -262,11 +286,15 @@ function exportConfig(cfg) {
 
 const timers = new Set();
 function every(ms, fn) { const id = setInterval(fn, ms); timers.add(id); return id; }
+let navId = 0;
+/** Call at page start; the returned function says whether that page is still showing. */
+function stillHere() { const mine = navId; return () => mine === navId; }
 function clearTimers() { timers.forEach(clearInterval); timers.clear(); }
 
 const routes = {
   runs: renderRuns,
   run: renderRun,
+  compare: renderCompare,
   new: renderWizard,
   planner: renderPlanner,
   checkpoints: renderCheckpoints,
@@ -274,30 +302,33 @@ const routes = {
   api: renderApi,
 };
 
-const VIEW_TITLE = { runs: 'Runs', run: 'Runs', new: 'New run', planner: 'Planner', checkpoints: 'Checkpoints', system: 'System', api: 'API reference' };
+const VIEW_TITLE = { runs: 'Runs', run: 'Runs', compare: 'Runs', new: 'New run', planner: 'Planner', checkpoints: 'Checkpoints', system: 'System', api: 'API reference' };
 const VIEW_GROUP = { system: 'Infrastructure', api: 'Infrastructure' };
 
 function setCrumbs(view, arg) {
   const el = $('#crumbs');
   if (!el) return;
   const group = `<span>${VIEW_GROUP[view] || 'Workspace'}</span><span aria-hidden="true">/</span>`;
-  el.innerHTML = view === 'run' && arg
+  if (view === 'compare') arg = 'Compare';
+  el.innerHTML = (view === 'run' || view === 'compare') && arg
     ? `${group}<a href="#/runs">Runs</a><span aria-hidden="true">/</span><span aria-current="page" id="crumb-leaf">${esc(arg)}</span>`
     : `${group}<span aria-current="page">${esc(VIEW_TITLE[view] || 'Runs')}</span>`;
 }
 
 function route() {
   clearTimers();
+  navId += 1;
   const [name, arg] = (location.hash.replace(/^#\/?/, '') || 'runs').split('/');
   const view = routes[name] ? name : 'runs';
-  $$('.rail nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.nav === (view === 'run' ? 'runs' : view)));
+  $$('.rail nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.nav === (view === 'run' || view === 'compare' ? 'runs' : view)));
   $$('.rail nav a').forEach((a) => { if (a.hasAttribute('aria-current')) a.setAttribute('aria-current', 'page'); });
   setCrumbs(view, arg ? decodeURIComponent(arg) : undefined);
   const main = $('#main');
   main.innerHTML = '';
   window.scrollTo(0, 0);
+  const here = stillHere();
   Promise.resolve(routes[view](main, arg ? decodeURIComponent(arg) : undefined)).catch((e) => {
-    main.innerHTML = `<div class="page"><div class="notice error"><div><strong>This page could not load.</strong> ${esc(e.message)}</div></div></div>`;
+    if (here()) main.innerHTML = `<div class="page"><div class="notice error"><div><strong>This page could not load.</strong> ${esc(e.message)}</div></div></div>`;
   });
 }
 
@@ -327,295 +358,314 @@ function runTitle(job) {
   return `${ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'] || 'Run'} ${model}`;
 }
 
+const RUN_FILTERS = [['all', 'All'], ['running', 'Running'], ['pending', 'Queued'], ['completed', 'Completed'], ['failed', 'Failed'], ['cancelled', 'Cancelled']];
+const MAX_COMPARE = 3;
+const seconds = (j) => (j.started_at ? ((j.finished_at ? new Date(j.finished_at) : new Date()) - new Date(j.started_at)) / 1000 : null);
+const modelOf = (c) => (c.model_type === 'custom_transformer' ? 'custom transformer' : String(c.model_name || ''));
+function methodLabel(c) {
+  if (!c.peft || !c.peft.enabled) return '';
+  return c.quantization && c.quantization.enabled ? 'QLoRA' : 'LoRA';
+}
+
 async function renderRuns(main) {
+  const here = stillHere();
+  let filter = 'all', query = '', jobs = [];
+  const picked = new Set();
   main.innerHTML = `
     <div class="page">
       <div class="page-head">
-        <div><h1>Runs</h1><p>Every training job queued on this machine. Jobs start as soon as enough GPUs are free.</p></div>
+        <div><h1>Runs</h1><p>Every training job on this machine. Queued jobs start as soon as enough GPUs are free.</p></div>
         <a class="btn primary" href="#/new">New run</a>
       </div>
-      <div class="stats" id="run-stats" style="margin-bottom:20px"></div>
-      <div class="panel"><div id="runs-table"><div class="panel-pad"><div class="skeleton"></div></div></div></div>
+      <div class="stats" id="run-stats"></div>
+      <div class="list-bar" id="list-bar" hidden>
+        <div class="segmented" role="group" aria-label="Filter by status" id="run-filter"></div>
+        <input type="search" id="run-search" placeholder="Search name, model or dataset" aria-label="Search runs">
+        <button class="btn small" id="run-compare" disabled>Compare</button>
+      </div>
+      <div class="panel" id="runs-table"><div class="panel-pad"><div class="skeleton"></div></div></div>
     </div>`;
 
-  const draw = async () => {
-    let jobs, q;
-    try { [jobs, q] = await Promise.all([api('/api/queue/jobs?limit=200'), api('/api/queue/status')]); }
-    catch (e) { $('#runs-table').innerHTML = `<div class="panel-pad notice error">${esc(e.message)}</div>`; return; }
-    jobs = jobs.jobs;
-    const count = (s) => jobs.filter((j) => j.status === s).length;
-    const busy = q.total_gpus - q.available_gpus;
-    const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-    const lastFail = jobs.find((j) => j.status === 'failed');
-    const tile = (k, v, sub, dot = '', extra = '') => `<div class="stat"><div class="k"><span>${k}</span>${dot ? `<i class="${dot}"></i>` : ''}</div>
-      <div class="v">${v}</div>${extra}${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
-    $('#run-stats').innerHTML = [
-      tile('Running', count('running'), busy ? `${plural(busy, 'GPU')} busy` : 'No GPUs busy', 'running'),
-      tile('Queued', count('pending'), count('pending') ? 'Starts when GPUs free up' : 'Queue is empty', 'pending'),
-      tile('GPUs free', `${q.available_gpus}<small> / ${q.total_gpus}</small>`, '', '',
-        `<div class="meter" aria-hidden="true"><span style="width:${q.total_gpus ? ((busy / q.total_gpus) * 100).toFixed(1) : 0}%"></span></div>`),
-      tile('Completed', count('completed'), 'All time', 'completed'),
-      tile('Failed', count('failed'), lastFail ? esc(runTitle(lastFail)) : 'None', 'failed'),
-    ].join('');
+  const matches = (j) => {
+    const c = j.config || {};
+    const hay = [runTitle(j), c.model_name, (c.dataset || {}).name, (c.algorithm || {}).type, c.strategy].join(' ').toLowerCase();
+    return (filter === 'all' || j.status === filter) && (!query || hay.includes(query));
+  };
 
+  const drawCompare = () => {
+    const b = $('#run-compare');
+    b.disabled = picked.size < 2;
+    b.textContent = picked.size ? `Compare ${picked.size} of ${MAX_COMPARE}` : 'Compare';
+    b.title = picked.size < 2 ? 'Tick two or three runs to compare them' : '';
+  };
+
+  const drawTable = () => {
+    const el = $('#runs-table');
     if (!jobs.length) {
-      $('#runs-table').innerHTML = `
-        <div class="empty">
-          <h2>No runs yet</h2>
-          <p>Pick a goal (pretraining, SFT or preference alignment), a model and a dataset. The planner tells you whether it fits on one GPU or needs FSDP or 5D parallelism.</p>
-          <a class="btn primary" href="#/new">Start a run</a>
-        </div>`;
+      el.innerHTML = `<div class="empty"><h2>No runs yet</h2>
+        <p>Pick a goal, a model and a dataset. The planner tells you whether it fits on one GPU or needs FSDP or 5D parallelism.</p>
+        <a class="btn primary" href="#/new">Start a run</a></div>`;
       return;
     }
-    $('#runs-table').innerHTML = `
-      <div class="table-wrap"><table>
-        <thead><tr><th>Run</th><th>Status</th><th>Goal</th><th>Strategy</th><th class="right">GPUs</th><th>Progress</th><th>Created</th></tr></thead>
-        <tbody>${jobs.map((j) => {
-          const c = j.config || {};
-          const p = j.progress;
-          const frac = j.status === 'completed' ? 1 : (p ? p.fraction : 0);
-          const progress = j.status === 'running' || j.status === 'completed'
-            ? `<div class="bar" title="${Math.round(frac * 100)}%"><span style="width:${(frac * 100).toFixed(1)}%"></span></div>
-               <div class="run-sub num">${p ? `step ${p.global_step}/${p.total_steps}, loss ${p.loss.toFixed(3)}` : (j.status === 'completed' ? 'done' : 'starting')}</div>`
-            : '<span class="faint">–</span>';
-          return `<tr class="clickable" data-id="${esc(j.id)}" tabindex="0">
-            <td><div class="run-name">${esc(runTitle(j))}</div><div class="run-sub">${esc(c.model_type === 'custom_transformer' ? 'custom_transformer' : c.model_name || '')}</div></td>
-            <td>${statusPill(j.status)}</td>
-            <td>${esc(ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'] || '')}${c.peft && c.peft.enabled ? ` <span class="faint">${c.quantization && c.quantization.enabled ? 'QLoRA' : 'LoRA'}</span>` : ''}</td>
-            <td>${esc(strategyLabel(c))}</td>
-            <td class="right num">${j.gpu_count}</td>
-            <td style="min-width:160px">${progress}</td>
-            <td class="run-sub">${esc(fmt.ago(j.created_at))}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table></div>`;
-    $$('#runs-table tr[data-id]').forEach((tr) => {
-      const go = () => { location.hash = `#/run/${tr.dataset.id}`; };
-      tr.onclick = go;
-      tr.onkeydown = (e) => { if (e.key === 'Enter') go(); };
-    });
+    const shown = jobs.filter(matches);
+    if (!shown.length) { el.innerHTML = '<div class="empty"><h2>No run matches</h2><p>Change the filter or clear the search.</p></div>'; return; }
+    el.innerHTML = `<div class="table-wrap"><table class="runs">
+      <thead><tr><th><span class="sr">Select to compare</span></th><th>Run</th><th>Status</th><th>Goal</th><th>Strategy</th><th>Result</th><th class="right">Duration</th><th class="right">Created</th></tr></thead>
+      <tbody>${shown.map((j) => {
+        const c = j.config || {}, p = j.progress, m = j.summary;
+        const frac = p ? p.fraction : 0;
+        const result = j.status === 'running'
+          ? `<div class="bar" role="progressbar" aria-valuenow="${Math.round(frac * 100)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${(frac * 100).toFixed(1)}%"></span></div>
+             <div class="run-sub num">${p ? `${Math.round(frac * 100)}%, step ${fmt.int(p.global_step)} of ${fmt.int(p.total_steps)}` : 'starting'}</div>`
+          : m ? `<span class="num"><b>${VIZ.num(m.value)}</b> <span class="faint">${esc(m.key)}</span></span>`
+          : j.status === 'failed' ? '<span class="faint">stopped before the first step</span>' : '<span class="faint">–</span>';
+        const can = j.status !== 'pending';
+        return `<tr class="clickable" data-id="${esc(j.id)}">
+          <td class="pick"><input type="checkbox" data-pick="${esc(j.id)}" aria-label="Compare ${esc(runTitle(j))}" ${picked.has(j.id) ? 'checked' : ''} ${can ? '' : 'disabled'}></td>
+          <td data-l="Run"><a class="run-name" href="#/run/${esc(j.id)}">${esc(runTitle(j))}</a><div class="run-sub">${esc(modelOf(c))}</div></td>
+          <td data-l="Status">${statusPill(j.status)}</td>
+          <td data-l="Goal">${esc(ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'] || '')} <span class="faint">${methodLabel(c)}</span></td>
+          <td data-l="Strategy">${esc(strategyLabel(c))} <span class="faint num">${j.gpu_count} GPU${j.gpu_count > 1 ? 's' : ''}</span></td>
+          <td data-l="Result" class="result">${result}</td>
+          <td data-l="Duration" class="right num">${j.status === 'pending' ? '–' : esc(fmt.dur(seconds(j)))}</td>
+          <td data-l="Created" class="right run-sub">${esc(fmt.ago(j.created_at))}</td></tr>`;
+      }).join('')}</tbody></table></div>`;
+  };
+
+  $('#runs-table').addEventListener('click', (e) => {
+    const box = e.target.closest('[data-pick]');
+    if (box) {
+      if (box.checked && picked.size >= MAX_COMPARE) { box.checked = false; toast(`Compare up to ${MAX_COMPARE} runs at a time`); } else if (box.checked) picked.add(box.dataset.pick); else picked.delete(box.dataset.pick);
+      drawCompare();
+      return;
+    }
+    if (e.target.closest('a, .pick')) return;
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) location.hash = `#/run/${tr.dataset.id}`;
+  });
+  $('#run-search').oninput = (e) => { query = e.target.value.trim().toLowerCase(); drawTable(); };
+  $('#run-filter').onclick = (e) => { const b = e.target.closest('button'); if (b) { filter = b.dataset.val; draw(); } };
+  $('#run-compare').onclick = () => { location.hash = `#/compare/${[...picked].join(',')}`; };
+
+  const draw = async () => {
+    let q;
+    try { const [a, b] = await Promise.all([api('/api/queue/jobs?limit=500'), api('/api/queue/status')]); if (!here()) return; jobs = a.jobs; q = b; } catch (e) {
+      if (here()) $('#runs-table').innerHTML = `<div class="panel-pad"><div class="notice error"><div>${esc(e.message)}</div></div></div>`;
+      return;
+    }
+    const count = (st) => jobs.filter((j) => j.status === st).length;
+    const busy = q.total_gpus - q.available_gpus;
+    const finished = count('completed') + count('failed');
+    const tile = (k, v, sub, dot = '', extra = '') => `<div class="stat"><div class="k"><span>${k}</span>${dot ? `<i class="${dot}"></i>` : ''}</div><div class="v">${v}</div>${extra}<div class="s">${sub}</div></div>`;
+    $('#run-stats').innerHTML = [
+      tile('Running', count('running'), busy ? `${busy} GPU${busy > 1 ? 's' : ''} busy` : 'No GPU reserved', 'running'),
+      tile('Queued', count('pending'), count('pending') ? 'Starts when GPUs free up' : 'Queue is empty', 'pending'),
+      tile('GPUs free', `${q.available_gpus}<small> of ${q.total_gpus}</small>`, busy ? `${busy} in use` : 'All idle'),
+      tile('Completed', count('completed'), finished ? `${Math.round((count('completed') / finished) * 100)}% of finished runs` : 'None yet', 'completed'),
+    ].join('');
+    $('#list-bar').hidden = !jobs.length;
+    $('#run-filter').innerHTML = RUN_FILTERS.map(([id, label]) => [id, label, id === 'all' ? jobs.length : count(id)]).filter(([id, , n]) => n || id === 'all' || id === filter)
+      .map(([id, label, n]) => `<button type="button" data-val="${id}" aria-pressed="${id === filter}">${label} <span class="num faint">${n}</span></button>`).join('');
+    [...picked].forEach((id) => { if (!jobs.some((j) => j.id === id)) picked.delete(id); });
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.pick : null;
+    drawTable(); drawCompare();
+    if (focused) { const f = $(`[data-pick="${focused}"]`); if (f) f.focus(); }
   };
   await draw();
-  every(3000, draw);
+  if (here()) every(3000, draw);
 }
 
 // ---------------------------------------------------------------------------
 // Run detail
 // ---------------------------------------------------------------------------
 
-function classifyLine(line) {
-  if (/Traceback|Error|❌|FAILED|exited with code [1-9]/.test(line)) return 'e';
-  if (/Warning|WARN/i.test(line)) return 'w';
-  if (/✅|complete|saved/i.test(line)) return 's';
-  if (/Epoch \d+\/\d+ \[/.test(line)) return 'p';
-  return '';
-}
-
-function errorSummary(logs) {
-  for (let i = logs.length - 1; i >= 0; i--) {
-    if (/^[A-Za-z_.]*(Error|Exception)\b.*:/.test(logs[i].trim())) return logs[i].trim();
-  }
-  return '';
-}
-
-function lossChart(points, width, key = 'loss', avgKey = 'avg') {
-  if (!points || points.length < 2) return '<p class="faint" style="padding:40px 0;text-align:center">The curve appears after the first logged steps.</p>';
-  if (key !== 'loss') points = points.map((p, i, all) => {
-    const win = all.slice(Math.max(0, i - 9), i + 1).map((q) => q[key]).filter((v) => v != null);
-    return { ...p, loss: p[key], avg: win.length ? win.reduce((x, y) => x + y, 0) / win.length : null };
-  });
-  const W = Math.max(320, width), H = 260, L = 48, R = 12, T = 12, B = 28;
-  const xs = points.map((p) => p.global_step);
-  const ys = points.flatMap((p) => [p.loss, p.avg]).filter((v) => v != null);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  let y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const pad = (y1 - y0) * 0.08 || 0.5; y0 -= pad; y1 += pad;
-  const sx = (x) => L + ((x - x0) / Math.max(1, x1 - x0)) * (W - L - R);
-  const sy = (y) => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
-  const path = (key) => points.filter((p) => p[key] != null).map((p, i) => `${i ? 'L' : 'M'}${sx(p.global_step).toFixed(1)},${sy(p[key]).toFixed(1)}`).join('');
-  const ticks = 4;
-  let grid = '';
-  for (let i = 0; i <= ticks; i++) {
-    const v = y0 + ((y1 - y0) * i) / ticks;
-    grid += `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}"/><text class="axis-text" x="${L - 8}" y="${sy(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`;
-  }
-  for (let i = 0; i <= 4; i++) {
-    const v = Math.round(x0 + ((x1 - x0) * i) / 4);
-    grid += `<text class="axis-text" x="${sx(v)}" y="${H - 8}" text-anchor="middle">${v}</text>`;
-  }
-  const line = path('loss');
-  const area = `${line}L${sx(x1)},${H - B}L${sx(x0)},${H - B}Z`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Training loss by step">
-    ${grid}<path class="area" d="${area}"/><path class="line avg" d="${path('avg')}"/><path class="line" d="${line}"/></svg>
-    <div class="legend"><span><i style="background:var(--signal)"></i>Step loss</span><span><i style="background:var(--ink-3)"></i>Running average</span></div>`;
-}
-
 async function renderRun(main, id) {
-  main.innerHTML = `<div class="page"><div class="skeleton" style="width:40%;height:28px"></div></div>`;
-  let tab = 'logs';
-  let stick = true;
-  let lastYaml = null;
+  const here = stillHere();
+  main.innerHTML = '<div class="page"><div class="skeleton" style="width:40%;height:28px"></div></div>';
+  let job = await api(`/api/queue/jobs/${encodeURIComponent(id)}?tail=5000`);
+  if (!here()) return;
+  let tab = 'logs', metric = null, smoothing = store.get('omni-smooth', 0), sig = '', log = null;
 
-  const shell = (job) => `
+  main.innerHTML = `
     <div class="page">
       <div class="run-head">
-        <div>
-          <h1><span>${esc(runTitle(job))}</span><span id="run-status">${statusPill(job.status)}</span></h1>
-          <div class="meta" id="run-meta"></div>
-        </div>
+        <div><h1><span>${esc(runTitle(job))}</span><span id="run-status"></span></h1><div class="meta" id="run-meta"></div></div>
         <div class="btn-row" id="run-actions"></div>
       </div>
       <div id="run-error"></div>
-      <div class="stats" id="run-stats" style="margin-bottom:20px"></div>
-      <div class="panel" style="margin-bottom:20px">
-        <div class="panel-head"><h2 id="chart-title">Loss</h2><span class="faint" id="chart-meta"></span></div>
-        <div class="panel-pad" id="chart"></div>
+      <div class="kpis panel" id="run-kpis"></div>
+      <div class="panel" id="chart-panel">
+        <div class="panel-head wrap">
+          <div class="segmented" role="group" aria-label="Metric" id="metric-pick"></div>
+          <div class="btn-row"><label class="inline">Smoothing <select id="smooth"><option value="0">Off</option><option value="0.6">Light</option><option value="0.9">Strong</option></select></label>
+          <button class="btn small" id="csv">Download CSV</button></div>
+        </div>
+        <div class="panel-pad"><p class="chart-note faint" id="chart-note"></p><div id="chart"></div></div>
       </div>
       <div class="panel">
         <div class="tabs" role="tablist">
-          <button role="tab" data-tab="logs" aria-selected="true">Logs</button>
+          <button role="tab" data-tab="logs" aria-selected="true">Log</button>
           <button role="tab" data-tab="config" aria-selected="false">Config</button>
         </div>
-        <div id="tab-body"></div>
+        <div id="tab-logs"></div><div id="tab-config" hidden></div>
       </div>
     </div>`;
-
-  let job = await api(`/api/queue/jobs/${encodeURIComponent(id)}`);
-  main.innerHTML = shell(job);
   const leaf = $('#crumb-leaf'); if (leaf) leaf.textContent = runTitle(job);
-  $$('.tabs button', main).forEach((b) => { b.onclick = () => { tab = b.dataset.tab; $$('.tabs button', main).forEach((x) => x.setAttribute('aria-selected', String(x === b))); drawTab(); }; });
-
-  const actions = () => {
-    const bar = $('#run-actions');
-    const active = job.status === 'running' || job.status === 'pending';
-    bar.innerHTML = `
-      ${active ? `<button class="btn danger" data-act="stop">${job.status === 'pending' ? 'Cancel' : 'Stop run'}</button>` : ''}
-      <button class="btn" data-act="clone">Clone and edit</button>
-      <button class="btn" data-act="yaml">Download YAML</button>
-      ${active ? '' : '<button class="btn ghost danger" data-act="delete">Delete</button>'}`;
-    bar.onclick = async (e) => {
-      const act = e.target.closest('button') && e.target.closest('button').dataset.act;
-      if (act === 'stop') {
-        dialog({ title: job.status === 'pending' ? 'Cancel this queued run?' : 'Stop this run?',
-          body: '<p class="muted">The process is terminated. Checkpoints already saved stay on disk.</p>',
-          actions: [{ label: 'Keep running' }, { label: job.status === 'pending' ? 'Cancel run' : 'Stop run', kind: 'primary', onClick: async () => {
-            try { await api(`/api/queue/jobs/${id}/cancel`, { method: 'POST' }); toast('Run stopped'); refresh(); } catch (err) { toast(err.message, 'error'); }
-          } }] });
-      } else if (act === 'clone') {
-        const cfg = deepMerge(defaultConfig(), job.config);
-        store.set('omni-draft', { cfg, ui: { name: `${runTitle(job)} (copy)` }, step: 0 });
-        location.hash = '#/new';
-      } else if (act === 'yaml') {
-        const r = await api('/api/config/render', { json: { config: job.config } });
-        download(`${(job.name || 'run').replace(/[^\w.-]+/g, '_')}.yaml`, r.yaml);
-      } else if (act === 'delete') {
-        dialog({ title: 'Delete this run from history?', body: '<p class="muted">Its log is deleted. Checkpoints on disk are kept.</p>',
-          actions: [{ label: 'Keep' }, { label: 'Delete run', kind: 'primary', onClick: async () => {
-            try { await api(`/api/queue/jobs/${id}`, { method: 'DELETE' }); toast('Run deleted'); location.hash = '#/runs'; } catch (err) { toast(err.message, 'error'); }
-          } }] });
-      }
-    };
+  log = new LogView($('#tab-logs'), { name: (job.name || id).replace(/[^\w.-]+/g, '_'), url: `/api/queue/jobs/${encodeURIComponent(id)}/log` });
+  $('#smooth').value = String(smoothing);
+  $('#smooth').onchange = (e) => { smoothing = Number(e.target.value); store.set('omni-smooth', smoothing); drawChart(true); };
+  $('#metric-pick').onclick = (e) => { const b = e.target.closest('button'); if (b) { metric = b.dataset.val; drawChart(true); } };
+  $('#csv').onclick = () => {
+    const pts = (job.metrics || {}).points || [], keys = ['global_step', 'epoch', ...metricKeys(pts)];
+    download(`${(job.name || 'run').replace(/[^\w.-]+/g, '_')}-metrics.csv`, [keys.join(','), ...pts.map((p) => keys.map((k) => p[k] ?? '').join(','))].join('\n'));
   };
-
-  const drawTab = async () => {
-    const body = $('#tab-body');
-    if (tab === 'logs') {
-      if (!$('#console', body)) {
-        body.innerHTML = '<div class="console" id="console" tabindex="0" aria-label="Run log"></div>';
-        $('#console').onscroll = (e) => { const el = e.target; stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 30; };
-      }
-      const el = $('#console');
-      const logs = job.logs || [];
-      el.innerHTML = logs.length ? logs.map((l) => { const c = classifyLine(l); return c ? `<span class="${c}">${esc(l)}</span>` : esc(l); }).join('\n') : '<span class="p">Waiting for output…</span>';
-      if (stick) el.scrollTop = el.scrollHeight;
-    } else {
-      if (lastYaml === null) lastYaml = (await api('/api/config/render', { json: { config: job.config } })).yaml;
-      body.innerHTML = `<div class="panel-pad"><pre class="code">${esc(lastYaml)}</pre></div>`;
+  $$('.tabs button', main).forEach((b) => { b.onclick = async () => {
+    tab = b.dataset.tab;
+    $$('.tabs button', main).forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    $('#tab-logs').hidden = tab !== 'logs'; $('#tab-config').hidden = tab !== 'config';
+    if (tab === 'config' && !$('#tab-config').innerHTML) {
+      const r = await api('/api/config/render', { json: { config: job.config } });
+      if (here()) $('#tab-config').innerHTML = `<div class="panel-pad"><pre class="code">${esc(r.yaml)}</pre></div>`;
     }
+  }; });
+
+  const cloneRun = () => {
+    store.set('omni-draft', { cfg: loadConfig(job.config), ui: { name: `${runTitle(job)}-copy` }, step: 4 });
+    location.hash = '#/new';
+  };
+  const act = {
+    stop: () => dialog({ title: job.status === 'pending' ? 'Cancel this queued run?' : 'Stop this run?',
+      body: '<p class="muted">The process is terminated. Checkpoints already saved stay on disk.</p>',
+      actions: [{ label: 'Keep it' }, { label: job.status === 'pending' ? 'Cancel run' : 'Stop run', kind: 'primary', onClick: async () => {
+        try { await api(`/api/queue/jobs/${id}/cancel`, { method: 'POST' }); toast(job.status === 'pending' ? 'Run cancelled' : 'Run stopped'); refresh(); } catch (e) { toast(e.message, 'error'); }
+      } }] }),
+    clone: cloneRun,
+    yaml: async () => { const r = await api('/api/config/render', { json: { config: job.config } }); download(`${(job.name || 'run').replace(/[^\w.-]+/g, '_')}.yaml`, r.yaml); },
+    delete: () => dialog({ title: 'Delete this run from history?', body: '<p class="muted">Its log is deleted. Checkpoints on disk are kept.</p>',
+      actions: [{ label: 'Keep' }, { label: 'Delete run', kind: 'primary', onClick: async () => {
+        try { await api(`/api/queue/jobs/${id}`, { method: 'DELETE' }); toast('Run deleted'); location.hash = '#/runs'; } catch (e) { toast(e.message, 'error'); }
+      } }] }),
+    error: () => { $('[data-tab="logs"]').click(); log.showError(); },
+  };
+  main.addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b && act[b.dataset.act]) act[b.dataset.act](); });
+
+  const drawChart = (force) => {
+    const pts = (job.metrics || {}).points || [];
+    const keys = metricKeys(pts);
+    const now = `${pts.length}|${metric}|${smoothing}|${$('#chart').clientWidth}`;
+    if (!force && now === sig) return;                       // keep the hover readout while nothing changed
+    sig = now;
+    const none = pts.length < 2;
+    $('#chart-panel').hidden = none && !['running', 'pending'].includes(job.status);
+    if (!metric || !keys.includes(metric)) metric = keys[0] || 'loss';
+    $('#metric-pick').innerHTML = (keys.length ? keys : ['loss']).map((k) => `<button type="button" data-val="${esc(k)}" aria-pressed="${k === metric}">${esc(metricLabel(k))}</button>`).join('');
+    $('#csv').disabled = none;
+    const series = metricSeries(pts, metric);
+    const mean = series.length ? series.reduce((a, [, y]) => a + y, 0) / series.length : null;
+    $('#chart-note').textContent = none ? '' : [(METRIC_INFO[metric] || [])[1], `mean ${VIZ.num(mean)}`, `last ${VIZ.num(series.length ? series[series.length - 1][1] : null)}`].filter(Boolean).join(', ');
+    drawLineChart($('#chart'), [{ name: metricLabel(metric), color: 'var(--c1)', points: series }], { label: metricLabel(metric), smoothing });
   };
 
   const draw = () => {
+    const c = job.config || {}, m = job.metrics || {}, p = m.progress;
+    const active = job.status === 'running' || job.status === 'pending';
     $('#run-status').innerHTML = statusPill(job.status);
-    const c = job.config || {};
-    const started = job.started_at ? new Date(job.started_at) : null;
-    const ended = job.finished_at ? new Date(job.finished_at) : null;
-    const elapsed = started ? ((ended || new Date()) - started) / 1000 : null;
-    $('#run-meta').innerHTML = esc([
-      c.model_type === 'custom_transformer' ? 'custom_transformer' : c.model_name,
-      ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'],
-      `${strategyLabel(c)} on ${job.gpu_count} GPU${job.gpu_count > 1 ? 's' : ''}${job.gpu_indices && job.gpu_indices.length ? ` (${job.gpu_indices.join(', ')})` : ''}`,
-      (c.dataset || {}).name,
-    ].filter(Boolean).join(', '));
+    $('#run-meta').innerHTML = [modelOf(c), [ALGO_LABEL[(c.algorithm || {}).type || 'pretrain'], methodLabel(c)].filter(Boolean).join(' + '),
+      `${strategyLabel(c)} on ${job.gpu_count} GPU${job.gpu_count > 1 ? 's' : ''}`, (c.dataset || {}).name].filter(Boolean).map((t) => `<span>${esc(t)}</span>`).join('');
+    $('#run-actions').innerHTML = `${active ? `<button class="btn danger" data-act="stop">${job.status === 'pending' ? 'Cancel' : 'Stop run'}</button>` : ''}
+      <button class="btn" data-act="clone">Clone and edit</button><button class="btn" data-act="yaml">Download YAML</button>
+      ${active ? '' : '<button class="btn ghost danger" data-act="delete">Delete</button>'}`;
 
-    const m = job.metrics || {};
-    const p = m.progress;
     const frac = job.status === 'completed' ? 1 : p ? p.fraction : 0;
+    const elapsed = seconds(job);
     const eta = job.status === 'running' && p && frac > 0 && elapsed ? (elapsed * (1 - frac)) / frac : null;
-    const stats = [
-      ['Progress', `${Math.round(frac * 100)}%`],
-      ['Step', p ? `${fmt.int(p.global_step)} / ${fmt.int(p.total_steps)}` : '–'],
-      ['Epoch', p ? `${p.epoch} / ${p.epochs}` : '–'],
-      ['Loss', p ? p.loss.toFixed(4) : '–'],
-      [p && p.tokens_per_s ? 'Tokens / s' : 'Avg loss', p ? (p.tokens_per_s ? fmt.int(p.tokens_per_s) : (p.avg != null ? p.avg.toFixed(4) : '–')) : '–'],
-      ['Elapsed', fmt.dur(elapsed)],
-      job.status === 'running' ? ['Time left', fmt.dur(eta)]
-        : job.status === 'pending' ? ['Queue', 'waiting for GPUs']
-        : ['Finished', fmt.ago(job.finished_at)],
-    ];
-    $('#run-stats').innerHTML = stats.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+    const sum = p && p.reward != null ? (() => { const r = metricSeries(m.points, 'reward').slice(-10).map((x) => x[1]); return ['Reward, last 10 steps', VIZ.num(r.reduce((a, b) => a + b, 0) / (r.length || 1))]; })() : p ? ['Loss', VIZ.num(p.loss)] : null;
+    const kpis = [
+      p ? ['Progress', `${Math.round(frac * 100)}%`, frac] : job.status === 'pending' ? ['Queue', job.queue_position ? `Position ${job.queue_position}` : 'Waiting'] : null,
+      p ? ['Step', `${fmt.int(p.global_step)}<small> of ${fmt.int(p.total_steps)}</small>`] : null,
+      p && p.epochs > 1 ? ['Epoch', `${p.epoch}<small> of ${p.epochs}</small>`] : null,
+      sum,
+      p && p.reward == null && p.avg != null ? ['Average loss', VIZ.num(p.avg)] : null,
+      p && p.tokens_per_s ? ['Tokens per second', fmt.int(p.tokens_per_s)] : null,
+      elapsed != null ? [job.status === 'running' ? 'Elapsed' : 'Duration', fmt.dur(elapsed)] : null,
+      eta != null ? ['Time left', fmt.dur(eta)] : job.finished_at ? ['Finished', fmt.ago(job.finished_at)] : null,
+    ].filter(Boolean);
+    $('#run-kpis').innerHTML = kpis.map(([k, v, f]) => `<div class="kpi"><div class="k">${k}</div><div class="v num">${v}</div>${f != null ? `<div class="bar"><span style="width:${(f * 100).toFixed(1)}%"></span></div>` : ''}</div>`).join('');
+    $('#run-kpis').hidden = !kpis.length;
 
-    const chart = $('#chart');
-    const rl = (m.points || []).some((pt) => pt.reward != null);
-    $('#chart-title').textContent = rl ? 'Reward' : 'Loss';
-    chart.innerHTML = lossChart(m.points, chart.clientWidth - 44, rl ? 'reward' : 'loss');
-    $('#chart-meta').textContent = m.epochs && m.epochs.length ? `epoch averages: ${m.epochs.map((e) => e.loss.toFixed(3)).join(', ')}` : '';
-
-    const err = job.status === 'failed' ? (errorSummary(job.logs || []) || job.error_message) : '';
-    $('#run-error').innerHTML = err ? `<div class="notice error" style="margin-bottom:20px"><div><strong>The run failed.</strong> <code>${esc(err)}</code></div></div>` : '';
-    actions();
-    drawTab();
+    const err = job.status === 'failed' ? (errorSummary(job.logs || []) || job.error_message || 'The process stopped without an error message.') : '';
+    const hint = err ? failureHint(`${err}\n${(job.logs || []).slice(-60).join('\n')}`) : null;
+    $('#run-error').innerHTML = err ? `<div class="fail panel"><div class="fail-body"><h2>${esc(hint ? hint.what : 'The run failed.')}</h2>
+      ${hint ? `<p>${esc(hint.fix)}</p>` : ''}<pre>${esc(err.length > 400 ? `${err.slice(0, 400)}…` : err)}</pre>
+      <div class="btn-row"><button class="btn primary small" data-act="clone">Clone and fix</button><button class="btn small" data-act="error">Show in log</button></div></div></div>` : '';
+    log.set(job.logs || []);
+    drawChart(false);
   };
 
   const refresh = async () => {
-    try { job = await api(`/api/queue/jobs/${encodeURIComponent(id)}`); draw(); } catch (e) { /* transient */ }
+    try { const j = await api(`/api/queue/jobs/${encodeURIComponent(id)}?tail=5000`); if (here()) { job = j; draw(); } } catch (e) { /* transient: the next poll retries */ }
   };
   draw();
   every(2000, () => { if (job.status === 'running' || job.status === 'pending') refresh(); });
+  let rt = null;
+  const onResize = () => { if (!here()) { window.removeEventListener('resize', onResize); return; } clearTimeout(rt); rt = setTimeout(() => here() && drawChart(true), 120); };
+  window.addEventListener('resize', onResize);
+}
+
+// ---------------------------------------------------------------------------
+// Compare runs
+// ---------------------------------------------------------------------------
+
+function flatConfig(o, prefix = '', out = {}) {
+  Object.entries(o || {}).forEach(([k, v]) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) flatConfig(v, `${prefix}${k}.`, out); else out[prefix + k] = v == null ? '' : Array.isArray(v) ? v.join(', ') : String(v);
+  });
+  return out;
+}
+
+async function renderCompare(main, arg) {
+  const here = stillHere();
+  const ids = String(arg || '').split(',').filter(Boolean).slice(0, MAX_COMPARE);
+  const got = await Promise.allSettled(ids.map((id) => api(`/api/queue/jobs/${encodeURIComponent(id)}?tail=1`)));
+  if (!here()) return;
+  const jobs = got.filter((g) => g.status === 'fulfilled').map((g) => g.value);
+  if (jobs.length < 2) {
+    main.innerHTML = '<div class="page"><div class="panel empty"><h2>Pick at least two runs</h2><p>Tick two or three runs in the list, then press Compare.</p><a class="btn primary" href="#/runs">Go to runs</a></div></div>';
+    return;
+  }
+  const color = (i) => `var(--c${i + 1})`;
+  const names = jobs.map((j, i) => (jobs.some((k, n) => n !== i && runTitle(k) === runTitle(j)) ? `${runTitle(j)} (${j.id.slice(0, 4)})` : runTitle(j)));
+  const keys = [...new Set(jobs.flatMap((j) => metricKeys(j.metrics.points)))];
+  const shared = keys.filter((k) => jobs.every((j) => metricSeries(j.metrics.points, k).length > 1));
+  let metric = shared[0] || keys[0], smoothing = store.get('omni-smooth', 0);
+  const flat = jobs.map((j) => flatConfig(j.config));
+  const diff = [...new Set(flat.flatMap(Object.keys))].filter((k) => new Set(flat.map((f) => f[k] ?? '')).size > 1).sort();
+  const head = names.map((n, i) => `<th><i class="key" style="background:${color(i)}"></i><a href="#/run/${esc(jobs[i].id)}">${esc(n)}</a></th>`).join('');
+  const last = (j, k) => { const se = metricSeries(j.metrics.points, k).slice(k === 'loss' ? -1 : -10); return se.length ? VIZ.num(se.reduce((a, x) => a + x[1], 0) / se.length) : '–'; };
+  main.innerHTML = `<div class="page">
+    <div class="page-head"><div><h1>Compare runs</h1><p>${names.map(esc).join(', ')}</p></div><a class="btn" href="#/runs">Back to runs</a></div>
+    <div class="panel"><div class="panel-head wrap"><div class="segmented" role="group" aria-label="Metric" id="metric-pick"></div>
+      <label class="inline">Smoothing <select id="smooth"><option value="0">Off</option><option value="0.6">Light</option><option value="0.9">Strong</option></select></label></div>
+      <div class="panel-pad"><div id="chart"></div></div></div>
+    <div class="panel"><div class="panel-head"><h2>Results</h2><span class="faint">last loss; mean of the last 10 steps for everything else</span></div><div class="table-wrap"><table class="cmp"><thead><tr><th>Metric</th>${head}</tr></thead><tbody>
+      <tr><td>Status</td>${jobs.map((j) => `<td>${statusPill(j.status)}</td>`).join('')}</tr>
+      <tr><td>Duration</td>${jobs.map((j) => `<td class="num">${esc(fmt.dur(seconds(j)))}</td>`).join('')}</tr>
+      ${keys.map((k) => `<tr><td>${esc(metricLabel(k))}</td>${jobs.map((j) => `<td class="num">${last(j, k)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>
+    <div class="panel"><div class="panel-head"><h2>Config differences</h2><span class="faint">${diff.length} of ${new Set(flat.flatMap(Object.keys)).size} options</span></div>
+      ${diff.length ? `<div class="table-wrap"><table class="cmp"><thead><tr><th>Option</th>${head}</tr></thead><tbody>${diff.map((k) => `<tr><td><code>${esc(k)}</code></td>${flat.map((f) => `<td>${esc(f[k] ?? '–') || '–'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '<div class="panel-pad muted">These runs use the same config.</div>'}</div></div>`;
+  const draw = () => {
+    $('#metric-pick').innerHTML = keys.map((k) => `<button type="button" data-val="${esc(k)}" aria-pressed="${k === metric}">${esc(metricLabel(k))}</button>`).join('');
+    drawLineChart($('#chart'), jobs.map((j, i) => ({ name: names[i], color: color(i), points: metricSeries(j.metrics.points, metric) })), { label: metricLabel(metric), smoothing, height: 340, empty: 'No run logged this metric twice.' });
+  };
+  $('#smooth').value = String(smoothing);
+  $('#smooth').onchange = (e) => { smoothing = Number(e.target.value); store.set('omni-smooth', smoothing); draw(); };
+  $('#metric-pick').onclick = (e) => { const b = e.target.closest('button'); if (b) { metric = b.dataset.val; draw(); } };
+  draw();
 }
 
 // ===========================================================================
 // Plan rendering (shared by the wizard and the planner page)
 // ===========================================================================
-
-const SEGMENTS = [
-  ['weights', 'Weights', 'var(--m-weights)'],
-  ['gradients', 'Gradients', 'var(--m-grads)'],
-  ['optimizer', 'AdamW states', 'var(--m-optim)'],
-  ['activations', 'Activations', 'var(--m-acts)'],
-  ['logits', 'Logits + loss', 'var(--m-logits)'],
-  ['overhead', 'CUDA + NCCL', 'var(--m-over)'],
-];
-
-function memColumn(opt, capGb, { chosen = false, big = false, scaleGb } = {}) {
-  const mem = opt.memory_gb;
-  const scale = Math.max(scaleGb || 0, capGb * 1.05);
-  const shown = Math.min(mem.total, scale);
-  const segs = SEGMENTS.map(([k, , color]) => {
-    const h = (Math.max(0, mem[k] || 0) / Math.max(mem.total, 1e-9)) * (shown / scale) * 100;
-    return h > 0.2 ? `<div class="seg" style="height:${h}%;background:${color}" title="${k}: ${fmt.gb(mem[k], 2)}"></div>` : '';
-  }).join('');
-  const capPos = (1 - capGb / scale) * 100;
-  const cls = opt.fits ? (mem.total > capGb * 0.85 ? 'tight' : 'fit') : 'over';
-  return `<div class="memcol ${chosen ? 'chosen' : ''} ${big ? 'big' : ''}">
-    <div class="gb" style="color:var(--${cls === 'over' ? 'over' : cls === 'tight' ? 'tight' : 'fit'})">${fmt.gb(mem.total)}</div>
-    <div class="col" title="${esc(opt.label)}: ${fmt.gb(mem.total, 2)} per GPU">${segs}<div class="cap" style="top:${capPos}%"></div>${mem.total > scale ? '<div class="over-mark"></div>' : ''}</div>
-    <div class="lbl">${esc(opt.label)}</div>
-  </div>`;
-}
-
-function memLegend() {
-  return `<div class="legend">${SEGMENTS.map(([, label, c]) => `<span><i style="background:${c}"></i>${label}</span>`).join('')}<span><i style="border-top:2px dashed var(--ink);height:0;border-radius:0"></i>GPU limit</span></div>`;
-}
 
 const VERDICT_TAG = {
   single_gpu: ['fit', 'Single GPU'],
@@ -633,10 +683,11 @@ function renderPlan(plan, opts = {}) {
   const sel = plan.selected;
   const [tagCls, tagText] = VERDICT_TAG[plan.verdict] || ['', plan.verdict];
   const options = plan.options.slice();
-  const scale = Math.min(Math.max(...options.map((o) => o.memory_gb.total), cap) , cap * 2.2);
   const sameAsRec = sel && sel.label === rec.label;
+  if (sel && !options.some((o) => o.label === sel.label)) options.push(sel);
   const mg = plan.min_gpus;
   const perf = (sel && sel.fits ? sel : rec).perf;
+  const step = perf.step_seconds;
 
   let html = `
     <div class="verdict ${esc(plan.verdict)}">
@@ -646,33 +697,24 @@ function renderPlan(plan, opts = {}) {
       ${opts.onApply && !sameAsRec && plan.verdict !== 'infeasible' ? `<div class="btn-row" style="margin-top:12px"><button class="btn primary small" data-apply="rec">Use ${esc(rec.label)}</button></div>` : ''}
     </div>
     <div class="plan-sec">
-      <h4>Peak memory per GPU</h4>
-      <div class="memcol-row">${options.map((o) => memColumn(o, cap, { chosen: sel && o.label === sel.label, scaleGb: scale })).join('')}
-        ${sel && !options.some((o) => o.label === sel.label) ? memColumn(sel, cap, { chosen: true, scaleGb: scale }) : ''}</div>
-      ${memLegend()}
+      <h4>Estimated peak memory per GPU</h4>
+      ${memoryBars(options, cap, plan.cluster.usable_gb, sel && sel.label)}
     </div>`;
 
-  if (sel) {
-    const m = sel.memory_gb;
-    html += `<div class="plan-sec">
-      <h4>Your selection: ${esc(sel.label)} ${sel.fits ? '<span class="pill fit">fits</span>' : '<span class="pill over">out of memory</span>'}</h4>
-      <table class="mem-table"><tbody>
-        ${SEGMENTS.map(([k, label]) => `<tr><td>${label}</td><td>${fmt.gb(m[k], 2)}</td></tr>`).join('')}
-        <tr class="total"><td>Total per GPU (limit ${fmt.gb(plan.cluster.usable_gb)} usable)</td><td>${fmt.gb(m.total, 2)}</td></tr>
-      </tbody></table></div>`;
-  }
-
-  html += `<div class="plan-sec"><h4>Throughput estimate</h4><ul class="plan-list">
-      <li><span class="muted">Tokens per second</span><span class="num">${fmt.int(perf.tokens_per_second)}</span></li>
-      <li><span class="muted">Step time</span><span class="num">${perf.step_seconds < 1 ? `${Math.round(perf.step_seconds * 1000)} ms` : `${perf.step_seconds.toFixed(2)} s`}</span></li>
-      ${perf.total_seconds ? `<li><span class="muted">Whole run (${fmt.int(perf.total_steps)} steps)</span><span class="num">${fmt.dur(perf.total_seconds)}</span></li>` : ''}
-      <li><span class="muted">Assumed utilisation (MFU)</span><span class="num">${Math.round(perf.mfu * 100)}%</span></li>
-    </ul></div>
-    <div class="plan-sec"><h4>Fewest GPUs that fit (${fmt.gb(cap, 0)} each)</h4><ul class="plan-list">
+  const detail = sel || rec;
+  const fold = (id, title, right, body) => `<details class="fold" data-fold="${id}" ${store.get('omni-fold-' + id, id === 'speed') ? 'open' : ''}><summary><span>${title}</span><span class="num">${right}</span></summary>${body}</details>`;
+  html += fold('speed', 'Speed', `${fmt.int(perf.tokens_per_second)} tok/s`, `<ul class="plan-list">
+      <li><span class="muted">Step time</span><span class="num">${step < 1 ? `${Math.round(step * 1000)} ms` : `${step.toFixed(2)} s`}</span></li>
+      ${perf.generation_seconds ? `<li><span class="muted">of which writing answers</span><span class="num">${perf.generation_seconds.toFixed(2)} s</span></li>` : ''}
+      ${perf.total_seconds ? `<li><span class="muted">Whole run, ${fmt.int(perf.total_steps)} steps</span><span class="num">${fmt.dur(perf.total_seconds)}</span></li>` : ''}
+      <li><span class="muted">Assumed GPU utilisation</span><span class="num">${Math.round(perf.mfu * 100)}%</span></li></ul>`);
+  html += fold('mem', `Memory breakdown, ${esc(detail.label)}`, fmt.gb(detail.memory_gb.total), `<table class="mem-table"><tbody>
+      ${SEGMENTS.map(([k, label, c]) => `<tr><td><i style="background:${c}"></i>${label}</td><td>${fmt.gb(detail.memory_gb[k], 2)}</td></tr>`).join('')}
+      <tr class="total"><td>Total, ${fmt.gb(plan.cluster.usable_gb)} usable</td><td>${fmt.gb(detail.memory_gb.total, 2)}</td></tr></tbody></table>`);
+  html += fold('min', 'Fewest GPUs that fit', mg.single ? '1' : esc(String([mg.fsdp, mg['5d']].filter(Boolean).sort((a, b) => a - b)[0] || 'none')), `<ul class="plan-list">
       <li><span class="muted">One GPU</span><span>${mg.single ? 'yes' : 'no'}</span></li>
       <li><span class="muted">FSDP</span><span class="num">${mg.fsdp ? `${mg.fsdp} GPU${mg.fsdp > 1 ? 's' : ''}` : 'not possible'}</span></li>
-      <li><span class="muted">5D</span><span class="num">${mg['5d'] ? `${mg['5d']} GPUs, ${esc(mg['5d_layout'])}` : 'not available'}</span></li>
-    </ul></div>`;
+      <li><span class="muted">5D</span><span class="num">${mg['5d'] ? `${mg['5d']} GPUs, ${esc(mg['5d_layout'])}` : 'not available'}</span></li></ul>`);
 
   if (plan.suggestions.length) {
     html += `<div class="plan-sec"><h4>Ways to make it fit</h4><ul class="plan-list">${plan.suggestions.map((s, i) => `
@@ -682,10 +724,11 @@ function renderPlan(plan, opts = {}) {
   const notes = plan.notes.slice();
   const model = plan.model;
   notes.unshift(`${model.name}: ${fmt.params(model.params)} parameters${model.num_experts ? ` (${fmt.params(model.active_params)} active)` : ''}, ${model.layers} layers, vocab ${fmt.int(model.vocab)} (${model.source === 'hf-config' ? 'from config.json' : model.source}).`);
-  html += `<div class="plan-sec"><h4>Notes</h4><ul class="plan-list">${notes.map((n) => `<li class="muted" style="display:block">${esc(n)}</li>`).join('')}</ul></div>`;
+  html += fold('notes', 'Notes', String(notes.length), `<ul class="plan-list">${notes.map((n) => `<li class="muted" style="display:block">${esc(n)}</li>`).join('')}</ul>`);
 
   const root = document.createElement('div');
   root.innerHTML = html;
+  $$('[data-fold]', root).forEach((d) => { d.ontoggle = () => store.set('omni-fold-' + d.dataset.fold, d.open); });
   const applyBtn = $('[data-apply]', root);
   if (applyBtn) applyBtn.onclick = () => opts.onApply(rec);
   $$('[data-sugg]', root).forEach((b) => { b.onclick = () => opts.onSuggest(plan.suggestions[Number(b.dataset.sugg)].workload); });
@@ -776,7 +819,7 @@ let W = null;
 
 function wizardState() {
   const draft = store.get('omni-draft', null);
-  const cfg = deepMerge(defaultConfig(), (draft && draft.cfg) || {});
+  const cfg = draft && draft.cfg ? loadConfig(draft.cfg) : defaultConfig();
   return {
     step: (draft && draft.step) || 0,
     cfg,
@@ -800,7 +843,7 @@ async function renderWizard(main) {
       <nav class="steps" id="steps" aria-label="Steps"></nav>
       <div class="split">
         <div class="panel panel-pad" id="step-panel"></div>
-        <aside class="panel sticky" id="plan-panel" aria-live="polite" aria-label="Capacity plan"></aside>
+        <aside class="panel sticky plan-side" id="plan-panel" aria-live="polite" aria-label="Capacity plan"></aside>
       </div>
     </div>`;
   $('#wiz-reset').onclick = () => {
@@ -822,7 +865,7 @@ function goStep(i) {
   W.step = Math.max(0, Math.min(STEPS.length - 1, i));
   W.editingYaml = false;
   saveDraft(); drawSteps(); drawStep();
-  $('#step-panel').scrollIntoView({ block: 'nearest' });
+  window.scrollTo({ top: 0 });
 }
 
 function field(label, path, { type = 'text', hint = '', step, min, placeholder = '', rerender = false, cls = '' } = {}) {
@@ -879,7 +922,7 @@ function drawStep() {
   panel.innerHTML = `<div class="step-body">${body}
     <div class="step-nav">
       <button class="btn" type="button" id="step-back" ${W.step === 0 ? 'disabled' : ''}>Back</button>
-      ${W.step < STEPS.length - 1 ? `<button class="btn primary" type="button" id="step-next">Continue to ${STEPS[W.step + 1].toLowerCase()}</button>` : ''}
+      ${W.step < STEPS.length - 1 ? `<button class="btn primary" type="button" id="step-next">Continue to ${STEPS[W.step + 1].toLowerCase()}</button>` : `<button class="btn primary" type="button" id="launch">${W.ui.target === 'slurm' ? 'Submit to SLURM' : 'Launch run'}</button>`}
     </div></div>`;
   $('#step-back').onclick = () => goStep(W.step - 1);
   const next = $('#step-next');
@@ -950,7 +993,7 @@ function stepGoal() {
       <p>The goal decides the training objective, the dataset format and which strategies are available.</p>
       <div class="choices">${goals.map(([id, title, text, meta]) => `
         <button type="button" class="choice" data-goal="${id}" aria-pressed="${goal === id}">
-          <span class="choice-title">${title}${id === 'rl' ? '<span class="pill running">New</span>' : ''}</span>
+          <span class="choice-title">${title}</span>
           <span class="choice-text">${text}</span>
           <span class="choice-meta">${meta}</span>
         </button>`).join('')}</div>
@@ -963,7 +1006,7 @@ function stepGoal() {
     ${goal === 'rl' ? `<section class="step-section">
       <h3>RL method</h3>
       <p>${esc((cat.find((a) => a.id === 'grpo') || {}).summary || '')}</p>
-      ${segmented('rlalgo', [['grpo', 'GRPO'], ['ppo', 'PPO', true, 'Planned: needs a reward model and a value head']], 'grpo')}
+      ${segmented('rlalgo', [['grpo', 'GRPO'], ['ppo', 'PPO (planned)', true, 'Needs a reward model and a value head']], 'grpo')}
     </section>` : ''}
     <section class="step-section">
       <h3>Or start from a template</h3>
@@ -985,6 +1028,8 @@ function setGoal(goal, algo) {
     }
     if (info && info.beta) c.algorithm.beta = info.beta;
     if (type === 'grpo' && methodOf(c) === 'full') setMethod(c, 'lora');
+    if (type === 'grpo' && prev !== 'grpo') c.algorithm.max_prompt_length = 192;
+    if (type !== 'grpo' && prev === 'grpo') c.algorithm.max_prompt_length = 256;
     if (type === 'grpo' && prev !== 'grpo') c.training.batch_size = Math.min(c.training.batch_size, 2);  // x G answers each
     if (c.strategy === '5d') c.strategy = c.num_gpus > 1 ? 'fsdp' : 'solo';
   } else if (prev !== 'pretrain' && c.model_type === 'llm') {
@@ -995,70 +1040,42 @@ function setGoal(goal, algo) {
   onCfgChange(true);
 }
 
+/** Template groups, decided from what each config actually contains. */
 const TPL_GROUPS = [
-  { id: 'post', title: 'Post-training', sub: 'SFT and preference alignment', open: true, test: (n) => /^llm_(sft|dpo|simpo|orpo)_/.test(n) },
-  { id: '5d', title: '5D parallelism', sub: 'TP, PP, CP, EP and DP for large models', test: (n) => /(^|_)5d(_|$)/.test(n) },
-  { id: 'llm', title: 'LLM fine-tuning', sub: 'Full, LoRA and QLoRA on causal LMs', open: true, test: (n) => n.startsWith('llm_') },
-  { id: 'vision', title: 'Vision and multimodal', sub: 'Classification, detection, VLM', experimental: true, test: (n) => /^(cnn|detection|vlm|vision)_/.test(n) },
-  { id: 'embed', title: 'Embeddings', sub: 'Contrastive and triplet training', experimental: true, test: (n) => n.startsWith('embedding_') },
-  { id: 'other', title: 'Other', sub: '', test: () => true },
+  { id: 'post', title: 'Post-training', sub: 'SFT, preference alignment, reinforcement learning', test: (t) => t.algorithm !== 'pretrain' },
+  { id: '5d', title: '5D parallelism', sub: 'Tensor, pipeline, context, expert and data parallel', test: (t) => t.strategy === '5d' },
+  { id: 'llm', title: 'LLM fine-tuning', sub: 'Full, LoRA and QLoRA', test: (t) => t.model_type === 'llm' },
+  { id: 'vision', title: 'Vision and multimodal', sub: 'Classification, detection, VLM', experimental: true, test: (t) => ['vision', 'yolo', 'vlm'].includes(t.model_type) },
+  { id: 'other', title: 'Embeddings and other', sub: 'Encoders, seq2seq, from scratch', experimental: true, test: () => true },
 ];
-const TPL_ORDER = ['post', 'llm', '5d', 'vision', 'embed', 'other'];
-const TPL_WORDS = {
-  lora: 'LoRA', qlora: 'QLoRA', ddp: 'DDP', fsdp: 'FSDP', sft: 'SFT', dpo: 'DPO', '5d': '5D', cpu: 'CPU', moe: 'MoE',
-  vlm: 'VLM', cp: 'CP', tp: 'TP', pp: 'PP', dp: 'DP', coco: 'COCO', yolo: 'YOLO', bert: 'BERT', clip: 'CLIP', vit: 'ViT',
-  cnn: 'CNN', infonce: 'InfoNCE', llava: 'LLaVA', resnet: 'ResNet', llm: 'LLM', hf: 'HF', finetune: 'fine-tune',
-};
 
-/** Title and tags for a configs/ file name, e.g. llm_lora_quantized_single_gpu → "Lora" + [Solo, 1 GPU, QLoRA]. */
-function describeTemplate(n, group) {
-  const t = n.split('_');
-  const tags = [];
-  const strat = t.includes('5d') ? '5D' : t.includes('fsdp') ? 'FSDP' : t.includes('ddp') ? 'DDP'
-    : (n.includes('single_gpu') || t.includes('cpu')) ? 'Solo' : '';
-  if (strat) tags.push(strat);
-  const gpus = n.match(/(\d+)gpu\b/);
-  if (gpus) tags.push(`${gpus[1]} GPUs`);
-  else if (n.includes('single_gpu')) tags.push('1 GPU');
-  else if (t.includes('cpu')) tags.push('CPU');
-  if (t.includes('quantized')) tags.push(t.includes('lora') ? 'QLoRA' : '8-bit');
-  else if (t.includes('lora')) tags.push('LoRA');
-  else if (t.includes('full')) tags.push('Full FT');
-  const drop = new Set(['single', 'gpu', 'quantized', 'cpu', 'ddp', 'fsdp']);
-  if (group === 'llm' || group === 'post') drop.add('llm');
-  if (group === 'embed') drop.add('embedding');
-  if (group === '5d') drop.add('5d');
-  if (tags.includes('LoRA') || tags.includes('QLoRA')) drop.add('lora');
-  if (tags.includes('Full FT')) { drop.add('full'); drop.add('finetune'); }
-  const words = t.filter((w) => !drop.has(w) && !/^\d+gpu$/.test(w)).map((w) => TPL_WORDS[w] || w);
-  let title = words.join(' ') || tags.join(' ') || n;
-  title = title.charAt(0).toUpperCase() + title.slice(1);
-  return { title, tags };
+function describeTemplate(t) {
+  const short = t.model ? String(t.model).split('/').pop().replace(/-(Instruct|Chat)$/i, '') : 'Custom transformer';
+  const title = t.algorithm !== 'pretrain' ? `${ALGO_LABEL[t.algorithm] || t.algorithm}, ${short}` : t.moe ? 'Mixture of experts' : short;
+  const tags = [{ lora: 'LoRA', qlora: t.bits === 8 ? 'QLoRA 8-bit' : 'QLoRA', full: t.bits ? `${t.bits}-bit` : 'Full' }[t.method]];
+  tags.push(t.strategy === 'solo' ? '1 GPU' : `${t.strategy === '5d' ? '5D' : t.strategy.toUpperCase()}, ${t.num_gpus} GPU${t.num_gpus > 1 ? 's' : ''}`);
+  return { title, tags: tags.filter(Boolean) };
 }
 
 async function loadTemplates() {
   const el = $('#tpl-list');
+  const here = stillHere();
   try {
-    const { configs } = await api('/api/configs');
-    const names = configs.filter((n) => n !== 'config').sort();
-    if (!names.length) { el.innerHTML = '<p class="faint" style="padding:16px">No templates in configs/.</p>'; return; }
-    const buckets = Object.fromEntries(TPL_GROUPS.map((g) => [g.id, []]));
-    names.forEach((n) => { buckets[TPL_GROUPS.find((g) => g.test(n)).id].push(n); });
-    el.innerHTML = TPL_ORDER.map((id) => TPL_GROUPS.find((g) => g.id === id)).filter((g) => buckets[g.id].length).map((g) => `
-      <details class="tpl-group"${g.open ? ' open' : ''}>
-        <summary>
-          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-          <span class="tpl-group-title">${esc(g.title)}</span>
-          ${g.experimental ? '<span class="pill">Experimental</span>' : ''}
-          <span class="tpl-group-sub">${esc(g.sub)}</span>
-          <span class="tpl-count">${buckets[g.id].length}</span>
-        </summary>
-        <div class="tpl-grid">${buckets[g.id].map((n) => {
-          const d = describeTemplate(n, g.id);
-          return `<button type="button" class="tpl-item" data-tpl="${esc(n)}" title="Load ${esc(n)}.yaml">
-            <span class="tpl-name">${esc(d.title)}</span>
-            <span class="tpl-tags">${d.tags.map((x) => `<span>${esc(x)}</span>`).join('')}</span>
-          </button>`;
+    const { templates } = await api('/api/configs');
+    if (!here() || !el.isConnected) return;
+    const ok = templates.filter((t) => !t.error);
+    if (!ok.length) { el.innerHTML = '<p class="faint" style="padding:16px">No templates in configs/.</p>'; return; }
+    const want = { sft: 'post', preference: 'post', rl: 'post' }[goalOf(W.cfg)];
+    el.innerHTML = TPL_GROUPS.map((g) => [g, ok.filter((t) => TPL_GROUPS.find((x) => x.test(t)) === g)]).filter(([, list]) => list.length).map(([g, list]) => `
+      <details class="tpl-group"${g.id === want ? ' open' : ''}>
+        <summary><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="tpl-group-title">${esc(g.title)}</span>${g.experimental ? '<span class="pill">Experimental</span>' : ''}
+          <span class="tpl-group-sub">${esc(g.sub)}</span><span class="tpl-count">${list.length}</span></summary>
+        <div class="tpl-grid">${list.map((t) => {
+          const d = describeTemplate(t);
+          return `<button type="button" class="tpl-item tall" data-tpl="${esc(t.name)}" title="Load configs/${esc(t.name)}.yaml">
+            <span class="tpl-name">${esc(d.title)}</span><span class="tpl-tags">${d.tags.map((x) => `<span>${esc(x)}</span>`).join('')}</span>
+            <span class="tpl-file">${esc(t.name)}.yaml</span></button>`;
         }).join('')}</div>
       </details>`).join('');
     $$('[data-tpl]', el).forEach((b) => { b.onclick = () => applyTemplate(b.dataset.tpl); });
@@ -1068,7 +1085,7 @@ async function loadTemplates() {
 async function applyTemplate(name) {
   try {
     const t = await api(`/api/configs/${encodeURIComponent(name)}`);
-    W.cfg = deepMerge(defaultConfig(), t.config || {});
+    W.cfg = loadConfig(t.config);
     W.ui.name = name.replace(/_/g, '-');
     W.ui.target = 'local';
     toast(`Loaded ${name}.yaml`);
@@ -1403,10 +1420,7 @@ function stepReview() {
         <h3>Run it from a terminal</h3><button class="btn small" id="copy-cmd">Copy command</button>
       </div>
       <pre class="code">${esc(`# save the YAML above as ${file}, then\n${cmds}\n\n# capacity check from the CLI\n${planCmd}`)}</pre>
-    </section>
-    <div class="btn-row" style="justify-content:flex-end">
-      <button class="btn primary" id="launch" style="height:40px;padding:0 20px">${isSlurm ? 'Submit to SLURM' : 'Launch run'}</button>
-    </div>`;
+    </section>`;
 }
 
 const REWARD_INFO = {
@@ -1426,17 +1440,19 @@ function grpoSettings(c) {
         const name = el.dataset.reward;
         const on = $(`[data-reward-on="${name}"]`).checked;
         const w = Number($(`[data-reward="${name}"][type="text"]`).value);
+        $(`[data-reward="${name}"][type="text"]`).disabled = !on;
         g.rewards = { ...(g.rewards || {}) };
         if (on && Number.isFinite(w) && w) g.rewards[name] = w; else delete g.rewards[name];
         onCfgChange(false);
       };
     });
   });
-  const rows = Object.entries(REWARD_INFO).map(([name, text]) => {
+  const extra = Object.keys(g.rewards || {}).filter((n) => !REWARD_INFO[n]).map((n) => [n, 'Custom function']);
+  const rows = [...Object.entries(REWARD_INFO), ...extra].map(([name, text]) => {
     const w = (g.rewards || {})[name];
     return `<div style="display:grid;grid-template-columns:minmax(0,1fr) 90px;gap:10px;align-items:center">
-      <label class="check"><input type="checkbox" data-reward="${name}" data-reward-on="${name}" ${w ? 'checked' : ''}><span><code>${name}</code><small>${esc(text)}</small></span></label>
-      <input type="text" inputmode="decimal" data-reward="${name}" value="${w || 1}" aria-label="${name} weight"></div>`;
+      <label class="check"><input type="checkbox" data-reward="${esc(name)}" data-reward-on="${esc(name)}" ${w ? 'checked' : ''}><span><code>${esc(name)}</code><small>${esc(text)}</small></span></label>
+      <input type="text" inputmode="decimal" data-reward="${esc(name)}" value="${w || 1}" aria-label="${esc(name)} weight" ${w ? '' : 'disabled'}></div>`;
   }).join('');
   return `<section class="step-section">
       <h3>GRPO settings</h3>
@@ -1493,7 +1509,7 @@ function drawYaml() {
   $('#yaml-apply').onclick = async () => {
     try {
       const { config } = await api('/api/config/parse', { json: { yaml: $('#yaml-edit').value } });
-      W.cfg = deepMerge(defaultConfig(), config);
+      W.cfg = loadConfig(config);
       W.editingYaml = false;
       toast('YAML applied');
       onCfgChange(true);
@@ -1589,7 +1605,7 @@ async function renderPlanner(main) {
       <div class="page-head">
         <div><h1>Capacity planner</h1><p>Does a run need distributed training? Estimates peak GPU memory for single-GPU, DDP, FSDP and 5D layouts, recommends the simplest that fits and shows how many GPUs each would need.</p></div>
       </div>
-      <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(0,1.25fr)">
+      <div class="split even">
         <div class="panel panel-pad stack" id="planner-form">
           <h2>Workload</h2>
           <div class="grid two">
@@ -1613,7 +1629,7 @@ async function renderPlanner(main) {
             <div class="field"><label for="p-gpus">GPUs per node</label><input id="p-gpus" type="number" min="1" value="${P.gpus}"></div>
             <div class="field"><label for="p-nodes">Nodes</label><input id="p-nodes" type="number" min="1" value="${P.nodes}"></div>
           </div>
-          <div class="btn-row"><button class="btn" id="p-start">Start a run with this</button></div>
+          <div class="btn-row"><button class="btn primary" id="p-start">Start a run with this</button></div>
         </div>
         <div class="panel" id="planner-out" aria-live="polite"></div>
       </div>
@@ -1629,6 +1645,7 @@ async function renderPlanner(main) {
     const c = defaultConfig();
     c.model_name = P.model; c.algorithm.type = P.algorithm; setMethod(c, P.method);
     c.training.batch_size = P.batch; c.training.max_length = P.seq; c.training.gradient_checkpointing = P.ckpt;
+    if (P.algorithm === 'grpo') { c.algorithm.max_prompt_length = Math.floor(P.seq / 2); c.algorithm.max_completion_length = P.seq - c.algorithm.max_prompt_length; }
     c.strategy = 'solo';
     return c;
   };
@@ -1810,7 +1827,7 @@ async function refreshChip() {
       const first = list[0] || {};
       const name = first.name || first.gpu_name;
       const mem = first.memory_total_gb || first.total_memory_gb || first.memory_gb;
-      S.gpuName = name ? `${q.total_gpus} × ${String(name).replace(/^NVIDIA\s+/, '')}${mem ? ` ${Math.round(mem)} GB` : ''}` : '';
+      S.gpuName = name ? `${q.total_gpus} × ${String(name).replace(/^NVIDIA\s+|GeForce\s+|\s+GPU$/g, '')}${mem ? ` ${Math.round(mem)} GB` : ''}` : '';
     }
     const busy = q.total_gpus - q.available_gpus;
     dot.className = `dot ${q.available_gpus ? 'ok' : 'busy'}`;
