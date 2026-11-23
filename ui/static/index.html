@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OMNI-Train Console</title>
 <meta name="description" content="Plan, launch and monitor pretraining, SFT and preference-alignment runs on your GPUs.">
+<meta name="theme-color" content="#0d1117">
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/static/styles.css">
 <script>
   try { const t = localStorage.getItem('omni-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -20,31 +21,46 @@
   <aside class="rail" aria-label="Main navigation">
     <a class="brand" href="#/runs" aria-label="OMNI-Train home">
       <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
-        <rect x="3" y="3" width="11" height="11" rx="2" fill="var(--signal)"/>
-        <rect x="18" y="3" width="11" height="11" rx="2" fill="currentColor" opacity=".55"/>
-        <rect x="3" y="18" width="11" height="11" rx="2" fill="currentColor" opacity=".55"/>
-        <rect x="18" y="18" width="11" height="11" rx="2" fill="currentColor" opacity=".25"/>
+        <rect x="3" y="3" width="11" height="11" rx="2.5" fill="#7d93ff"/>
+        <rect x="18" y="3" width="11" height="11" rx="2.5" fill="#fff" opacity=".55"/>
+        <rect x="3" y="18" width="11" height="11" rx="2.5" fill="#fff" opacity=".55"/>
+        <rect x="18" y="18" width="11" height="11" rx="2.5" fill="#fff" opacity=".22"/>
       </svg>
-      <span>OMNI-Train</span>
+      <span class="brand-text"><b>OMNI-Train</b><small>Training console</small></span>
     </a>
     <nav>
-      <a href="#/runs" data-nav="runs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Runs</span></a>
+      <div class="nav-label">Workspace</div>
+      <a href="#/runs" data-nav="runs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Runs</span><b class="nav-badge" id="nav-running" hidden></b></a>
       <a href="#/new" data-nav="new"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New run</span></a>
       <a href="#/planner" data-nav="planner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M10 20V4M15 20v-7M20 20V8"/></svg><span>Planner</span></a>
       <a href="#/checkpoints" data-nav="checkpoints"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 14h8"/></svg><span>Checkpoints</span></a>
+      <div class="nav-label">Infrastructure</div>
       <a href="#/system" data-nav="system"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v10H4zM8 17v3M16 17v3M8 4v3M16 4v3M12 4v3M12 17v3"/></svg><span>System</span></a>
-      <a href="#/api" data-nav="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg><span>API</span></a>
+      <a href="#/api" data-nav="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg><span>API reference</span></a>
     </nav>
     <div class="rail-foot">
-      <div class="cluster-chip" id="cluster-chip" title="GPUs on this machine">
-        <span class="dot"></span><span id="cluster-chip-text">Checking GPUs</span>
-      </div>
-      <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch colour theme" title="Switch colour theme">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
-      </button>
+      <a class="cluster-card" href="#/system" style="text-decoration:none" title="GPUs on this machine">
+        <div class="cluster-top"><span>Cluster</span><span class="cluster-state"><span class="dot"></span><span id="cluster-state-text">Checking</span></span></div>
+        <div class="cluster-name" id="cluster-name">GPUs</div>
+        <div class="cluster-meter" id="cluster-meter" aria-hidden="true"></div>
+        <div class="cluster-chip" id="cluster-chip"><span id="cluster-chip-text">Checking GPUs</span></div>
+      </a>
     </div>
   </aside>
-  <main id="main" tabindex="-1"></main>
+  <div class="content">
+    <header class="topbar">
+      <nav class="crumbs" aria-label="Breadcrumb" id="crumbs"><span>Workspace</span></nav>
+      <div class="topbar-actions">
+        <a class="icon-btn" href="/docs" target="_blank" rel="noopener" aria-label="REST API docs" title="REST API docs">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></svg>
+        </a>
+        <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch colour theme" title="Switch colour theme">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+        </button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+  </div>
 </div>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <div class="dialog-backdrop" id="dialog" hidden>
