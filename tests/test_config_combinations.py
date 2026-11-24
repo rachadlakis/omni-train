@@ -231,6 +231,43 @@ def test_output_dtype_values(cfg, dtype):
     assert args.output_dtype == dtype
 
 
+def _fsdp_mp(cfg, param, output, model_type="llm", strategy="fsdp", mp=True, cast=False):
+    cfg["strategy"], cfg["model_type"] = strategy, model_type
+    cfg["dist_parameters"].update(mixed_precision=mp, param_dtype=param, output_dtype=output, cast_forward_inputs=cast)
+    return cfg
+
+
+@pytest.mark.parametrize("cast", [True, False])
+@pytest.mark.parametrize("model_type", ["llm", "encoder", "vision", "custom_transformer"])
+@pytest.mark.parametrize("param,output", [("bfloat16", "float32"), ("bfloat16", "float16"), ("float16", "float32")])
+def test_fsdp_mixed_precision_dtype_mismatch_rejected(cfg, param, output, model_type, cast):
+    with pytest.raises(ValueError, match=f"Set output_dtype: {param}"):
+        build_args(_fsdp_mp(cfg, param, output, model_type, cast=cast))
+
+
+@pytest.mark.parametrize("param,output,kw", [
+    ("bfloat16", "bfloat16", {}), ("float32", "float32", {}), ("float16", "float16", {}),
+    ("bfloat16", None, {}),                               # not given: nothing to compare
+    ("bfloat16", "float32", {"mp": False}),               # no mixed-precision policy
+    ("bfloat16", "float32", {"strategy": "ddp"}),         # output_dtype is FSDP-only
+    ("bfloat16", "float32", {"strategy": "solo"}),
+])
+def test_fsdp_dtype_check_leaves_working_configs_alone(cfg, param, output, kw):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        build_args(_fsdp_mp(cfg, param, output, **kw))
+
+
+@pytest.mark.parametrize("param,output,model_type", [
+    ("float32", "bfloat16", "llm"),       # fine on Llama/Qwen2, fails on GPT-2/OPT
+    ("bfloat16", "float32", "seq2seq"),   # fine on T5
+])
+def test_fsdp_dtype_mismatch_that_can_work_only_warns(cfg, param, output, model_type):
+    with pytest.warns(UserWarning, match="output_dtype"):
+        build_args(_fsdp_mp(cfg, param, output, model_type))
+
+
 @pytest.mark.parametrize("cast", [True, False])
 def test_cast_forward_inputs(cfg, cast):
     cfg["dist_parameters"]["cast_forward_inputs"] = cast

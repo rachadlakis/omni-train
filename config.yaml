@@ -28,7 +28,7 @@ dist_parameters:
   mixed_precision: true       ## Use Mixed Precision? 
   param_dtype: bfloat16       ## what dtype to use for parameters? options: bfloat16, float16, float32
   reduce_dtype: float32       ## what dtype to use for reduction?  options: bfloat16, float16, float32 
-  output_dtype: bfloat16      ## what dtype to use for output? options: bfloat16, float16, float32
+  output_dtype: bfloat16      ## what dtype to use for output? options: bfloat16, float16, float32 (FSDP + mixed_precision: same as param_dtype)
   cast_forward_inputs: false  ## whether to cast forward inputs to the dtype of the wrapped module
   distribute_api: dcp_api     ## choose only one from {dcp_api, dtensor_api}
 

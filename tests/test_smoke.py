@@ -398,7 +398,11 @@ SMOKE_EXTRA_CASES += [
     {"id": "ddp_2gpu_qlora", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2, ("peft", "enabled"): True,
      ("peft", "type"): "qlora", ("quantization", "enabled"): True, ("quantization", "bits"): 4},
     {"id": "fsdp_2gpu_mixed_precision", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2,
-     ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16"},
+     ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16",
+     ("dist_parameters", "output_dtype"): "bfloat16"},
+    {"id": "fsdp_lora_mixed_precision", "strategy": "fsdp", ("peft", "enabled"): True,
+     ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16",
+     ("dist_parameters", "output_dtype"): "bfloat16"},
     {"id": "ddp_2gpu_save_resume", "min_gpus": 2, "phases": [
         {"strategy": "ddp", "num_gpus": 2, "save": True},
         {"strategy": "ddp", "num_gpus": 2, ("save_load", "resume"): True}]},

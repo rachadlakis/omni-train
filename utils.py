@@ -493,6 +493,9 @@ def build_args(cfg):
             "Use strategy=ddp to keep quantization, or set quantization.enabled=false to keep FSDP."
         )
 
+    if args.strategy == "fsdp" and args.mixed_precision:
+        _check_fsdp_dtypes(args)
+
     # --------------------------------------------------
     # PREFETCH
     # --------------------------------------------------
@@ -553,6 +556,27 @@ def build_args(cfg):
     args.wandb_run_name = wb.get("wandb_run_name", "")
 
     return args
+
+# Every model of these types tested under FSDP fails with mismatched dtypes (T5 is the exception).
+_FSDP_ONE_DTYPE = {"llm", "encoder", "vision", "custom_transformer"}
+
+
+def _check_fsdp_dtypes(args):
+    """FSDP casts each block's OUTPUT to output_dtype, but the final norm / head gets it with
+    weights in param_dtype, so different dtypes crash in the first step ("mat1 and mat2 to have
+    the same dtype"). cast_forward_inputs does not help: it only casts the inputs of the model
+    and of each sharded block, not what the head receives."""
+    param, output = (str(d).lower() if d else None for d in (args.param_dtype, args.output_dtype))
+    if param is None or output is None or param == output:
+        return
+    msg = (f"FSDP with mixed_precision: dist_parameters.output_dtype ({output}) differs from "
+           f"param_dtype ({param}), so the model's last layers would get {output} inputs with {param} "
+           f"weights. Set output_dtype: {param} (the loss is still computed in float32).")
+    if param != "float32" and args.model_type in _FSDP_ONE_DTYPE:
+        raise ValueError(msg)
+    import warnings  # some models survive it (T5; Llama/Qwen2 with float32 weights)
+    warnings.warn(msg + " Most models fail with this setting.", UserWarning, stacklevel=3)
+
 
 def _parse_5d(cfg, args):
     """Read and check the `parallelism:` block (strategy: 5d)."""

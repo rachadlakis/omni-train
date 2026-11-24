@@ -46,6 +46,44 @@ def test_accuracy_reads_gsm8k_references():
     assert got == [1.0, 0.0, 1.0]
 
 
+@pytest.mark.parametrize("completion, reference", [
+    ("The answer is 72 apples", "#### 72"), ("The answer is 72 apples.", "#### 72"),
+    ("So the answer is: **72**", "#### 72"), ("**The answer is 72.**", "#### 72"),
+    ("The answer is $72.", "#### 72"), ("The answer is -$5", "#### -5"), ("The answer is \\$1,250.50", "#### 1250.5"),
+    ("The answer is 72 because 70 + 2 = 72", "#### 72"), ("The answer is 72. Let me know!", "#### 72"),
+    ("\\boxed{72 \\text{ apples}}", "#### 72"), ("\\boxed{x = 72}", "#### 72"), ("\\boxed{1\\,000}", "#### 1000"),
+    ("<answer>72 apples</answer>", "#### 72"), ("#### 72 apples", "#### 72"),
+    ("The answer is 72 km/h", "#### 72"), ("\\boxed{72 \\text{ cm}^{2}}", "#### 72"),
+    ("The answer is 3.5 hours", "#### 3.5"), ("The answer is -5 degrees", "#### -5"), ("The answer is 50%", "#### 50"),
+    ("The answer is 72", "72 apples"), ("The answer is 72 apples", "72 apples"),
+    ("The answer is 2/3", "2/3"), ("I get 2/3", "2/3"), ("\\boxed{\\frac{2}{3}}", "2/3"), ("The answer is 0.5", "1/2"),
+    ("The answer is Paris", "Paris"), ("<answer>route 66</answer>", "Route 66"), ("Route 66", "Route 66"),
+    ("**x+1**", "x+1"), ("so 3 + 4 gives \\frac{1}{2}", "\\frac{1}{2}"), ("She has \\frac{1}{2} left.", "0.5"),
+])
+def test_accuracy_accepts(completion, reference):
+    assert R.accuracy(["q"], [completion], [reference]) == [1.0]
+
+
+@pytest.mark.parametrize("completion, reference", [
+    # hedging: more than one value, or a value that is taken back
+    ("The answer is 71 or 72", "#### 72"), ("The answer is 72 or 71", "#### 72"), ("The answer is 72, 73 or 74", "#### 72"),
+    ("<answer>72 73</answer>", "#### 72"), ("The answer is not 72", "#### 72"), ("The answer is 72 or so", "#### 72"),
+    ("The answer is between 70 and 72", "#### 72"), ("The answer is 72 if x else 5", "#### 72"), ("The answer is 72-ish", "#### 72"),
+    # words and symbols that change the value
+    ("The answer is 72 thousand", "#### 72"), ("The answer is 72 million dollars", "#### 72"), ("The answer is 72k", "#### 72"),
+    ("The answer is 2 dozen eggs", "#### 2"), ("The answer is 72 and a half", "#### 72"), ("The answer is 3 quarters", "#### 3"),
+    ("The answer is 5x", "#### 5"), ("The answer is 12 - 5", "#### 12"), ("The answer is 5*3", "#### 53"),
+    ("The answer is 72 less than that", "#### 72"), ("The answer is 10:30", "#### 10"), ("The answer is 5^2", "#### 5"),
+    ("first 3 then 2/3", "\\frac{1}{3}"), ("so 3 + 4 gives \\frac{1}{2}", "#### 2"),
+    ("The answer is 2/3", "#### 2"), ("I get 2/3", "#### 3"), ("The answer is 5/0", "#### 5"),
+    # different units, text that merely contains the number
+    ("The answer is 72 oranges", "72 apples"), ("I saw 66", "Route 66"), ("The answer is 66", "Route 66"),
+    ("The answer is Paris, the capital", "London"), ("", "#### 72"), ("The answer is apples", "#### 72"),
+])
+def test_accuracy_rejects(completion, reference):
+    assert R.accuracy(["q"], [completion], [reference]) == [0.0]
+
+
 def test_accuracy_needs_answers():
     with pytest.raises(ValueError, match="reference answer"):
         R.accuracy(["q"], ["1"], [None])

@@ -178,6 +178,7 @@ Two FSDP checkpoint APIs:
 - 4-bit quantization requires `peft.enabled=true` — cannot train 4-bit weights directly (NF4 has no differentiable backward)
 - 8-bit quantization without PEFT → `UserWarning`, not an error. Only the non-quantized float params (embeddings, norms, biases) can learn, and NaN losses are likely. Use 8-bit LoRA instead.
 - `strategy: fsdp` + `quantization.enabled: true` → hard error
+- `strategy: fsdp` + `mixed_precision` with `output_dtype` ≠ a low-precision `param_dtype` → error for llm/encoder/vision/custom_transformer (final norm/head would get mixed dtypes; `cast_forward_inputs` does not help), warning otherwise (`_check_fsdp_dtypes`)
 - `training.lr_scheduler` must be `cosine` (default), `linear` or `constant` — applied after the linear warmup
 - `peft.enabled=true` only supports model types: `llm, seq2seq, encoder, vlm, vision`
 - `algorithm:` (`post_training.config.parse_algorithm`): `type` ∈ pretrain (default) | sft | dpo | simpo | orpo | grpo; `ppo` → "planned" error; unknown keys are errors, GRPO-only keys on other types too; grpo: `num_generations` ≥ 2, `beta > 0` needs `peft.enabled`, `max_prompt_length + max_completion_length` ≤ `max_length`, rewards must be built-in names or `module:function`; non-pretrain needs `model_type: llm` and strategy solo | ddp | fsdp; `dpo_loss` ∈ sigmoid | ipo | hinge; `label_smoothing` only for dpo+sigmoid; `max_prompt_length` < `max_length`. `dataset.subset` is optional

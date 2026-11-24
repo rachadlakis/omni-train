@@ -144,7 +144,7 @@ algorithm:
 
 | name | value |
 |---|---|
-| `accuracy` | 1 if the final answer equals the reference: read from `<answer>…</answer>`, `\boxed{…}`, `#### x` or the last number (the reference gets the same treatment, so GSM8K solutions work as they are). Numbers compare numerically. |
+| `accuracy` | 1 if the final answer equals the reference: read from `<answer>…</answer>`, `\boxed{…}`, `#### x`, "the answer is x" or the last number. The reference is read the same way (GSM8K works as is), except that a short reference without a marker (`2/3`, `Route 66`) is used whole. Units are allowed (`72 apples` = 72); hedges and multiples are not (`71 or 72`, `72 thousand`) |
 | `format` | 1 for exactly `<think>…</think> <answer>…</answer>`. Only useful for models trained on that format. |
 | `exact_match` / `contains` | the whole answer equals / contains the reference (normalised) |
 | `length` | 0, then a linear penalty to −1 over the last quarter of `max_completion_length` (DAPO's soft overlong penalty) |

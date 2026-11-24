@@ -100,7 +100,7 @@ step "unit tests" python -m pytest -q -p no:cacheprovider
 
 step "dist on GPU (NCCL)" env OMNI_DIST_DEVICE=cuda python -m pytest -m dist -q -rs -p no:cacheprovider
 
-SMOKE_QUICK="2gpu or 4gpu or post_ or export_ or save_resume or qlora_quant or fsdp_peft_lora or vision or detection or vlm"
+SMOKE_QUICK="2gpu or 4gpu or post_ or export_ or save_resume or qlora_quant or fsdp_peft_lora or mixed_precision or vision or detection or vlm"
 step "smoke (curated)" python -m pytest -m smoke -q -rs -p no:cacheprovider -k "$SMOKE_QUICK"
 
 if [ "$MODE" = full ]; then
