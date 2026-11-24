@@ -437,6 +437,9 @@ SMOKE_EXTRA_CASES += [
      "algorithm": _algo("grpo", max_completion_length=16)},
     {"id": "post_grpo_fsdp_dapo", "strategy": "fsdp", "data": _GRPO_ROWS,
      "algorithm": _algo("grpo", max_completion_length=16, loss_type="dapo", epsilon_high=0.28)},
+    # 1 GPU is enough to catch generate() bypassing FSDP's root hooks (it crashed on step 1).
+    {"id": "post_grpo_fsdp_lora_kl", "strategy": "fsdp", "data": _GRPO_ROWS, ("peft", "enabled"): True,
+     "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
     {"id": "post_grpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
      ("peft", "enabled"): True, "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
 ]

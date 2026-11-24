@@ -123,6 +123,11 @@ class GRPOObjective:
     def prepare(self, model):
         # Dropout would make the log-probs of the loss differ from those the samples came from.
         self._params = _forward_params(model)
+        if self.sync_generation and hasattr(model, "peft_config"):
+            # PeftModel.generate() calls the base model directly, so FSDP's hooks on the root
+            # (the PeftModel) never run and its embedding / norm / lm_head stay sharded.
+            from torch.distributed.fsdp import register_fsdp_forward_method
+            register_fsdp_forward_method(model, "generate")
         return disable_dropout(model)
 
     # ------------------------------------------------------------------

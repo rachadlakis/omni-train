@@ -178,6 +178,20 @@ def test_sft_lora_ddp_two_processes_export_merged(tiny_model_dir, tmp_path):
 
 
 @pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
+def test_grpo_reward_goes_up(tiny_model_dir, tmp_path, strategy, nproc):
+    rows = [{"prompt": p["prompt"], "answer": p["chosen"]} for p in PAIRS] * 8
+    data = _write_jsonl(tmp_path / "grpo.jsonl", rows)
+    cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=8,
+               training__batch_size=4 // nproc, training__learning_rate=1e-2,
+               algorithm={"type": "grpo", "num_generations": 8, "max_prompt_length": 16,
+                          "max_completion_length": 8, "rewards": ["contains"]})
+    rewards = [float(r) for r in re.findall(r"\| reward: ([-0-9.]+)", _train(cfg, tmp_path, f"grpo_{strategy}"))]
+    n = len(rewards) // 4
+    first, last = sum(rewards[:n]) / n, sum(rewards[-n:]) / n
+    assert last > first + 0.05, (first, last)
+
+
+@pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
 def test_dpo_starts_at_ln2_and_learns(tiny_model_dir, tmp_path, strategy, nproc):
     data = _write_jsonl(tmp_path / "pairs.jsonl", PAIRS * 8)
     cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc,
