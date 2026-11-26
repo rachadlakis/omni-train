@@ -57,6 +57,24 @@ def _adapters_disabled(model):
         yield
 
 
+@contextmanager
+def _blank_generation_config(model):
+    """Hide the model's own generation defaults while sampling. generate() fills every setting we
+    leave unset from them (Qwen: repetition_penalty 1.1, top_k 20), so the answers would come from
+    another distribution than the policy the loss scores."""
+    from transformers import GenerationConfig
+    m = _unwrap(model)
+    owners = [x for x in (m, m.get_base_model() if hasattr(m, "get_base_model") else None) if x is not None]
+    saved = [(x, x.generation_config) for x in owners if hasattr(x, "generation_config")]
+    for x, _ in saved:
+        x.generation_config = GenerationConfig()
+    try:
+        yield
+    finally:
+        for x, cfg in saved:
+            x.generation_config = cfg
+
+
 def _drop_autocast_cache():
     """Autocast caches the low-precision copy of every trainable leaf weight it casts, until
     the outermost autocast region exits, and train.py wraps the whole step in one region.
@@ -116,13 +134,20 @@ class GRPOObjective:
         self.eps, self.eps_high = args.algo_epsilon, args.algo_epsilon_high
         self.loss_type = args.algo_loss_type
         self.scale_rewards = args.algo_scale_rewards
-        self.rewards = build_rewards(args.algo_rewards)
+        self.reward_model_spec = getattr(args, "algo_reward_model", None)
+        only_model = self.reward_model_spec and not args.algo_rewards
+        self.rewards = [] if only_model else build_rewards(args.algo_rewards)
         self.sync_generation = args.strategy == "fsdp"   # FSDP: every rank must run the same forwards
         self._params = None
 
     def prepare(self, model):
         # Dropout would make the log-probs of the loss differ from those the samples came from.
         self._params = _forward_params(model)
+        if self.reward_model_spec and not any(n == "reward_model" for n, _, _ in self.rewards):
+            from .reward_model import RewardModel
+            spec = self.reward_model_spec
+            rm = RewardModel(spec["name"], next(model.parameters()).device, spec["max_length"], spec["batch_size"])
+            self.rewards = self.rewards + [("reward_model", rm, spec["weight"])]
         if self.sync_generation and hasattr(model, "peft_config"):
             # PeftModel.generate() calls the base model directly, so FSDP's hooks on the root
             # (the PeftModel) never run and its embedding / norm / lm_head stay sharded.
@@ -158,7 +183,9 @@ class GRPOObjective:
         return selective_logps(logits, input_ids[:, -n_completion:])
 
     @torch.no_grad()
-    def rollout(self, model, batch, device) -> Rollout:
+    def sample(self, model, batch, device) -> dict:
+        """G scored completions per prompt: prompt_ids / prompt_mask [N, P], completion_ids /
+        completion_mask [N, C], finished [N] (stopped by EOS), rewards [N] (CPU), metrics."""
         from transformers import GenerationConfig
 
         prompt_ids = batch["input_ids"].to(device).repeat_interleave(self.G, dim=0)
@@ -167,7 +194,8 @@ class GRPOObjective:
         eos = self._eos_ids(model)
         pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else eos[0]
         gen_cfg = GenerationConfig(
-            do_sample=True, temperature=self.temperature, top_p=self.top_p, top_k=self.top_k or None,
+            # top_k 0 (off) must be explicit: None means "the library default", which is 50
+            do_sample=True, temperature=self.temperature, top_p=self.top_p, top_k=self.top_k,
             max_new_tokens=self.max_new, eos_token_id=eos, pad_token_id=pad, use_cache=True,
         )
         was_training = model.training
@@ -175,8 +203,9 @@ class GRPOObjective:
         try:
             synced = self.sync_generation and dist.is_available() and dist.is_initialized() \
                 and dist.get_world_size() > 1
-            seqs = _unwrap(model).generate(input_ids=prompt_ids, attention_mask=prompt_mask,
-                                           generation_config=gen_cfg, synced_gpus=synced)
+            with _blank_generation_config(model):
+                seqs = _unwrap(model).generate(input_ids=prompt_ids, attention_mask=prompt_mask,
+                                               generation_config=gen_cfg, synced_gpus=synced)
         finally:
             model.train(was_training)
         if device.type == "cuda":            # the growing KV cache leaves the allocator fragmented
@@ -190,10 +219,12 @@ class GRPOObjective:
         texts = [self.tok.decode(row[:n], skip_special_tokens=True) for row, n in zip(completion_ids.tolist(), lengths)]
         prompts = self.tok.batch_decode(batch["input_ids"], skip_special_tokens=True)
         prompts = [p for p in prompts for _ in range(self.G)]
+        conversations = [c for c in batch.get("conversations", [None] * len(batch["answers"])) for _ in range(self.G)]
         total = torch.zeros(len(texts), dtype=torch.float32)
         metrics = {}
         for name, fn, weight in self.rewards:
-            values = fn(prompts, texts, answers, completion_lengths=lengths, max_completion_length=self.max_new)
+            values = fn(prompts, texts, answers, completion_lengths=lengths, max_completion_length=self.max_new,
+                        conversations=conversations)
             values = torch.tensor([float(v) for v in values], dtype=torch.float32)
             if values.shape[0] != len(texts):
                 raise ValueError(f"reward '{name}' returned {values.shape[0]} values for {len(texts)} completions")
@@ -202,14 +233,22 @@ class GRPOObjective:
             if short:
                 metrics[f"r_{short}"] = values.mean().item()
 
-        roll = build_rollout(prompt_ids, prompt_mask, completion_ids, completion_mask, total.to(device),
-                             self.G, self.scale_rewards)
+        last = completion_ids.gather(1, (completion_mask.sum(1, keepdim=True) - 1).clamp(min=0)).squeeze(1)
+        finished = torch.stack([last == e for e in eos]).any(dim=0)
+        metrics = {"reward": total.mean().item(), **metrics, "len": float(sum(lengths)) / len(lengths)}
+        return {"prompt_ids": prompt_ids, "prompt_mask": prompt_mask, "completion_ids": completion_ids,
+                "completion_mask": completion_mask, "finished": finished, "rewards": total, "metrics": metrics}
+
+    @torch.no_grad()
+    def rollout(self, model, batch, device) -> Rollout:
+        s = self.sample(model, batch, device)
+        roll = build_rollout(s["prompt_ids"], s["prompt_mask"], s["completion_ids"], s["completion_mask"],
+                             s["rewards"].to(device), self.G, self.scale_rewards)
         if self.beta > 0:
             self.attach_reference(model, roll)
-        group_std = total.view(-1, self.G).std(dim=1).mean().item()
-        metrics = {"reward": total.mean().item(), "reward_std": group_std, **metrics,
-                   "len": float(sum(lengths)) / len(lengths)}
-        roll.metrics = metrics
+        m = dict(s["metrics"])
+        roll.metrics = {"reward": m.pop("reward"),
+                        "reward_std": s["rewards"].view(-1, self.G).std(dim=1).mean().item(), **m}
         _drop_autocast_cache()
         return roll
 

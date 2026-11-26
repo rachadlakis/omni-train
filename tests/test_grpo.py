@@ -317,6 +317,56 @@ def _has_yes(prompts, completions, answers, **info):
     return [float("yes" in c.split()) for c in completions]
 
 
+@pytest.mark.parametrize("lora", [False, True])
+@pytest.mark.parametrize("top_k, want", [(0, []), (3, ["TopKLogitsWarper"])])
+def test_model_generation_defaults_do_not_leak_into_sampling(monkeypatch, lora, top_k, want):
+    """Qwen ships repetition_penalty 1.1 and top_k 20; generate() applied them to every rollout."""
+    from transformers import GenerationConfig
+    from transformers.generation.utils import GenerationMixin
+    tok = make_tokenizer()
+    model = tiny_llama(len(tok))
+    theirs = GenerationConfig(do_sample=True, repetition_penalty=1.5, top_k=1, top_p=0.1, temperature=0.2, min_p=0.5,
+                              typical_p=0.3, no_repeat_ngram_size=2, min_new_tokens=3, suppress_tokens=[9])
+    model.generation_config = theirs
+    if lora:
+        from peft import LoraConfig, get_peft_model
+        model = get_peft_model(model, LoraConfig(r=4, target_modules="all-linear"))
+    seen, original = [], GenerationMixin._get_logits_processor
+
+    def spy(self, *a, **k):
+        out = original(self, *a, **k)
+        seen.append([type(p).__name__ for p in out])
+        return out
+
+    monkeypatch.setattr(GenerationMixin, "_get_logits_processor", spy)
+    obj = GRPOObjective(_args(algo_num_generations=8, algo_top_k=top_k), tok)
+    obj.prepare(model)
+    roll = obj.rollout(model, _batch(tok), torch.device("cpu"))
+    assert seen == [want]
+    if not top_k:
+        assert len({tuple(r) for r in roll.completion_ids[:8].tolist()}) > 1    # top_k=1 would make them all equal
+    base = model.get_base_model() if lora else model
+    assert base.generation_config.repetition_penalty == 1.5                      # put back afterwards
+
+
+def test_sampled_tokens_follow_the_policy():
+    """Frequencies of the first sampled token match the softmax the loss uses."""
+    tok = make_tokenizer()
+    model = tiny_llama(len(tok))
+    model.lm_head.weight.data *= 8                                               # peaked, so top-k or a penalty would show
+    model.generation_config.repetition_penalty, model.generation_config.top_k = 1.5, 2
+    obj = GRPOObjective(_args(algo_num_generations=4000, algo_max_completion_length=1), tok)
+    obj.prepare(model)
+    torch.manual_seed(0)
+    batch = _batch(tok)
+    batch = {k: (v[:1] if torch.is_tensor(v) else v[:1]) for k, v in batch.items()}
+    first = obj.rollout(model, batch, torch.device("cpu")).completion_ids[:, 0]
+    with torch.no_grad():
+        probs = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]).logits[0, -1].float().softmax(-1)
+    freq = torch.bincount(first, minlength=len(probs)).float() / len(first)
+    assert (freq - probs).abs().max().item() < 0.03, (freq - probs).abs().max()
+
+
 def test_grpo_learns_a_simple_reward():
     tok = make_tokenizer()
     torch.manual_seed(0)

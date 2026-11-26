@@ -444,6 +444,20 @@ SMOKE_EXTRA_CASES += [
     # 1 GPU is enough to catch generate() bypassing FSDP's root hooks (it crashed on step 1).
     {"id": "post_grpo_fsdp_lora_kl", "strategy": "fsdp", "data": _GRPO_ROWS, ("peft", "enabled"): True,
      "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
+    {"id": "post_ppo_solo_lora_kl", "strategy": "solo", "data": _GRPO_ROWS, ("peft", "enabled"): True,
+     "algorithm": _algo("ppo", max_completion_length=16, beta=0.05, ppo_epochs=2, num_minibatches=2)},
+    {"id": "post_ppo_ddp_qlora", "strategy": "ddp", "data": _GRPO_ROWS, ("peft", "enabled"): True, ("peft", "type"): "qlora",
+     ("quantization", "enabled"): True, ("quantization", "bits"): 4,
+     "algorithm": _algo("ppo", max_completion_length=16, ppo_epochs=2)},
+    {"id": "post_ppo_fsdp_full_save_resume", "data": _GRPO_ROWS, "phases": [
+        {"strategy": "fsdp", "save": True, "algorithm": _algo("ppo", max_completion_length=16, ppo_epochs=2)},
+        {"strategy": "fsdp", ("save_load", "resume"): True, "algorithm": _algo("ppo", max_completion_length=16, ppo_epochs=2)}]},
+    {"id": "post_ppo_fsdp_lora_kl_bf16", "strategy": "fsdp", "data": _GRPO_ROWS, ("peft", "enabled"): True,
+     ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16",
+     ("dist_parameters", "output_dtype"): "bfloat16",
+     "algorithm": _algo("ppo", max_completion_length=16, beta=0.05, ppo_epochs=2)},
+    {"id": "post_ppo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, "algorithm": _algo("ppo", max_completion_length=16, beta=0.05, ppo_epochs=2)},
     {"id": "post_grpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
      ("peft", "enabled"): True, "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
 ]

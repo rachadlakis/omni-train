@@ -999,8 +999,13 @@ ALGORITHM_CATALOG = [
      "status": "ready", "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 2e-5}, "beta": 0.04,
      "rewards": ["accuracy", "format", "exact_match", "contains", "length"],
      "example_dataset": {"name": "openai/gsm8k", "subset": "main", "split": "train[:1000]"}},
-    {"id": "ppo", "stage": "rl", "title": "PPO (RLHF)", "summary": "Online RL with a reward model and value head.",
-     "data": "prompts + reward model", "status": "planned", "strategies": []},
+    {"id": "ppo", "stage": "rl", "title": "PPO",
+     "summary": "Online RL with a value head: sample answers, score them with reward functions or a reward model, "
+                "then take several clipped gradient steps on each batch of answers.",
+     "data": "prompt | question | problem | messages, plus an optional reference answer (answer | solution | ...)",
+     "status": "ready", "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 2e-5}, "beta": 0.05,
+     "rewards": ["accuracy", "format", "exact_match", "contains", "length"],
+     "example_dataset": {"name": "openai/gsm8k", "subset": "main", "split": "train[:1000]"}},
 ]
 
 

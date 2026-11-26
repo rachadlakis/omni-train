@@ -176,3 +176,56 @@ def grpo_loss(logps, old_logps, advantages, mask, ref_logps=None, beta: float = 
     was_clipped = ((ratio < 1 - epsilon) & (a < 0)) | ((ratio > 1 + eps_high) & (a > 0))
     stats["clip_frac"] = ((was_clipped.float() * m).sum() / m.sum().clamp(min=1)).detach()
     return loss, stats
+
+
+# ----------------------------------------------------------------------
+# PPO (Schulman et al. 2017) with GAE (Schulman et al. 2016)
+# ----------------------------------------------------------------------
+
+def gae(rewards, values, mask, gamma: float = 1.0, lam: float = 0.95):
+    """Generalised advantage estimation over completion tokens. All inputs [N, C]; mask is
+    1 on the first tokens of each row and 0 after the episode ends (value 0 there).
+
+      delta_t = r_t + gamma * V_{t+1} - V_t
+      A_t     = delta_t + gamma * lam * A_{t+1}
+    Returns (advantages, returns = A + V), both zero off the mask.
+    """
+    m = mask.float()
+    values = values * m
+    adv = torch.zeros_like(values)
+    last = torch.zeros_like(values[:, 0])
+    for t in reversed(range(values.shape[1])):
+        inside = m[:, t + 1] if t + 1 < values.shape[1] else torch.zeros_like(last)
+        next_value = values[:, t + 1] if t + 1 < values.shape[1] else torch.zeros_like(last)
+        delta = rewards[:, t] + gamma * next_value - values[:, t]
+        last = (delta + gamma * lam * inside * last) * m[:, t]
+        adv[:, t] = last
+    return adv, (adv + values) * m
+
+
+def ppo_loss(logps, old_logps, advantages, mask, values, old_values, returns,
+             epsilon: float = 0.2, value_clip: float = 0.2, vf_coef: float = 0.1, token_normalizer=None):
+    """Clipped policy loss + vf_coef * clipped value loss, all [N, C].
+
+      policy  -min(ratio * A, clip(ratio, 1 - eps, 1 + eps) * A)
+      value   0.5 * max((V - R)^2, (V_old + clip(V - V_old, +-value_clip) - R)^2)   (value_clip 0 = off)
+    Both are summed over the tokens and divided by token_normalizer: pass global_tokens /
+    world_size so that gradients averaged over ranks equal one process on the whole batch.
+    Returns (loss, stats) with detached stats: pg, vf, clip_frac, approx_kl.
+    """
+    m = mask.float()
+    norm = m.sum().clamp(min=1) if token_normalizer is None else token_normalizer
+    log_ratio = logps - old_logps
+    ratio = torch.exp(log_ratio)
+    pg = -torch.min(ratio * advantages, ratio.clamp(1 - epsilon, 1 + epsilon) * advantages)
+    vf = (values - returns) ** 2
+    if value_clip > 0:
+        clipped = old_values + (values - old_values).clamp(-value_clip, value_clip)
+        vf = torch.max(vf, (clipped - returns) ** 2)
+    pg, vf = (pg * m).sum() / norm, 0.5 * (vf * m).sum() / norm
+    with torch.no_grad():
+        n = m.sum().clamp(min=1)
+        stats = {"pg": pg.detach(), "vf": vf.detach(),
+                 "clip_frac": (((ratio - 1).abs() > epsilon).float() * m).sum() / n,
+                 "approx_kl": (((ratio - 1) - log_ratio) * m).sum() / n}
+    return pg + vf_coef * vf, stats

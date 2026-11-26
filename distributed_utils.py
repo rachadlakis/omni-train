@@ -1438,6 +1438,7 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
     DDP / SOLO: rank 0 saves one .pt file {"model_state_dict", "optimizer_state_dict"}
       (DDP: model.module). Loaders also accept older files holding a bare state dict.
     """
+    checkpoint_path = None   # returned on rank 0: the .pt file, or the FSDP checkpoint folder
     try:
         print_banner_on_rank_0(rank, "SAVING CHECKPOINT")
         if not args.checkpoint_dir:
@@ -1447,6 +1448,7 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
             if checkpointer is None:
                 raise ValueError("checkpointer must be provided for FSDP strategy")
             checkpointer.save(model, optimizer) 
+            checkpoint_path = checkpointer.saved_folder
             if rank == 0:
                 api_path = f"{args.checkpoint_dir}/fsdp/{'dcp_api' if args.dcp_api else 'dtensor_api'}"
                 print_on_rank_0(rank, f"FSDP checkpoint saved to {api_path}/ ✓", "🎉")
@@ -1477,7 +1479,8 @@ def save_checkpoint(strategy, model, optimizer, rank, args, checkpointer: Checkp
         if dist.is_initialized():
             _local_rank = int(os.environ.get("LOCAL_RANK", "0"))
             dist_barrier(_local_rank)  
-            
+        return checkpoint_path
+
     except Exception as e:
         print_on_rank_0(rank, f"❌ Failed to save checkpoint: {e}", "❌")
         raise

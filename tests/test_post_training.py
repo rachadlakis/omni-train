@@ -40,11 +40,6 @@ class TestConfig:
     def test_default_max_prompt_length(self, cfg):
         assert build_args(_with_algo(cfg, type="dpo")).algo_max_prompt_length == 16  # max_length 32
 
-    @pytest.mark.parametrize("algo", ["ppo"])
-    def test_planned_algorithms_rejected(self, cfg, algo):
-        with pytest.raises(ValueError, match="planned"):
-            build_args(_with_algo(cfg, type=algo))
-
     def test_unknown_algorithm(self, cfg):
         with pytest.raises(ValueError, match="Unsupported algorithm"):
             build_args(_with_algo(cfg, type="rlhf"))

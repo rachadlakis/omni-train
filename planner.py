@@ -20,7 +20,7 @@ The memory model follows how this repo trains (see CLAUDE.md, "Precision"):
     the step time (decoding is memory-bandwidth bound);
   * the loss upcasts logits to fp32, which dominates for large vocabularies.
 It is an estimate, not a guarantee. Single-GPU runs were checked against the measured allocator
-peak (tests/test_planner.py, RTX 4050: full, SFT, DPO and GRPO within 15%). DDP, FSDP, 5d and
+peak (tests/test_planner.py, RTX 4050: full, SFT, DPO, GRPO and PPO within 15%). DDP, FSDP, 5d and
 models above 0.5B parameters have NOT been measured.
 """
 
@@ -39,6 +39,7 @@ COMM_BUFFERS_GB = 0.5       # NCCL buffers when a process group exists
 FRAGMENTATION = 1.10        # caching-allocator fragmentation on dynamic memory
 
 PREFERENCE_ALGOS = {"dpo", "simpo", "orpo"}
+RL_ALGOS = {"grpo", "ppo"}
 FIVE_D_HF_ARCHS = {"llama", "mistral", "qwen2"}
 GATED_ARCHS = {"llama", "mistral", "mixtral", "qwen2", "qwen2_moe", "qwen3", "qwen3_moe",
                "gemma", "gemma2", "gemma3", "gemma3_text", "phi3", "olmo", "olmo2", "granite",
@@ -162,13 +163,27 @@ class Workload:
     pp_schedule: str = "1f1b"
     num_samples: int | None = None
     epochs: int = 1
-    num_generations: int = 4      # grpo: completions per prompt
-    completion_len: int | None = None   # grpo: tokens generated per completion
+    num_generations: int = 4      # grpo / ppo: completions per prompt
+    completion_len: int | None = None   # grpo / ppo: tokens generated per completion
+    ppo_epochs: int = 4           # ppo: passes over each rollout
+    num_minibatches: int = 1      # ppo: pieces per pass
+    reward_model_params: float = 0.0    # grpo / ppo: frozen on every GPU
+
+    @property
+    def sampled_rows(self) -> int:
+        """Completions sampled per rollout on one GPU (grpo / ppo)."""
+        return self.batch_size * max(2 if self.algorithm == "grpo" else 1, self.num_generations)
+
+    @property
+    def updates_per_rollout(self) -> int:
+        return max(1, self.ppo_epochs) * max(1, self.num_minibatches) if self.algorithm == "ppo" else 1
 
     @property
     def rows(self) -> int:
         if self.algorithm == "grpo":
-            return self.batch_size * max(2, self.num_generations)
+            return self.sampled_rows
+        if self.algorithm == "ppo":                 # a gradient step sees one minibatch
+            return max(1, math.ceil(self.sampled_rows / max(1, self.num_minibatches)))
         return self.batch_size * (2 if self.algorithm in PREFERENCE_ALGOS else 1)
 
 
@@ -438,13 +453,13 @@ def _activations(m: ModelSpec, w: Workload, lay: Layout) -> dict:
     if w.algorithm in PREFERENCE_ALGOS:
         # sequence_logps goes row by row, but autograd keeps EVERY fp32 row for the backward pass
         logits = tokens * m.vocab * (act_bytes + 4) + seq * m.vocab * 4
-    elif w.algorithm == "grpo":
+    elif w.algorithm in RL_ALGOS:
         comp = min(seq, w.completion_len or seq // 2)                # logits_to_keep: completion only
         logits = rows * comp * m.vocab * (act_bytes + 4) + comp * m.vocab * 4
         # sampling phase: KV cache of every sequence + one step of fp32 logits; the peak is
         # whichever phase is larger, reported under "activations"
-        kv = rows * seq * m.layers * 2 * m.kv_heads * m.hd * act_bytes
-        sampling = kv + rows * m.vocab * 4 * 2
+        kv = w.sampled_rows * seq * m.layers * 2 * m.kv_heads * m.hd * act_bytes
+        sampling = kv + w.sampled_rows * m.vocab * 4 * 2
         if sampling > acts + logits:
             acts += sampling - (acts + logits)
     else:
@@ -454,6 +469,7 @@ def _activations(m: ModelSpec, w: Workload, lay: Layout) -> dict:
 
 def memory_per_gpu(m: ModelSpec, w: Workload, lay: Layout) -> dict:
     states = _states(m, w, lay)
+    states["weights"] += 2 * w.reward_model_params       # bf16, whole on every GPU, frozen
     acts = _activations(m, w, lay)
     overhead = CUDA_CONTEXT_GB * GB + (COMM_BUFFERS_GB * GB if lay.gpus > 1 else 0)
     dynamic = (acts["activations"] + acts["logits"]) * FRAGMENTATION
@@ -495,7 +511,7 @@ def throughput(m: ModelSpec, w: Workload, lay: Layout, c: Cluster) -> dict:
     step_s = tokens_per_step * flops_per_token / flops_per_s
     out = {"tokens_per_step": int(tokens_per_step), "step_seconds": round(step_s, 4),
            "tokens_per_second": round(tokens_per_step / step_s) if step_s else None, "mfu": round(mfu, 3)}
-    if w.algorithm == "grpo":
+    if w.algorithm in RL_ALGOS:
         # decoding reads the (local) weights once per generated token: bandwidth bound
         weight_bytes = P * (0.53 if w.method == "qlora" else 2)
         comp = w.completion_len or w.seq_len // 2
@@ -503,14 +519,15 @@ def throughput(m: ModelSpec, w: Workload, lay: Layout, c: Cluster) -> dict:
         if lay.strategy == "fsdp":
             gen_s *= 2          # every decode step all-gathers the full weights layer by layer
         elif lay.strategy == "5d":
-            gen_s /= lay.tp     # (5d does not run grpo; kept for completeness)
+            gen_s /= lay.tp     # (5d does not run RL; kept for completeness)
+        gen_s /= w.updates_per_rollout               # ppo reuses each rollout for several steps
         out["generation_seconds"] = round(gen_s, 4)
         step_s += gen_s
         out["step_seconds"] = round(step_s, 4)
         out["tokens_per_second"] = round(tokens_per_step / step_s) if step_s else None
     if w.num_samples:
-        samples_per_step = w.batch_size * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)  # prompts for grpo
-        steps = math.ceil(w.num_samples / max(1, samples_per_step)) * max(1, w.epochs)
+        samples_per_step = w.batch_size * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)  # prompts for grpo / ppo
+        steps = math.ceil(w.num_samples / max(1, samples_per_step)) * max(1, w.epochs) * w.updates_per_rollout
         out["total_steps"] = steps
         out["total_seconds"] = round(steps * step_s, 1)
     return out
@@ -720,6 +737,11 @@ def plan(m: ModelSpec, w: Workload, c: Cluster) -> dict:
         notes.append(f"GRPO samples {max(2, w.num_generations)} completions per prompt ({w.rows} sequences per GPU "
                      "per step); the step time includes sampling, and the KL reference (LoRA) reuses the "
                      "model with adapters disabled.")
+    if w.algorithm == "ppo":
+        notes.append(f"PPO samples {w.sampled_rows} completions per GPU, then takes {w.updates_per_rollout} gradient steps of "
+                     f"{w.rows} sequences on them; the step time includes its share of the sampling. The value head "
+                     "is one small layer"
+                     + (", and the frozen reward model is counted on every GPU." if w.reward_model_params else "."))
     if rec.layout.strategy == "5d" and rec.layout.tp > 1:
         notes.append("Keep TP inside a node (NVLink); PP and DP can cross nodes.")
 
@@ -766,6 +788,14 @@ def needs_distributed(model: ModelSpec, workload: Workload, cluster: Cluster) ->
 # From a training config (config.yaml schema)
 # ---------------------------------------------------------------------------
 
+def _reward_model_params(name: str) -> float:
+    """Parameter count of a reward model from its name or config; 0 when it cannot be told."""
+    try:
+        return float(resolve_spec(name).params)
+    except Exception:
+        return 0.0
+
+
 def workload_from_config(cfg: dict) -> Workload:
     tr = cfg.get("training") or {}
     peft = cfg.get("peft") or {}
@@ -782,10 +812,12 @@ def workload_from_config(cfg: dict) -> Workload:
         seq = int((cfg.get("custom_transformer_args") or {}).get("max_seq_len", seq))
     algo_type = str(algo.get("type", "pretrain")).lower()
     completion = None
-    if algo_type == "grpo":
+    if algo_type in RL_ALGOS:
         prompt_len = int(algo.get("max_prompt_length") or seq // 2)
         completion = int(algo.get("max_completion_length") or seq - prompt_len)
         seq = min(seq, prompt_len + completion)
+    rm = algo.get("reward_model") if algo_type in RL_ALGOS else None
+    rm = rm.get("name") if isinstance(rm, dict) else rm
     return Workload(
         method=method, algorithm=str(algo.get("type", "pretrain")).lower(), model_type=model_type,
         batch_size=int(tr.get("batch_size", 1)), seq_len=seq,
@@ -794,7 +826,9 @@ def workload_from_config(cfg: dict) -> Workload:
         lora_r=int(peft.get("r", 16)), quant_bits=int(quant.get("bits", 4)),
         micro_batches=int(par.get("micro_batches", 1)), pp_schedule=str(par.get("pp_schedule", "1f1b")),
         epochs=int(tr.get("epochs", 1)),
-        num_generations=int(algo.get("num_generations", 4)), completion_len=completion,
+        num_generations=int(algo.get("num_generations", 1 if algo_type == "ppo" else 4)), completion_len=completion,
+        ppo_epochs=int(algo.get("ppo_epochs", 4)), num_minibatches=int(algo.get("num_minibatches", 1)),
+        reward_model_params=_reward_model_params(str(rm)) if rm else 0.0,
     )
 
 
@@ -857,8 +891,8 @@ def main(argv=None) -> None:
     ap.add_argument("--model", help="HF model id (presets are known offline)")
     ap.add_argument("--params", type=float, help="parameter count in billions, if the model is unknown")
     ap.add_argument("--method", choices=["full", "lora", "qlora"])
-    ap.add_argument("--algorithm", choices=["pretrain", "sft", "dpo", "simpo", "orpo", "grpo"])
-    ap.add_argument("--generations", type=int, help="grpo: completions per prompt (default 4)")
+    ap.add_argument("--algorithm", choices=["pretrain", "sft", "dpo", "simpo", "orpo", "grpo", "ppo"])
+    ap.add_argument("--generations", type=int, help="grpo / ppo: completions per prompt (default 4 / 1)")
     ap.add_argument("--batch", type=int)
     ap.add_argument("--seq", type=int)
     ap.add_argument("--no-ckpt", action="store_true", help="gradient checkpointing off")

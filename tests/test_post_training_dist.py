@@ -1,4 +1,4 @@
-"""Post-training (DPO/SimPO/ORPO/GRPO) under DDP and FSDP (2 CPU processes, gloo) must give the same
+"""Post-training (DPO/SimPO/ORPO/GRPO/PPO) under DDP and FSDP (2 CPU processes, gloo) must give the same
 loss AND the same gradient for every parameter as 1 process on the whole batch.
 DDP runs on CPU (gloo). FSDP2 needs CUDA, so its cases need >= 2 GPUs.
 
@@ -24,8 +24,9 @@ WORKER = os.path.join(ROOT, "tests", "post_training_dist_worker.py")
 CASES = [
     ("ddp", 0, "dpo"), ("ddp", 1, "dpo"), ("ddp", 0, "simpo"), ("ddp", 0, "orpo"),
     ("ddp", 0, "grpo"), ("ddp", 0, "grpo_dapo"), ("ddp", 0, "grpo_dr"), ("ddp", 1, "grpo_kl"),
+    ("ddp", 0, "ppo"), ("ddp", 1, "ppo_kl"),
     ("fsdp", 0, "dpo"), ("fsdp", 1, "dpo"), ("fsdp", 0, "simpo"),
-    ("fsdp", 0, "grpo_dapo"), ("fsdp", 1, "grpo_kl"),
+    ("fsdp", 0, "grpo_dapo"), ("fsdp", 1, "grpo_kl"), ("fsdp", 0, "ppo"), ("fsdp", 1, "ppo_kl"),
 ]
 
 

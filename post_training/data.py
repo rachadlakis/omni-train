@@ -13,7 +13,7 @@ Preference (one of):
   * ``chosen`` + ``rejected`` only, as full conversations whose last message
     is the answer (e.g. trl-lib/ultrafeedback_binarized), or as strings that
     share a prompt ending in "\\n\\nAssistant:" (Anthropic/hh-rlhf).
-GRPO (prompts only; the model writes the answers):
+GRPO / PPO (prompts only; the model writes the answers):
   * a prompt from ``prompt`` (string or messages) | ``question`` | ``problem`` |
     ``messages`` (trailing assistant turns dropped), and
   * optionally a reference answer for the rewards from ``answer`` | ``solution`` |
@@ -31,6 +31,7 @@ it.
 
 from __future__ import annotations
 
+import json
 import os
 
 import torch
@@ -244,7 +245,9 @@ def tokenize_grpo(row, tokenizer, max_prompt_length: int, system_prompt: str | N
             raise ValueError("conversational (message-list) prompts need a tokenizer with a chat template")
         text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
         ids = _ids(tokenizer, text, special=True)
-    return {"prompt_ids": ids[-max_prompt_length:], "answer": answer}
+    # the messages as JSON (a fixed schema for the dataset): reward models render their own template
+    conversation = json.dumps(msgs) if has_chat_template(tokenizer) else None
+    return {"prompt_ids": ids[-max_prompt_length:], "answer": answer, "conversation": conversation}
 
 
 def collate_grpo(rows, pad_id: int) -> dict:
@@ -257,6 +260,7 @@ def collate_grpo(rows, pad_id: int) -> dict:
         ids[i, width - n:] = torch.tensor(r["prompt_ids"])
         mask[i, width - n:] = 1
     return {"input_ids": ids, "attention_mask": mask, "answers": [r["answer"] for r in rows],
+            "conversations": [json.loads(r["conversation"]) if r.get("conversation") else None for r in rows],
             "idx": torch.tensor([r["idx"] for r in rows], dtype=torch.long)}
 
 
@@ -275,7 +279,7 @@ def build_dataset(raw, tokenizer, args):
         ds = raw.map(lambda r: tokenize_sft(r, tokenizer, args.max_length, args.algo_completion_only),
                      remove_columns=raw.column_names)
         return ds.filter(lambda r: any(t != IGNORE_INDEX for t in r["labels"][1:]))
-    if args.algorithm == "grpo":
+    if args.algorithm in ("grpo", "ppo"):
         ds = raw.map(lambda r: tokenize_grpo(r, tokenizer, args.algo_max_prompt_length, args.algo_system_prompt),
                      remove_columns=raw.column_names)
         ds = ds.filter(lambda r: len(r["prompt_ids"]) > 0)
@@ -290,7 +294,7 @@ def collate_fn_for(args, tokenizer):
     pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     if args.algorithm == "sft":
         return lambda rows: collate_sft(rows, pad)
-    if args.algorithm == "grpo":
+    if args.algorithm in ("grpo", "ppo"):
         return lambda rows: collate_grpo(rows, pad)
     return lambda rows: collate_preference(rows, pad)
 

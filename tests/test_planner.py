@@ -254,6 +254,24 @@ def test_grpo_rows_and_sampling_phase():
     assert perf["step_seconds"] > perf["generation_seconds"]
 
 
+def test_ppo_workload_from_config_and_steps():
+    cfg = yaml.safe_load(open("configs/llm_ppo_lora_single_gpu.yaml"))
+    w = P.workload_from_config(cfg)
+    assert (w.algorithm, w.num_generations, w.sampled_rows, w.rows, w.updates_per_rollout) == ("ppo", 1, 8, 4, 8)
+    c, lay, spec = P.Cluster(gpu_mem_gb=6, gpus_per_node=1, gpu_name="4050"), P.Layout("solo", 1), P.resolve_spec(cfg["model_name"])
+    w.num_samples = 80
+    assert P.throughput(spec, w, lay, c)["total_steps"] == 10 * 8                  # 10 rollouts x 8 updates
+    t = P.throughput(spec, w, lay, c)
+    assert t["generation_seconds"] < t["step_seconds"]                             # its share of one gradient step
+    r = P.plan(spec, w, c)
+    assert r["verdict"] == "single_gpu" and any("PPO" in n for n in r["notes"])
+    assert all(o["strategy"] != "5d" for o in r["options"])
+    cfg["algorithm"]["reward_model"] = {"name": "Skywork/Skywork-Reward-V2-Qwen3-0.6B", "weight": 1.0}
+    wr = P.workload_from_config(cfg)
+    extra = P.memory_per_gpu(spec, wr, lay)["weights"] - P.memory_per_gpu(spec, w, lay)["weights"]
+    assert extra == pytest.approx(2 * 0.6e9 / 2**30, rel=0.05)                     # frozen, bf16
+
+
 def test_grpo_fsdp_sampling_is_not_faster_than_ddp():
     w = P.Workload(algorithm="grpo", method="lora", batch_size=2, seq_len=1024, completion_len=512)
     c = P.Cluster(gpu_mem_gb=80, gpus_per_node=8, gpu_name="h100")
@@ -281,6 +299,8 @@ MEASURED = [
     (QWEN, dict(method="lora", algorithm="sft", batch_size=2, seq_len=512, grad_ckpt=False), 4.49),
     (QWEN, dict(method="lora", algorithm="dpo", batch_size=2, seq_len=512), 3.45),
     (QWEN, dict(method="lora", algorithm="grpo", batch_size=2, seq_len=512, num_generations=4, completion_len=320), 3.82),
+    (QWEN, dict(method="lora", algorithm="ppo", batch_size=8, seq_len=512, num_generations=1, completion_len=320,
+                num_minibatches=2), 2.59),
 ]
 
 
