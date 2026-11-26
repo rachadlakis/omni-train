@@ -121,6 +121,28 @@ IDS = torch.tensor([[1, 9, 10, 11, 12, 13, 14, 2]])
 
 
 # ----------------------------------------------------------------------
+@pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
+def test_resume_keeps_tied_embeddings(tmp_path, strategy, nproc):
+    """Most small LLMs (OPT, Qwen2.5-0.5B, Llama-3.2-1B) share the input embedding and the LM head.
+    A resume must build the same tied model: untying it adds a parameter, so the saved AdamW state
+    no longer matches (it was thrown away under DDP), and head and embedding then drift apart."""
+    model_dir = str(tmp_path / "tied")
+    tok = make_tokenizer()
+    model = tiny_llama(len(tok), seed=0)
+    model.config.tie_word_embeddings = True
+    model.tie_weights()
+    model.save_pretrained(model_dir)
+    tok.save_pretrained(model_dir)
+    data = _write_jsonl(tmp_path / "text.jsonl", _text_rows())
+    out = _train(_cfg(model_dir, data, tmp_path, strategy=strategy, nproc=nproc, save=True), tmp_path, "tied")
+    (ckpt,) = glob.glob(str(tmp_path / "ckpt" / strategy / "*.pt"))
+    resume = _cfg(model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=1,
+                  save_load__resume=True, save_load__resume_path=ckpt)
+    out2 = _train(resume, tmp_path, "tied_resume")
+    assert "Optimizer state restored" in out2, [l for l in out2.splitlines() if "ptimizer" in l]
+    assert _step_losses(out2)[0] < _step_losses(out)[0]
+
+
 def test_pretrain_solo_save_resume_export(tiny_model_dir, tmp_path):
     data = _write_jsonl(tmp_path / "text.jsonl", _text_rows())
     cfg = _cfg(tiny_model_dir, data, tmp_path, save=True, save_load__export_hf=True)
@@ -221,8 +243,10 @@ def test_ppo_reward_goes_up_resumes_and_exports(tiny_model_dir, tmp_path, strate
     data = _write_jsonl(tmp_path / "ppo.jsonl", rows)
     algo = {"type": "ppo", "num_generations": 8, "max_prompt_length": 16, "max_completion_length": 8, "rewards": ["contains"],
             "ppo_epochs": 2, "num_minibatches": 2, "value_lr": 0.01}
+    # lr 3e-3, not 5e-3: at 5e-3 some trajectories learn, then collapse by epoch 6 (CI's CPU hit one:
+    # reward 0.08 -> 0.29 -> 0.02). Over 24 seed x thread-count runs, 3e-3 gains >= +0.115, none collapses.
     cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=6, algorithm=algo,
-               training__batch_size=4 // nproc, training__learning_rate=5e-3, save=True, save_load__export_hf=True)
+               training__batch_size=4 // nproc, training__learning_rate=3e-3, save=True, save_load__export_hf=True)
     out = _train(cfg, tmp_path, f"ppo_{strategy}")
     rewards = [float(r) for r in re.findall(r"\| reward: ([-0-9.]+)", out)]
     assert len(rewards) == 6 * 8 * 2 * 2                        # epochs x batches x ppo_epochs x minibatches

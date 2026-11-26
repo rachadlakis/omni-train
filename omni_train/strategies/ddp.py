@@ -81,9 +81,11 @@ def apply_ddp(local_rank, rank, device, args):
                 )
             else:
                 # Non-quantized resume: build architecture only — no HF weight download needed.
+                # Keep the model's own tie_word_embeddings (as solo does): an untied copy of a tied
+                # model has one more parameter, so the saved AdamW state would no longer match, and
+                # the LM head would drift away from the embedding it was trained as.
                 _resume_config = AutoConfig.from_pretrained(args.model_name, token=HF_TOKEN)
                 _resume_config.use_cache = False
-                _resume_config.tie_word_embeddings = False
                 model = _get_auto_model_class(getattr(args, "model_type", "llm")).from_config(
                     _resume_config,
                     dtype=_load_dtype(args),
