@@ -4,8 +4,10 @@
 # what CI cannot: NCCL, multi-GPU DDP/FSDP, FSDP2 at all, bitsandbytes, bf16 on GPU.
 #
 #   bash scripts/gpu_check.sh --setup     # first time on a fresh pod: venv + installs
-#   bash scripts/gpu_check.sh             # quick (default): ~15-40 min depending on GPU count
+#   bash scripts/gpu_check.sh             # quick (default): ~45-90 min depending on GPU count
+#   bash scripts/gpu_check.sh --no-bench  # skip step 7 (the benchmark, ~15-30 min)
 #   bash scripts/gpu_check.sh --full      # + the whole 1-GPU smoke grid (~300 cases, hours)
+#   Step by step for a rented machine: docs/GPU_RUNBOOK.md
 #
 # What runs (cases that need more GPUs than the machine has are skipped, not failed):
 #   1. environment report (GPUs, topology, driver, torch)
@@ -13,10 +15,16 @@
 #   3. unit tests (sanity of the install)
 #   4. -m dist on GPUs over NCCL (OMNI_DIST_DEVICE=cuda): 5d layouts and post-training
 #      DDP/FSDP vs 1 process, on losses AND every parameter's gradient
-#   5. smoke: real train.py runs (multi-GPU DDP/FSDP, save/resume, QLoRA, post-training,
-#      vision/detection/VLM); downloads opt-125m and small datasets from the HF Hub
+#   5. smoke: real train.py runs (multi-GPU DDP/FSDP, save/resume, QLoRA, post-training incl.
+#      GRPO / PPO on DDP and FSDP, 5d layouts, vision/detection/VLM); downloads opt-125m and
+#      small datasets from the HF Hub
+#   6. strategy: auto: the advisor's choice for these GPUs (scripts/gpu_check_auto.yaml), then
+#      launch.sh runs it
+#   7. benchmark (scripts/gpu_bench.py): seconds per step and peak memory of solo / DDP / FSDP on
+#      1, 2, 4 GPUs (full, LoRA, PPO) next to the planner's prediction -> bench/bench.md
 #
-# Logs: gpu_check_logs/<timestamp>/. Exit code 0 only if every step passed.
+# Logs: gpu_check_logs/<timestamp>/ and gpu_check_logs/<timestamp>.tar.gz (one file to download).
+# Exit code 0 only if every step passed.
 # Put HF_TOKEN in .env for gated models (not needed by the default cases).
 
 set -uo pipefail
@@ -24,13 +32,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 MODE=quick
 SETUP=0
+BENCH=1
 for arg in "$@"; do
     case "$arg" in
         --quick) MODE=quick ;;
         --full) MODE=full ;;
         --setup) SETUP=1 ;;
-        -h|--help) sed -n 2,22p "$0"; exit 0 ;;
-        *) echo "unknown option: $arg (use --setup, --quick, --full)"; exit 2 ;;
+        --no-bench) BENCH=0 ;;
+        -h|--help) sed -n 2,31p "$0"; exit 0 ;;
+        *) echo "unknown option: $arg (use --setup, --quick, --full, --no-bench)"; exit 2 ;;
     esac
 done
 
@@ -45,7 +55,7 @@ step() {  # step "name" command...  -> runs, logs, records PASS/FAIL, never abor
     echo "=== $name"
     echo "    log: $log"
     local start=$SECONDS
-    "$@" 2>&1 | tee "$log" | grep -E --line-buffered "passed|failed|skipped|error|OK |FAIL|bandwidth|GB/s|check" | tail -n 20
+    "$@" 2>&1 | tee "$log" | grep -E --line-buffered "passed|failed|skipped|error|OK |FAIL|bandwidth|GB/s|check|s/step|Recommended" | tail -n 20
     local rc=${PIPESTATUS[0]}  # exit code of the command itself, not of the filters
     NAMES+=("$name"); TIMES+=("$((SECONDS - start))s")
     if [ "$rc" -eq 0 ]; then RESULTS+=("PASS"); else RESULTS+=("FAIL (exit $rc)"); fi
@@ -103,6 +113,13 @@ step "dist on GPU (NCCL)" env OMNI_DIST_DEVICE=cuda python -m pytest -m dist -q 
 SMOKE_QUICK="2gpu or 4gpu or post_ or export_ or save_resume or qlora_quant or fsdp_peft_lora or mixed_precision or vision or detection or vlm"
 step "smoke (curated)" python -m pytest -m smoke -q -rs -p no:cacheprovider -k "$SMOKE_QUICK"
 
+step "strategy: auto (advisor)" python -m omni_train.advisor --config scripts/gpu_check_auto.yaml
+step "strategy: auto (launch.sh)" env CONFIG_PATH=scripts/gpu_check_auto.yaml bash scripts/launch.sh
+
+if [ "$BENCH" -eq 1 ]; then
+    step "benchmark (vs planner)" python scripts/gpu_bench.py --out "$LOG_DIR/bench"
+fi
+
 if [ "$MODE" = full ]; then
     step "smoke (full grid)" python -m pytest -m smoke -q -rs -p no:cacheprovider -k "not ($SMOKE_QUICK)"
 fi
@@ -115,5 +132,7 @@ for i in "${!NAMES[@]}"; do
 done | tee "$LOG_DIR/summary.txt"
 FAILED=0
 grep -q FAIL "$LOG_DIR/summary.txt" && FAILED=1
+tar -czf "$LOG_DIR.tar.gz" -C "$(dirname "$LOG_DIR")" "$(basename "$LOG_DIR")" 2>/dev/null
 echo "logs: $LOG_DIR"
+echo "one file with everything: $LOG_DIR.tar.gz"
 exit $FAILED

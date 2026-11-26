@@ -80,6 +80,41 @@ def gpu_memory_snapshot(device):
     return f"allocated={allocated:.2f} GB | reserved={reserved:.2f} GB"
 
 
+SUMMARY_SKIP = 3     # first steps left out of sec/step: CUDA warm-up, allocator growth, cuDNN autotune
+
+
+def start_run_clock(device):
+    """Call right before the training loop: (start time, peak allocated GiB before training)."""
+    import time
+    before = 0.0
+    if device.type == "cuda":
+        before = torch.cuda.max_memory_allocated(device) / 1024 ** 3
+        torch.cuda.reset_peak_memory_stats(device)
+    return time.perf_counter(), before
+
+
+def print_run_summary(rank, step_ends, clock, device):
+    """One parseable line after training (scripts/gpu_bench.py reads it): median seconds per optimizer
+    step after the first SUMMARY_SKIP, and peak GPU memory in GiB, max over ranks. Collective: every
+    rank must call it. Memory is torch.cuda.max_memory_allocated, as in tests/test_planner.py."""
+    import statistics
+    import torch.distributed as dist
+    start, before = clock
+    durations = [b - a for a, b in zip([start] + step_ends[:-1], step_ends)]
+    steady = durations[SUMMARY_SKIP:] or durations
+    peaks = torch.zeros(3, dtype=torch.float64, device=device)
+    if device.type == "cuda":
+        peaks[0] = torch.cuda.max_memory_allocated(device) / 1024 ** 3
+        peaks[1] = torch.cuda.max_memory_reserved(device) / 1024 ** 3
+        peaks[2] = max(before, float(peaks[0]))
+    if dist.is_initialized():
+        dist.all_reduce(peaks, op=dist.ReduceOp.MAX)
+    if rank == 0 and durations:
+        print_on_rank_0(rank, f"Run summary | steps: {len(durations)} | sec/step: {statistics.median(steady):.4f} "
+                              f"| train seconds: {sum(durations):.1f} | peak alloc GB: {peaks[0]:.3f} "
+                              f"| peak reserved GB: {peaks[1]:.3f} | run peak alloc GB: {peaks[2]:.3f}", "📊")
+
+
 def plot_losses_in_terminal(_losses):
     """Plot training loss curve, handling NaN values gracefully."""
     import math

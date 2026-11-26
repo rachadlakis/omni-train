@@ -10,6 +10,7 @@
 import os
 from dotenv import load_dotenv 
 import sys
+import time
 import traceback
 # import argparse
 # import yaml
@@ -31,6 +32,8 @@ from omni_train.console import (
     gpu_memory_snapshot,
     plot_losses_in_terminal,
     print_banner_on_rank_0,
+    print_run_summary,
+    start_run_clock,
     print_config,
     print_on_all_ranks,
     print_on_rank_0,
@@ -359,6 +362,7 @@ def main(args):
         losses = []
         if dist.is_initialized():
             dist_barrier(local_rank)
+        step_ends, clock = [], start_run_clock(device)
 
         for epoch in range(args.epochs):
             print_on_rank_0(rank, f"Starting Epoch {epoch+1}/{args.epochs}", "🔁")
@@ -440,7 +444,8 @@ def main(args):
                     scaler.update()
                     if scheduler is not None:
                         scheduler.step()
-                    total_loss += loss.item()
+                    total_loss += loss.item()          # also waits for the GPU, so the clock below is honest
+                    step_ends.append(time.perf_counter())
 
                     if rank == 0:
                         avg_loss = total_loss / (step + 1)
@@ -473,6 +478,8 @@ def main(args):
 
             if args.wandb_log_with_train and rank == 0:
                 run.log({"epoch": epoch+1, "loss": epoch_loss}) # type: ignore
+
+        print_run_summary(rank, step_ends, clock, device)
 
         def in_terminal():
             return sys.stdout.isatty()

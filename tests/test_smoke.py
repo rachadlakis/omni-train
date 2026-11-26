@@ -129,6 +129,7 @@ def _find_checkpoint_path(tmpdir: str, strategy: str, distribute_api: str) -> st
       solo  → {tmpdir}/solo/{timestamp}[__tag].pt
       ddp   → {tmpdir}/ddp/{timestamp}[__tag].pt
       fsdp  → {tmpdir}/fsdp/{dcp_api|dtensor_api}/{latest_timestamp}/
+      5d    → {tmpdir}/5d/{timestamp}/
     """
     if strategy in ("solo", "ddp"):
         ckpt_dir = os.path.join(tmpdir, strategy)
@@ -157,6 +158,12 @@ def _find_checkpoint_path(tmpdir: str, strategy: str, distribute_api: str) -> st
                 f"No FSDP checkpoint found in {fsdp_dir} after save phase."
             )
         return os.path.join(fsdp_dir, latest)
+    if strategy == "5d":    # checkpoints/5d/<ts>/rank_XXXXX.pt + layout.json
+        five_d = os.path.join(tmpdir, "5d")
+        runs = [n for n in os.listdir(five_d) if n.split("__")[0].isdigit()] if os.path.isdir(five_d) else []
+        if not runs:
+            raise RuntimeError(f"No 5d checkpoint found in {five_d} after save phase.")
+        return os.path.join(five_d, max(runs, key=lambda n: int(n.split("__")[0])))
     raise ValueError(f"Unknown strategy: {strategy!r}")
 
 
@@ -390,6 +397,21 @@ def _algo(type_, **kw):
     return {"type": type_, "max_prompt_length": 16, **kw}
 
 
+def _five_d(gpus, num_experts=0, **par):
+    """A strategy: 5d case: custom Llama-style model, synthetic data, dp inferred from the rest."""
+    args = {"n_layers": 4, "vocab_size": 256, "max_seq_len": 64, "dim": 128, "n_heads": 4, "dropout_p": 0.0}
+    if num_experts:
+        args.update(num_experts=num_experts, top_k=2)
+    return {"strategy": "5d", "num_gpus": gpus, "model_type": "custom_transformer",
+            "dataset": {"name": "synthetic", "subset": None, "split": "train"},
+            ("training", "max_length"): 64,
+            "parallelism": {"dp": "auto", "tp": 1, "sp": False, "cp": 1, "pp": 1, "pp_schedule": "1f1b",
+                            "micro_batches": 1, "ep": 1, "zero1": False, **par},
+            "custom_transformer_args": args,
+            ("dist_parameters", "mixed_precision"): True, ("dist_parameters", "param_dtype"): "bfloat16",
+            ("dist_parameters", "output_dtype"): "bfloat16"}
+
+
 SMOKE_EXTRA_CASES += [
     # Same code paths as the 1-GPU grid, but with real gradient sync / sharding.
     {"id": "ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2},
@@ -460,6 +482,43 @@ SMOKE_EXTRA_CASES += [
      ("peft", "enabled"): True, "algorithm": _algo("ppo", max_completion_length=16, beta=0.05, ppo_epochs=2)},
     {"id": "post_grpo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
      ("peft", "enabled"): True, "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
+    # RL across real GPUs: rollouts on every rank, PPO's hand-averaged value-head gradients over NCCL.
+    {"id": "post_grpo_ddp_2gpu", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2, "data": _GRPO_ROWS,
+     "algorithm": _algo("grpo", max_completion_length=16)},
+    {"id": "post_ppo_ddp_2gpu_lora_kl", "min_gpus": 2, "strategy": "ddp", "num_gpus": 2, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True,
+     "algorithm": _algo("ppo", max_completion_length=16, beta=0.05, ppo_epochs=2, num_minibatches=2)},
+    {"id": "post_ppo_ddp_2gpu_save_resume", "min_gpus": 2, "data": _GRPO_ROWS, "phases": [
+        {"strategy": "ddp", "num_gpus": 2, "save": True, "algorithm": _algo("ppo", max_completion_length=16)},
+        {"strategy": "ddp", "num_gpus": 2, ("save_load", "resume"): True,
+         "algorithm": _algo("ppo", max_completion_length=16)}]},
+    {"id": "post_ppo_fsdp_2gpu_full_save_resume", "min_gpus": 2, "data": _GRPO_ROWS, "phases": [
+        {"strategy": "fsdp", "num_gpus": 2, "save": True, "algorithm": _algo("ppo", max_completion_length=16)},
+        {"strategy": "fsdp", "num_gpus": 2, ("save_load", "resume"): True,
+         "algorithm": _algo("ppo", max_completion_length=16)}]},
+    {"id": "export_ppo_fsdp_2gpu_lora", "min_gpus": 2, "strategy": "fsdp", "num_gpus": 2, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, ("save_load", "export_hf"): True,
+     "algorithm": _algo("ppo", max_completion_length=16)},
+    # 4 GPUs: same paths with a world size that is not 2.
+    {"id": "ddp_4gpu", "min_gpus": 4, "strategy": "ddp", "num_gpus": 4},
+    {"id": "fsdp_4gpu_lora", "min_gpus": 4, "strategy": "fsdp", "num_gpus": 4, ("peft", "enabled"): True},
+    {"id": "post_dpo_fsdp_4gpu_lora", "min_gpus": 4, "strategy": "fsdp", "num_gpus": 4,
+     "algorithm": _algo("dpo"), "data": _PREF_ROWS, ("peft", "enabled"): True},
+    {"id": "post_grpo_fsdp_4gpu_lora", "min_gpus": 4, "strategy": "fsdp", "num_gpus": 4, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, "algorithm": _algo("grpo", max_completion_length=16, beta=0.04)},
+    {"id": "post_ppo_ddp_4gpu_lora", "min_gpus": 4, "strategy": "ddp", "num_gpus": 4, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, "algorithm": _algo("ppo", max_completion_length=16, num_minibatches=2)},
+    {"id": "post_ppo_fsdp_4gpu_lora_kl", "min_gpus": 4, "strategy": "fsdp", "num_gpus": 4, "data": _GRPO_ROWS,
+     ("peft", "enabled"): True, "algorithm": _algo("ppo", max_completion_length=16, beta=0.05)},
+    # strategy: 5d through train.py on real GPUs (custom model, synthetic data: nothing to download).
+    {"id": "5d_2gpu_tp2_sp", "min_gpus": 2, **_five_d(2, tp=2, sp=True)},
+    {"id": "5d_2gpu_pp2", "min_gpus": 2, **_five_d(2, pp=2, micro_batches=4)},
+    {"id": "5d_2gpu_cp2", "min_gpus": 2, **_five_d(2, cp=2)},
+    {"id": "5d_2gpu_dp2_zero1", "min_gpus": 2, **_five_d(2, zero1=True)},
+    {"id": "5d_4gpu_tp2_pp2_sp", "min_gpus": 4, **_five_d(4, tp=2, sp=True, pp=2, micro_batches=4)},
+    {"id": "5d_4gpu_dp2_ep2_moe", "min_gpus": 4, **_five_d(4, ep=2, num_experts=4)},
+    {"id": "5d_4gpu_dp2_tp2_save_resume", "min_gpus": 4, "phases": [
+        {**_five_d(4, tp=2), "save": True}, {**_five_d(4, tp=2), ("save_load", "resume"): True}]},
 ]
 
 # ── Grid expansion ────────────────────────────────────────────────────────────
