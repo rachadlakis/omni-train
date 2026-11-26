@@ -22,6 +22,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DistributedSampler 
 
+import advisor
 from model import Transformer 
 from checkpoint import Checkpointer
 from data import get_dataloader
@@ -527,6 +528,9 @@ def main(args):
 if __name__ == "__main__":
     cfg = load_config()
     try:
+        if advisor.is_auto(cfg):
+            build_args(cfg)     # a mistake in the config must not wait for the dataset to be measured
+            cfg = advisor.resolve_for_process(cfg)
         args = build_args(cfg)
     except ValueError as e:
         rank = int(os.environ.get("RANK", "0"))
@@ -541,6 +545,14 @@ if __name__ == "__main__":
     except ValueError as e:
         rank = 0
         print_on_rank_0(rank, f"Could not parse RANK env variable, defaulting to 0 for config print. Error: {e}", "⚠️")
+
+    if int(os.environ.get("RANK", "0")) == 0:
+        try:
+            warning = advisor.preflight(cfg, int(os.environ.get("WORLD_SIZE", "1")))
+        except Exception:       # an estimate must never stop a run
+            warning = None
+        if warning:
+            print(f"\n⚠️  {warning}\n", flush=True)
 
     # ADDED: catch ValueError from main() (checkpoint compat errors, bad resume configs, etc.)
     # main() already prints the message once cleanly and re-raises — we just convert to sys.exit(1).

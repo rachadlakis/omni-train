@@ -75,6 +75,12 @@ def _default_config(project_root: Path) -> dict[str, Any]:
     }
 
 
+def _gpu_count(value: Any, strategy: str) -> Any:
+    if str(value).strip().lower() == "auto":
+        return "auto" if strategy == "auto" else 1
+    return int(value or 1)
+
+
 def is_mini_project_config(raw: dict[str, Any]) -> bool:
     # custom_transformer omits model_name (model is built from scratch), so accept
     # either model_name or model_type as the marker for the flat mini-project schema.
@@ -86,7 +92,11 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     base = _default_config(project_root)
 
     if is_mini_project_config(raw):
-        return _deep_merge(base, raw)
+        merged = _deep_merge(base, raw)
+        # config.yaml's `num_gpus: auto` only goes with `strategy: auto`
+        if str(merged.get("strategy")).lower() != "auto" and "num_gpus" not in raw:
+            merged["num_gpus"] = 1
+        return merged
 
     model = raw.get("model", {}) if isinstance(raw.get("model"), dict) else {}
     data = raw.get("data", {}) if isinstance(raw.get("data"), dict) else {}
@@ -97,7 +107,7 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
     strategy = str(distributed.get("strategy", "solo")).lower()
     if strategy == "none":
         strategy = "solo"
-    if strategy not in {"solo", "ddp", "fsdp"}:
+    if strategy not in {"auto", "solo", "ddp", "fsdp"}:
         strategy = "solo"
 
     finetune_mode = str(model.get("finetune_mode", "lora")).lower()
@@ -143,7 +153,7 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
             ),
         },
         "strategy": strategy,
-        "num_gpus": int(raw.get("num_gpus", distributed.get("gpu_count", base.get("num_gpus", 1))) or 1),
+        "num_gpus": _gpu_count(raw.get("num_gpus", distributed.get("gpu_count", base.get("num_gpus", 1))), strategy),
         "checkpoint_dir": training.get("checkpoint_dir", raw.get("checkpoint_dir", base.get("checkpoint_dir", "checkpoints"))),
         "save": raw.get("save", base.get("save", True)),
         "dist_parameters": {

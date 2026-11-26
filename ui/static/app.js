@@ -188,7 +188,7 @@ function defaultConfig() {
       system_prompt: 'Please reason step by step, and put your final answer within \\boxed{}.' },
     training: { epochs: 1, batch_size: 4, max_length: 512, learning_rate: 2e-4, gradient_checkpointing: true,
       warmup_steps: 20, lr_scheduler: 'cosine', weight_decay: 0.0, grad_clip: 1.0 },
-    strategy: 'solo', num_gpus: 1, checkpoint_dir: 'checkpoints', save: true,
+    strategy: 'auto', num_gpus: 'auto', checkpoint_dir: 'checkpoints', save: true,
     dist_parameters: { mixed_precision: true, param_dtype: 'bfloat16', reduce_dtype: 'float32', output_dtype: 'bfloat16',
       cast_forward_inputs: false, distribute_api: 'dcp_api' },
     save_load: { resume: false, resume_path: '', load_model_from_hf: true },
@@ -268,13 +268,14 @@ function exportConfig(cfg) {
     c.training.max_length = Number(ct.max_seq_len);
     if (!Number(ct.n_kv_heads)) delete ct.n_kv_heads;
     if (!Number(ct.num_experts)) { delete ct.num_experts; delete ct.top_k; }
-    if (c.strategy !== '5d') { delete ct.n_kv_heads; delete ct.num_experts; delete ct.top_k; }
+    if (!['5d', 'auto'].includes(c.strategy)) { delete ct.n_kv_heads; delete ct.num_experts; delete ct.top_k; }
   } else {
     delete c.custom_transformer_args;
   }
   c.quantization.bits = Number(c.quantization.bits);
   if (c.parallelism.dp !== 'auto') c.parallelism.dp = Number(c.parallelism.dp);
   if (c.strategy === 'solo') c.num_gpus = 1;
+  if (c.strategy !== 'auto' && c.num_gpus === 'auto') c.num_gpus = 1;
   if (!c.wandb.wandb_run_name) delete c.wandb.wandb_run_name;
   if (!c.dataset.subset) c.dataset.subset = null;
   return c;
@@ -348,7 +349,7 @@ function strategyLabel(cfg) {
     const parts = ['tp', 'pp', 'cp', 'ep'].filter((k) => Number(p[k]) > 1).map((k) => `${k.toUpperCase()}${p[k]}`);
     return `5D ${parts.join('×') || 'DP'}`;
   }
-  return s.toUpperCase();
+  return s === 'auto' ? 'Automatic' : s.toUpperCase();
 }
 
 function runTitle(job) {
@@ -668,9 +669,10 @@ async function renderCompare(main, arg) {
 // ===========================================================================
 
 const VERDICT_TAG = {
-  single_gpu: ['fit', 'Single GPU'],
-  distributed_optional: ['fit', 'Distributed optional'],
-  distributed_required: ['running', 'Distributed required'],
+  single_gpu: ['fit', 'One GPU is enough'],
+  distributed_optional: ['fit', 'One GPU is enough'],
+  distributed_recommended: ['running', 'More GPUs recommended'],
+  distributed_required: ['running', 'Needs several GPUs'],
   infeasible: ['over', 'Does not fit'],
 };
 
@@ -689,13 +691,23 @@ function renderPlan(plan, opts = {}) {
   const perf = (sel && sel.fits ? sel : rec).perf;
   const step = perf.step_seconds;
 
+  const adv = plan.advice, auto = sel && sel.auto;
+  const changed = Object.keys(rec.changes || {}).length > 0;
+  const canApply = opts.onApply && adv.fits && !auto && (!sameAsRec || changed);
   let html = `
     <div class="verdict ${esc(plan.verdict)}">
       <div class="tag"><span class="pill ${tagCls}">${tagText}</span></div>
-      <h3>${esc(plan.headline)}</h3>
-      <p>${esc(plan.summary)}</p>
-      ${opts.onApply && !sameAsRec && plan.verdict !== 'infeasible' ? `<div class="btn-row" style="margin-top:12px"><button class="btn primary small" data-apply="rec">Use ${esc(rec.label)}</button></div>` : ''}
+      <p class="need">${esc(adv.need)}${adv.data ? ` ${esc(adv.data)}` : ''}</p>
+      <h3>${adv.fits ? '<small>Recommended</small>' : ''}${esc(adv.title)}${adv.tech ? ` <span class="tech">${esc(adv.tech)}</span>` : ''}</h3>
+      <p>${esc(adv.detail)}</p>
+      ${[adv.why, ...adv.changes].filter(Boolean).map((t) => `<p>${esc(t)}</p>`).join('')}
+      ${auto && adv.fits ? `<p class="auto-note">${isRemotePlan() ? 'Automatic decides again on the machine that runs it.' : 'Automatic uses this when the run starts.'}</p>` : ''}
+      ${canApply ? `<div class="btn-row" style="margin-top:12px"><button class="btn primary small" data-apply="rec">Use recommended</button></div>` : ''}
     </div>
+    ${adv.others.length ? `<div class="plan-sec"><h4>${esc(adv.others_title)}</h4><ul class="plan-list">${adv.others.map((o, i) => `
+      <li class="sugg"><div><strong>${esc(o.title)}</strong><br><span class="muted">${esc(o.detail)}.${o.why ? ` ${esc(o.why)}` : ''}</span></div>
+      ${opts.onSuggest && Object.keys(o.workload || {}).length ? `<button class="btn small" data-sugg="${i}">${{ lora: 'Use LoRA', qlora: 'Use QLoRA' }[o.workload.method] || 'Apply'}</button>` : ''}</li>`).join('')}</ul></div>` : ''}
+    ${adv.tips.length ? `<div class="plan-sec">${adv.tips.map((t) => `<div class="notice"><div>${esc(t)}</div></div>`).join('')}</div>` : ''}
     <div class="plan-sec">
       <h4>Estimated peak memory per GPU</h4>
       ${memoryBars(options, cap, plan.cluster.usable_gb, sel && sel.label)}
@@ -716,12 +728,7 @@ function renderPlan(plan, opts = {}) {
       <li><span class="muted">FSDP</span><span class="num">${mg.fsdp ? `${mg.fsdp} GPU${mg.fsdp > 1 ? 's' : ''}` : 'not possible'}</span></li>
       <li><span class="muted">5D</span><span class="num">${mg['5d'] ? `${mg['5d']} GPUs, ${esc(mg['5d_layout'])}` : 'not available'}</span></li></ul>`);
 
-  if (plan.suggestions.length) {
-    html += `<div class="plan-sec"><h4>Ways to make it fit</h4><ul class="plan-list">${plan.suggestions.map((s, i) => `
-      <li class="sugg"><div><strong>${esc(s.change)}</strong> <span class="muted">→ ${esc(s.result)}${s.per_gpu_gb ? `, ${fmt.gb(s.per_gpu_gb)} per GPU` : ''}</span></div>
-      ${opts.onSuggest && Object.keys(s.workload || {}).length ? `<button class="btn small" data-sugg="${i}">Apply</button>` : ''}</li>`).join('')}</ul></div>`;
-  }
-  const notes = plan.notes.slice();
+  const notes = [plan.summary, ...plan.notes];
   const model = plan.model;
   notes.unshift(`${model.name}: ${fmt.params(model.params)} parameters${model.num_experts ? ` (${fmt.params(model.active_params)} active)` : ''}, ${model.layers} layers, vocab ${fmt.int(model.vocab)} (${model.source === 'hf-config' ? 'from config.json' : model.source}).`);
   html += fold('notes', 'Notes', String(notes.length), `<ul class="plan-list">${notes.map((n) => `<li class="muted" style="display:block">${esc(n)}</li>`).join('')}</ul>`);
@@ -731,8 +738,19 @@ function renderPlan(plan, opts = {}) {
   $$('[data-fold]', root).forEach((d) => { d.ontoggle = () => store.set('omni-fold-' + d.dataset.fold, d.open); });
   const applyBtn = $('[data-apply]', root);
   if (applyBtn) applyBtn.onclick = () => opts.onApply(rec);
-  $$('[data-sugg]', root).forEach((b) => { b.onclick = () => opts.onSuggest(plan.suggestions[Number(b.dataset.sugg)].workload); });
+  $$('[data-sugg]', root).forEach((b) => { b.onclick = () => opts.onSuggest(adv.others[Number(b.dataset.sugg)].workload, adv.others[Number(b.dataset.sugg)]); });
   return root;
+}
+
+/** Is the plan on screen for a machine other than this one? (Only the wizard knows where a run goes.) */
+const isRemotePlan = () => !!W && location.hash.startsWith('#/new') && !isLocal();
+
+/** Use a concrete option of a plan: its strategy, GPUs, layout and the changes it needs. */
+function applyOption(cfg, o) {
+  cfg.strategy = o.strategy;
+  cfg.num_gpus = o.gpus;
+  if (o.parallelism) cfg.parallelism = { ...cfg.parallelism, ...o.parallelism };
+  if (o.changes) applyWorkload(cfg, o.changes);
 }
 
 /** Map planner what-if changes back onto a config. */
@@ -824,7 +842,7 @@ function wizardState() {
     step: (draft && draft.step) || 0,
     cfg,
     ui: deepMerge({ name: '', target: 'local', hw: defaultHw(), algo: 'dpo' }, draftUi(draft)),
-    plan: null, planSeq: 0, spec: null, specFor: null, validation: null, yaml: null, editingYaml: false,
+    plan: null, planSeq: 0, data: null, dataFor: null, spec: null, specFor: null, validation: null, yaml: null, editingYaml: false,
   };
 }
 
@@ -851,7 +869,7 @@ async function renderWizard(main) {
   main.innerHTML = `
     <div class="page">
       <div class="page-head">
-        <div><h1>New run</h1><p>Choose what to train and on what. The plan on the right updates as you go and tells you whether you need distributed training.</p></div>
+        <div><h1>New run</h1><p>Choose what to train and on what. The plan on the right updates as you go and tells you whether one GPU is enough, and what to do if it is not.</p></div>
         <div class="btn-row"><button class="btn ghost" id="wiz-reset">Start over</button></div>
       </div>
       <nav class="steps" id="steps" aria-label="Steps"></nav>
@@ -924,6 +942,8 @@ function normalise() {
   const avail = strategyAvailability();
   if (avail[c.strategy]) c.strategy = c.num_gpus > 1 && !avail.fsdp ? 'fsdp' : (c.num_gpus > 1 ? 'ddp' : 'solo');
   if (!isLocal()) c.num_gpus = gpusHere();
+  else if (c.strategy === 'auto') { if (c.num_gpus !== 'auto') c.num_gpus = Math.max(1, Math.min(+c.num_gpus || 1, W.local.gpus_per_node)); }
+  else if (c.num_gpus === 'auto') c.num_gpus = c.strategy === 'solo' ? 1 : W.local.gpus_per_node;
   if (c.model_type === 'custom_transformer') { setMethod(c, 'full'); c.training.max_length = +c.custom_transformer_args.max_seq_len; }
   if (!PEFT_TYPES.has(c.model_type)) setMethod(c, 'full');
   if (!QLORA_TYPES.has(c.model_type) && c.quantization.enabled) setMethod(c, 'lora');
@@ -942,6 +962,7 @@ function drawStep() {
   const next = $('#step-next');
   if (next) next.onclick = () => goStep(W.step + 1);
   if (W.step === 1) inspectModelSoon();
+  if (W.step >= 2) inspectDataSoon(0);
   if (W.step === 5) loadReview();
 }
 
@@ -982,6 +1003,7 @@ function onCfgChange(rerender) {
   saveDraft();
   W.validation = null; W.yaml = null;
   schedulePlan();
+  if (W.step >= 2) inspectDataSoon();
   if (rerender) drawStep();
 }
 
@@ -1250,6 +1272,7 @@ function stepData() {
         ${field('Subset', 'dataset.subset', { placeholder: 'optional, e.g. wikitext-2-raw-v1' })}
         ${field('Split', 'dataset.split', { placeholder: 'train', hint: 'Slice for quick runs: train[:2000], train[:5%]' })}
       </div>
+      <div id="data-check" class="data-check" aria-live="polite"></div>
       ${info && info.example_dataset && c.dataset.name !== info.example_dataset.name ? `<div class="btn-row" style="margin-top:12px"><button class="btn small" id="use-example">Use ${esc(info.example_dataset.name)}</button></div>` : ''}
     </section>
     ${goal === 'sft' ? `<section class="step-section"><h3>Loss mask</h3><p>Usually the model should learn to answer, not to repeat the prompt.</p>
@@ -1260,6 +1283,46 @@ function stepData() {
       <div class="grid">${field('Max prompt tokens', 'algorithm.max_prompt_length', { type: 'int', min: 1 })}${field('Max answer tokens', 'algorithm.max_completion_length', { type: 'int', min: 1, hint: 'Generated per completion' })}</div>
       <div class="field" style="margin-top:14px"><label for="f-algorithm-system_prompt">System prompt</label>
         <textarea id="f-algorithm-system_prompt" rows="3" data-bind="algorithm.system_prompt" data-type="str" placeholder="optional" style="font-family:inherit">${esc(c.algorithm.system_prompt || '')}</textarea></div></section>` : ''}`;
+}
+
+/** Everything the measured lengths depend on (the server keeps its own copy of this rule). */
+const dataKey = (c) => JSON.stringify([c.dataset, c.model_name, c.model_type, c.algorithm.type, c.algorithm.max_prompt_length, c.algorithm.system_prompt, c.training.max_length, c.training.batch_size]);
+let dataTimer = null;
+/** Measure the dataset once the user has reached the Data step: it may need the network. */
+function inspectDataSoon(delay = 1000) {
+  drawDataCheck();
+  clearTimeout(dataTimer);
+  dataTimer = setTimeout(inspectData, delay);
+}
+async function inspectData() {
+  if (!W || W.dataFor === dataKey(W.cfg)) return;
+  const wizard = W, key = dataKey(W.cfg);
+  W.dataFor = key; W.data = null;
+  drawDataCheck();
+  let found;
+  try { found = await api('/api/data/inspect', { json: { config: exportConfig(W.cfg) } }); }
+  catch (e) { found = { data: null, error: e.message }; }
+  if (W !== wizard || W.dataFor !== key) return;
+  W.data = found;
+  drawDataCheck();
+  if (found.data) schedulePlan(0);
+}
+function drawDataCheck() {
+  const el = $('#data-check');
+  if (!el) return;
+  if (!W.dataFor || W.dataFor !== dataKey(W.cfg) || !W.data) {
+    el.innerHTML = '<p class="faint">Checking your data…</p>';
+    return;
+  }
+  const d = W.data.data;
+  if (W.data.error) { el.innerHTML = `<div class="notice warn"><div><strong>Could not check this dataset.</strong> ${esc(W.data.error)}</div></div>`; return; }
+  if (!d) { el.innerHTML = ''; return; }
+  const n = (v) => fmt.int(v);
+  const kv = [['Examples', d.rows ? `${d.rows_exact ? '' : '~'}${n(d.rows)}` : 'unknown'], ['Average', `${n(Math.round(d.mean))} tokens`],
+    ['95% are under', `${n(d.p95)} tokens`], [d.longest_exact ? 'Longest' : 'Longest seen', `${n(d.longest_seen)} tokens`],
+    ['Longer than the limit', `${d.over_limit_pct}%`]];
+  el.innerHTML = `<div class="model-card">${kv.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <p class="faint">Measured with this model's tokenizer on ${n(d.sampled)} examples. The limit is ${n(d.limit)} tokens.</p>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1291,8 +1354,9 @@ function stepCompute() {
   const avail = strategyAvailability();
   const local = W.local;
   const target = W.ui.target, hw = W.ui.hw, slurm = S.slurm || { available: false, reason: 'Checking SLURM…', partitions: [] };
-  const names = { solo: 'Single GPU', ddp: 'DDP', fsdp: 'FSDP', '5d': '5D parallel' };
+  const names = { auto: 'Automatic', solo: 'Single GPU', ddp: 'DDP', fsdp: 'FSDP', '5d': '5D parallel' };
   const desc = {
+    auto: 'Looks at the model, the data and the GPUs, and uses the simplest strategy that fits and is fast enough.',
     solo: 'One process, one GPU.',
     ddp: 'A full copy on every GPU; gradients are averaged. Scales throughput.',
     fsdp: 'Weights, gradients and optimizer states sharded across GPUs. For models that do not fit on one.',
@@ -1301,7 +1365,8 @@ function stepCompute() {
   setTimeout(() => {
     $$('.choice[data-strategy]').forEach((b) => { b.onclick = () => {
       c.strategy = b.dataset.strategy;
-      if (c.strategy !== 'solo' && c.num_gpus < 2 && isLocal()) c.num_gpus = Math.max(1, Math.min(2, local.gpus_per_node));
+      if (c.strategy === 'auto' && isLocal()) c.num_gpus = 'auto';
+      if (!['solo', 'auto'].includes(c.strategy) && c.num_gpus < 2 && isLocal()) c.num_gpus = Math.max(1, Math.min(2, local.gpus_per_node));
       onCfgChange(true);
     }; });
     $('[data-seg="target"]').onclick = (e) => {
@@ -1309,7 +1374,8 @@ function stepCompute() {
       if (!b || b.dataset.val === W.ui.target) return;
       if (isLocal() && c.num_gpus > 1) Object.assign(W.ui.hw, hwFor(+c.num_gpus));
       W.ui.target = b.dataset.val;
-      if (isLocal()) c.num_gpus = Math.max(1, Math.min(c.num_gpus, local.gpus_per_node));
+      if (isLocal() && c.strategy === 'auto') c.num_gpus = 'auto';
+      else if (isLocal()) c.num_gpus = Math.max(1, Math.min(c.num_gpus, local.gpus_per_node));
       onCfgChange(true);
     };
     if (target === 'slurm' && !S.slurm) loadSlurm();
@@ -1336,19 +1402,20 @@ function stepCompute() {
         ${uiField('Time limit', 'ui.hw.time', hw.time, { placeholder: 'HH:MM:SS' })}${uiField('CPUs per machine', 'ui.hw.cpus', hw.cpus, { type: 'int' })}${uiField('Memory per machine', 'ui.hw.mem', hw.mem, { placeholder: '64G' })}` : ''}
       </div>` : ''}
       ${target === 'slurm' && !slurm.available ? `<div class="notice warn" style="margin-top:14px"><div><strong>Cannot submit from here.</strong> ${esc(slurm.reason)} You still get the command to run on a login node.</div></div>` : ''}
-      ${target === 'remote' && c.strategy === 'fsdp' && +hw.nodes > 1 ? '<div class="notice" style="margin-top:14px"><div>FSDP across machines needs the checkpoint folder on storage all machines share.</div></div>' : ''}
+      ${target === 'remote' && ['fsdp', 'auto'].includes(c.strategy) && +hw.nodes > 1 ? '<div class="notice" style="margin-top:14px"><div>FSDP across machines needs the checkpoint folder on storage all machines share.</div></div>' : ''}
     </section>
     <section class="step-section">
       <h3>Strategy</h3>
-      <p>Not sure? The plan on the right recommends one for this model and hardware.</p>
-      <div class="choices">${['solo', 'ddp', 'fsdp', '5d'].map((s) => `
+      <p>How the work is spread over the GPUs. Leave it on Automatic unless you want a specific one; the plan on the right shows what it picks and why.</p>
+      <div class="choices">${['auto', 'solo', 'ddp', 'fsdp', '5d'].map((s) => `
         <button type="button" class="choice" data-strategy="${s}" aria-pressed="${c.strategy === s}" ${avail[s] ? `disabled title="${esc(avail[s])}"` : ''}>
-          <span class="choice-title">${names[s]}</span><span class="choice-text">${desc[s]}</span>
+          <span class="choice-title">${names[s]}${s === 'auto' ? '<span class="pill fit">Recommended</span>' : ''}</span><span class="choice-text">${desc[s]}</span>
           ${avail[s] ? `<span class="choice-meta">${esc(avail[s])}</span>` : ''}
         </button>`).join('')}</div>
       <div class="grid" style="margin-top:16px">
         ${c.strategy !== 'solo' ? (target !== 'local'
           ? `<div class="field"><span class="label">GPUs</span><div class="fixed">${c.num_gpus}, ${hw.nodes} × ${hw.gpus_per_node}</div></div>`
+          : c.strategy === 'auto' ? select('GPUs to use at most', 'num_gpus', [['auto', `all (${local.gpus_per_node})`], ...Array.from({ length: local.gpus_per_node }, (_, i) => [String(i + 1), String(i + 1)])], { rerender: true })
           : field('GPUs', 'num_gpus', { type: 'int', min: 1, hint: `Up to ${local.gpus_per_node} on this machine`, rerender: true })) : ''}
         ${check('Mixed precision (bf16)', 'dist_parameters.mixed_precision', 'fp32 weights, bf16 compute')}
       </div>
@@ -1450,7 +1517,7 @@ function stepReview() {
       <div class="model-card">${[
         ['Goal', ALGO_LABEL[c.algorithm.type]], ['Model', c.model_type === 'custom_transformer' ? 'custom transformer' : c.model_name.split('/').pop()],
         ['Method', { full: 'Full fine-tune', lora: 'LoRA', qlora: `QLoRA ${c.quantization.bits}-bit` }[methodOf(c)]],
-        ['Data', `${c.dataset.name} ${c.dataset.split}`], ['Strategy', strategyLabel(c)], ['Runs on', { local: 'This machine', remote: +W.ui.hw.nodes > 1 && c.strategy !== 'solo' ? `${W.ui.hw.nodes} machines` : 'Another machine', slurm: 'SLURM' }[W.ui.target]], ['GPUs', c.strategy === 'solo' ? 1 : c.num_gpus],
+        ['Data', `${c.dataset.name} ${c.dataset.split}`], ['Strategy', c.strategy === 'auto' && W.plan && W.plan.advice.fits ? `Automatic: ${W.plan.recommended.label}` : strategyLabel(c)], ['Runs on', { local: 'This machine', remote: +W.ui.hw.nodes > 1 && c.strategy !== 'solo' ? `${W.ui.hw.nodes} machines` : 'Another machine', slurm: 'SLURM' }[W.ui.target]], ['GPUs', c.strategy === 'solo' ? 1 : c.strategy === 'auto' ? (W.plan && W.plan.advice.fits ? W.plan.recommended.gpus : 'automatic') : c.num_gpus],
         ['Batch', `${c.training.batch_size} × ${c.model_type === 'custom_transformer' ? c.custom_transformer_args.max_seq_len : c.training.max_length} tokens`],
         ['Learning rate', fmt.lr(c.training.learning_rate)],
       ].map(([k, v]) => `<div><div class="k">${k}</div><div class="v" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(v)}">${esc(v)}</div></div>`).join('')}</div>
@@ -1560,7 +1627,9 @@ async function loadReview() {
   W.yaml = ren.status === 'fulfilled' ? ren.value.yaml : '';
   const v = W.validation;
   const plan = W.plan;
-  const fitWarn = plan && plan.selected && !plan.selected.fits
+  const fitWarn = plan && plan.selected && plan.selected.auto && !plan.advice.fits
+    ? `<div class="notice error" style="margin-top:10px"><div><strong>Nothing fits on ${isLocal() ? 'this machine' : 'these GPUs'} as configured.</strong> Automatic will not start this run. The plan on the right lists what would work; to try anyway, choose a strategy yourself.</div></div>`
+    : plan && plan.selected && !plan.selected.fits
     ? `<div class="notice warn" style="margin-top:10px"><div><strong>The planner estimates this runs out of memory</strong> (${fmt.gb(plan.selected.per_gpu_gb)} per GPU). You can still launch it.</div></div>` : '';
   $('#validation').innerHTML = (v.valid
     ? '<div class="notice ok"><div><strong>The config is valid.</strong> The trainer accepts every option.</div></div>'
@@ -1602,7 +1671,7 @@ async function launch() {
         body: `<p class="muted">Follow it with <code>squeue</code> and the files in <code>logs/</code>.</p><pre class="code">${esc(r.output)}</pre>` });
     } else {
       const r = await api('/api/queue/submit', { json: { config: cfg, name } });
-      toast(r.status === 'running' ? 'Run started' : `Run queued at position ${r.queue_position}`);
+      toast((r.status === 'running' ? 'Run started' : `Run queued at position ${r.queue_position}`) + (r.chosen ? `: ${strategyLabel({ strategy: r.strategy })} on ${r.gpu_count} GPU${r.gpu_count > 1 ? 's' : ''}` : ''));
       store.del('omni-draft');
       location.hash = `#/run/${r.job_id}`;
     }
@@ -1626,7 +1695,8 @@ function wizardCluster() {
     const hw = W.ui.hw, g = S.catalog.gpus.find((x) => x.id === hw.gpu) || S.catalog.gpus[0];
     return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: Math.max(1, +hw.gpus_per_node || 1), nodes: Math.max(1, +hw.nodes || 1) };
   }
-  return { gpu_mem_gb: W.local.gpu_mem_gb, gpu_name: W.local.gpu_name, gpus_per_node: W.local.gpus_per_node, nodes: 1 };
+  const cap = W.cfg.strategy === 'auto' && W.cfg.num_gpus !== 'auto' ? +W.cfg.num_gpus : W.local.gpus_per_node;
+  return { gpu_mem_gb: W.local.gpu_mem_gb, gpu_name: W.local.gpu_name, gpus_per_node: Math.min(cap, W.local.gpus_per_node), nodes: 1 };
 }
 
 async function refreshPlan() {
@@ -1643,13 +1713,16 @@ async function refreshPlan() {
     panel.innerHTML = '';
     panel.appendChild(renderPlan(plan, {
       onApply: (rec) => {
-        W.cfg.strategy = rec.strategy;
-        W.cfg.num_gpus = rec.gpus;
-        if (rec.parallelism) W.cfg.parallelism = { ...W.cfg.parallelism, ...rec.parallelism };
+        applyOption(W.cfg, rec);
         toast(`Using ${rec.label}`);
         onCfgChange(true);
       },
-      onSuggest: (w) => { applyWorkload(W.cfg, w); toast('Applied'); onCfgChange(true); },
+      onSuggest: (w, o) => {
+        applyWorkload(W.cfg, w);
+        if (W.cfg.strategy !== 'auto' && o.strategy) applyOption(W.cfg, o);
+        toast('Applied');
+        onCfgChange(true);
+      },
     }));
     if (W.step === 1 && W.cfg.model_type === 'custom_transformer') inspectModel();
   } catch (e) {
@@ -1663,119 +1736,207 @@ async function refreshPlan() {
 // Planner page
 // ===========================================================================
 
+const TIER = {
+  solo: { cls: 'one', glyph: '●', name: '1 GPU' }, ddp: { cls: 'one', glyph: '●', name: 'DDP' },
+  fsdp: { cls: 'fsdp', glyph: '◆', name: 'FSDP' }, '5d': { cls: 'multi', glyph: '▲', name: '3D/5D' },
+};
+
+/** An estimate, said like one: "~48 min", "~2.3 h", "~3 days". */
+function roughTime(s) {
+  if (s == null) return '';
+  if (s < 90) return '~1 min';
+  if (s < 3600) return `~${Math.round(s / 60)} min`;
+  if (s < 48 * 3600) return `~${(s / 3600).toFixed(s < 36000 ? 1 : 0)} h`;
+  return `~${Math.round(s / 86400)} days`;
+}
+
+/** Short name of a cell's layout: "1 GPU", "DDP", "FSDP", "TP2·CP2". */
+function cellName(c) {
+  if (!c.fits) return 'Too big';
+  if (c.strategy !== '5d') return TIER[c.strategy].name;
+  const p = c.parallelism || {};
+  return ['tp', 'pp', 'cp', 'ep'].filter((k) => +p[k] > 1).map((k) => `${k.toUpperCase()}${p[k]}`).join('·') || `DP${p.dp}`;
+}
+
 async function renderPlanner(main) {
   const catalog = await loadCatalog();
+  const here = stillHere();
   const local = catalog.local_cluster;
   const saved = store.get('omni-planner', null);
   const P = deepMerge({
-    model: 'meta-llama/Llama-3.1-8B', method: 'full', algorithm: 'pretrain', batch: 1, seq: 4096, ckpt: true,
-    gpu: 'h100', gpus: 8, nodes: 1,
+    model: 'meta-llama/Llama-3.1-8B', method: 'full', algorithm: 'pretrain', batch: 1, seq: 4096,
+    gpu: local.detected ? 'local' : 'h100', perMachine: 8, samples: 0, axis: 'method', pick: null,
   }, saved || {});
+  if (P.gpu === 'local' && !local.detected) P.gpu = 'h100';
+  const gpuOpts = [...(local.detected ? [['local', `this machine's ${local.gpu_name} (${fmt.gb(local.gpu_mem_gb)})`]] : []),
+    ...catalog.gpus.map((g) => [g.id, g.name])];
+  const opt = (list, v) => list.map(([k, t]) => `<option value="${esc(k)}" ${String(k) === String(v) ? 'selected' : ''}>${esc(t)}</option>`).join('');
   main.innerHTML = `
-    <div class="page">
-      <div class="page-head">
-        <div><h1>Capacity planner</h1><p>Does a run need distributed training? Estimates peak GPU memory for single-GPU, DDP, FSDP and 5D layouts, recommends the simplest that fits and shows how many GPUs each would need.</p></div>
-      </div>
-      <div class="split even">
-        <div class="panel panel-pad stack" id="planner-form">
-          <h2>Workload</h2>
-          <div class="grid two">
-            <div class="field span-all"><label for="p-model">Model</label>
-              <input id="p-model" type="text" list="p-presets" value="${esc(P.model)}" spellcheck="false" autocomplete="off">
-              <datalist id="p-presets">${catalog.models.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}</option>`).join('')}</datalist>
-              <span class="hint">Presets work offline. Other ids are read from their config.json.</span></div>
-            <div class="field"><label for="p-algorithm">Goal</label><select id="p-algorithm">
-              ${['pretrain', 'sft', 'dpo', 'simpo', 'orpo', 'grpo'].map((a) => `<option value="${a}" ${P.algorithm === a ? 'selected' : ''}>${ALGO_LABEL[a]}</option>`).join('')}</select></div>
-            <div class="field"><label for="p-method">Method</label><select id="p-method">
-              ${[['full', 'Full fine-tune'], ['lora', 'LoRA'], ['qlora', 'QLoRA 4-bit']].map(([v, t]) => `<option value="${v}" ${P.method === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-            <div class="field"><label for="p-batch">Batch per GPU</label><input id="p-batch" type="number" min="1" value="${P.batch}"></div>
-            <div class="field"><label for="p-seq">Sequence length</label><input id="p-seq" type="number" min="16" step="256" value="${P.seq}"></div>
-            <label class="check span-all"><input type="checkbox" id="p-ckpt" ${P.ckpt ? 'checked' : ''}><span>Gradient checkpointing</span></label>
-          </div>
-          <h2 style="margin-top:8px">Hardware</h2>
-          <div class="grid two">
-            <div class="field span-all"><label for="p-gpu">GPU</label><select id="p-gpu">
-              ${local.detected ? `<option value="local" ${P.gpu === 'local' ? 'selected' : ''}>This machine: ${esc(local.gpu_name)} (${fmt.gb(local.gpu_mem_gb)})</option>` : ''}
-              ${catalog.gpus.map((g) => `<option value="${g.id}" ${P.gpu === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></div>
-            <div class="field"><label for="p-gpus">GPUs per node</label><input id="p-gpus" type="number" min="1" value="${P.gpus}"></div>
-            <div class="field"><label for="p-nodes">Nodes</label><input id="p-nodes" type="number" min="1" value="${P.nodes}"></div>
-          </div>
-          <div class="btn-row"><button class="btn primary" id="p-start">Start a run with this</button></div>
+    <div class="page planner-page">
+      <div class="page-head"><div><h1>Capacity planner</h1>
+        <p>What does a model need before you set up a run? Each square is one setup: how many GPUs, and which training method or sequence length. Click one to see why.</p></div></div>
+      <form class="panel query" id="planner-form" onsubmit="return false">
+        <div class="query-line">
+          <span>Train</span>
+          <input id="p-model" class="q-wide" type="text" list="p-presets" value="${esc(P.model)}" spellcheck="false" autocomplete="off" aria-label="Model">
+          <datalist id="p-presets">${catalog.models.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}</option>`).join('')}</datalist>
+          <span>for</span>
+          <select id="p-algorithm" aria-label="Goal">${opt(['pretrain', 'sft', 'dpo', 'simpo', 'orpo', 'grpo'].map((a) => [a, ALGO_LABEL[a]]), P.algorithm)}</select>
+          <span>on</span>
+          <select id="p-gpu" class="q-wide" aria-label="GPU type">${opt(gpuOpts, P.gpu)}</select>
+          <span>GPUs.</span>
         </div>
-        <div class="panel" id="planner-out" aria-live="polite"></div>
+        <div class="query-line">
+          <span>Machines hold</span>
+          <select id="p-per" aria-label="GPUs per machine">${opt([1, 2, 4, 8, 16].map((n) => [n, String(n)]), P.perMachine)}</select>
+          <span>GPUs each. Batch of</span><input id="p-batch" class="q-num" type="number" min="1" value="${P.batch}" aria-label="Batch per GPU">
+          <span class="q-seq">×</span><input id="p-seq" class="q-num q-seq" type="number" min="16" step="256" value="${P.seq}" aria-label="Sequence length"><span class="q-seq">tokens</span>
+          <span class="q-method">, trained with</span><select id="p-method" class="q-method" aria-label="Training method">${opt([['full', 'full fine-tuning'], ['lora', 'LoRA'], ['qlora', 'QLoRA']], P.method)}</select>
+          <span>, over</span><input id="p-samples" class="q-num" type="number" min="0" value="${P.samples || ''}" placeholder="?" aria-label="Examples in the dataset"><span>examples.</span>
+        </div>
+        <div class="query-foot">
+          <span class="faint">Compare</span>
+          ${segmented('axis', [['method', 'Training methods'], ['seq', 'Sequence lengths']], P.axis)}
+          <span class="faint q-hint">Without a number of examples there are no times. More examples take longer, never more memory.</span>
+        </div>
+      </form>
+      <div class="split map-split">
+        <section class="panel map-panel" aria-live="polite"><div id="map" class="panel-pad"><div class="skeleton" style="height:320px"></div></div></section>
+        <aside class="panel sticky" id="cell-detail" aria-live="polite"></aside>
       </div>
     </div>`;
 
+  const axisSeg = $('[data-seg="axis"]');
+  const showAxis = () => {
+    $$('.q-seq').forEach((el) => { el.hidden = P.axis === 'seq'; });
+    $$('.q-method').forEach((el) => { el.hidden = P.axis === 'method'; });
+    $$('button', axisSeg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.val === P.axis)));
+  };
+  showAxis();
   const read = () => {
-    P.model = $('#p-model').value.trim(); P.method = $('#p-method').value; P.algorithm = $('#p-algorithm').value;
-    P.batch = Math.max(1, +$('#p-batch').value || 1); P.seq = Math.max(16, +$('#p-seq').value || 512); P.ckpt = $('#p-ckpt').checked;
-    P.gpu = $('#p-gpu').value; P.gpus = Math.max(1, +$('#p-gpus').value || 1); P.nodes = Math.max(1, +$('#p-nodes').value || 1);
+    P.model = $('#p-model').value.trim(); P.algorithm = $('#p-algorithm').value; P.gpu = $('#p-gpu').value;
+    P.perMachine = +$('#p-per').value; P.batch = Math.max(1, +$('#p-batch').value || 1);
+    P.seq = Math.max(16, +$('#p-seq').value || 512); P.method = $('#p-method').value;
+    P.samples = Math.max(0, Math.floor(+$('#p-samples').value || 0));
     store.set('omni-planner', P);
   };
-  const toCfg = () => {
+  const toCfg = (change = {}) => {
     const c = defaultConfig();
-    c.model_name = P.model; c.algorithm.type = P.algorithm; setMethod(c, P.method);
-    c.training.batch_size = P.batch; c.training.max_length = P.seq; c.training.gradient_checkpointing = P.ckpt;
-    if (P.algorithm === 'grpo') { c.algorithm.max_prompt_length = Math.floor(P.seq / 2); c.algorithm.max_completion_length = P.seq - c.algorithm.max_prompt_length; }
-    c.strategy = 'solo';
+    c.model_name = P.model; c.algorithm.type = P.algorithm;
+    setMethod(c, change.method || P.method);
+    c.training.batch_size = P.batch; c.training.max_length = change.seq_len || P.seq; c.training.gradient_checkpointing = true;
+    if (P.algorithm === 'grpo') {
+      c.algorithm.max_prompt_length = Math.floor(c.training.max_length / 2);
+      c.algorithm.max_completion_length = c.training.max_length - c.algorithm.max_prompt_length;
+    }
     return c;
   };
-  const cluster = () => {
-    if (P.gpu === 'local') return { gpu_mem_gb: local.gpu_mem_gb, gpu_name: local.gpu_name, gpus_per_node: P.gpus, nodes: P.nodes };
+  const hardware = () => {
+    if (P.gpu === 'local') return { gpu_mem_gb: local.gpu_mem_gb, gpu_name: local.gpu_name, gpus_per_node: P.perMachine };
     const g = catalog.gpus.find((x) => x.id === P.gpu) || catalog.gpus[0];
-    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: P.gpus, nodes: P.nodes };
+    return { gpu_mem_gb: g.memory_gb, gpu_name: g.id, tflops: g.tflops, gpus_per_node: P.perMachine };
   };
-  let seq = 0;
+
+  let grid = null, seq = 0;
+  const drawMap = () => {
+    const cols = grid.columns;
+    // the fewest GPUs that work, per column
+    const fewest = cols.map((_, j) => grid.cells.findIndex((row) => row[j] && row[j].fits));
+    const head = `<tr><th scope="col"><span class="sr-only">GPUs</span></th>${cols.map((c) => `<th scope="col" title="${esc(c.title)}">${esc(c.label)}</th>`).join('')}</tr>`;
+    const body = grid.rows.map((n, i) => `<tr><th scope="row">${n} GPU${n > 1 ? 's' : ''}${n > grid.per_machine ? `<small>${n / grid.per_machine} machines</small>` : ''}</th>${cols.map((col, j) => {
+      const c = grid.cells[i][j];
+      if (!c) return `<td><div class="cell na" title="${esc(col.why)}">–</div></td>`;
+      const t = c.fits ? TIER[c.strategy] : { cls: 'no', glyph: '✕' };
+      const on = P.pick && P.pick[0] === n && P.pick[1] === col.key;
+      const changed = c.fits && Object.keys(c.changes || {}).length;
+      const label = `${n} GPUs, ${col.title}: ${c.fits ? cellName(c) : 'does not fit'}, ${fmt.gb(c.per_gpu_gb)} per GPU${c.total_seconds ? `, ${roughTime(c.total_seconds)}` : ''}${fewest[j] === i ? ', the fewest GPUs that work' : ''}`;
+      return `<td><button type="button" class="cell ${t.cls}${on ? ' on' : ''}${fewest[j] === i ? ' first' : ''}" data-cell="${i},${j}" aria-pressed="${on}" aria-label="${esc(label)}">
+        <span class="cell-name"><i aria-hidden="true">${t.glyph}</i>${esc(cellName(c))}${changed ? '<sup title="With a smaller batch or gradient checkpointing">*</sup>' : ''}</span>
+        <span class="cell-gb">${fmt.gb(c.per_gpu_gb)}</span>
+        ${c.total_seconds && c.fits ? `<span class="cell-time">${roughTime(c.total_seconds)}</span>` : ''}</button></td>`;
+    }).join('')}</tr>`).join('');
+    const m = grid.model;
+    $('#map').innerHTML = `
+      <div class="map-head"><h2>${esc(m.name)}</h2><span class="faint">${fmt.params(m.params)} parameters${m.source === 'estimate' ? ', size guessed from the name' : ''} · ${fmt.gb(grid.gpu_mem_gb)} per GPU</span></div>
+      <div class="map-scroll"><table class="cap-map">${head}${body}</table></div>
+      <div class="legend map-legend">
+        <span><b class="k one">●</b>1 GPU or DDP: the model fits on one GPU</span>
+        <span><b class="k fsdp">◆</b>FSDP: the model is split across the GPUs</span>
+        <span><b class="k multi">▲</b>3D/5D: layers or sequences are split too</span>
+        <span><b class="k no">✕</b>Does not fit</span><span><i class="first-key"></i>The fewest GPUs that work</span><span><b>*</b>with a smaller batch or checkpointing</span>
+      </div>`;
+    $$('[data-cell]').forEach((b) => { b.onclick = () => {
+      const [i, j] = b.dataset.cell.split(',').map(Number);
+      P.pick = [grid.rows[i], grid.columns[j].key]; store.set('omni-planner', P);
+      $$('[data-cell]').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); });
+      drawDetail();
+    }; });
+  };
+
+  const drawDetail = () => {
+    const box = $('#cell-detail');
+    let i = P.pick ? grid.rows.indexOf(P.pick[0]) : -1;
+    let j = P.pick ? grid.columns.findIndex((c) => c.key === P.pick[1]) : -1;
+    if (i < 0 || j < 0 || !grid.cells[i][j]) {                // default: the fewest GPUs in the first column that has an answer
+      j = grid.columns.findIndex((_, k) => grid.cells.some((row) => row[k] && row[k].fits));
+      i = j < 0 ? 0 : grid.cells.findIndex((row) => row[j] && row[j].fits);
+      j = Math.max(0, j);
+      const btn = $(`[data-cell="${i},${j}"]`);
+      if (btn) { btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true'); }
+    }
+    const c = grid.cells[i][j], col = grid.columns[j], n = grid.rows[i];
+    if (!c) { box.innerHTML = ''; return; }
+    const a = c.advice;
+    const others = a.others.map((o) => `<li><strong>${esc(o.title)}</strong><br><span class="muted">${esc(o.detail)}.</span></li>`).join('');
+    box.innerHTML = `
+      <div class="panel-pad detail">
+        <p class="detail-kicker">${n} GPU${n > 1 ? 's' : ''} · ${esc(col.title)}${c.total_seconds && c.fits ? ` · ${roughTime(c.total_seconds)}` : ''}</p>
+        <h3>${esc(a.title)}${a.tech ? ` <span class="tech">${esc(a.tech)}</span>` : ''}</h3>
+        <p>${esc(a.detail)}</p>
+        ${[a.why, ...a.changes].filter(Boolean).map((t) => `<p class="muted">${esc(t)}</p>`).join('')}
+        <p class="muted small">${esc(a.need)}</p>
+        ${others ? `<h4>${esc(a.others_title)}</h4><ul class="plan-list">${others}</ul>` : ''}
+        ${a.fits ? `<h4>Memory on each GPU</h4>${memoryBars([{ label: cellName(c), memory_gb: c.memory_gb, fits: c.fits }], grid.gpu_mem_gb, grid.usable_gb, '')}
+        <div class="btn-row" style="margin-top:18px"><button class="btn primary" id="p-start">Start a run with this</button></div>` : ''}
+      </div>`;
+    const start = $('#p-start');
+    if (start) start.onclick = () => {
+      const cfg = toCfg(col.change);
+      if (P.algorithm !== 'pretrain') {
+        const info = catalog.algorithms.find((x) => x.id === P.algorithm);
+        if (info && info.example_dataset) cfg.dataset = { name: info.example_dataset.name, subset: info.example_dataset.subset || null, split: info.example_dataset.split };
+      }
+      cfg.strategy = 'auto';                    // decides again with the real data and GPUs, the same way
+      cfg.num_gpus = n;
+      if (c.changes) applyWorkload(cfg, c.changes);
+      const onHere = P.gpu === 'local' && n <= local.gpus_per_node;
+      const ui = onHere ? { target: 'local' } : { target: 'remote', hw: { nodes: Math.max(1, n / P.perMachine), gpus_per_node: Math.min(n, P.perMachine), ...(P.gpu === 'local' ? {} : { gpu: P.gpu }) } };
+      store.set('omni-draft', { cfg, ui, step: 1 });
+      location.hash = '#/new';
+    };
+  };
+
   const run = async () => {
     read();
     const my = ++seq;
-    const out = $('#planner-out');
-    out.style.opacity = '.6';
+    $('#map').style.opacity = '.6';
     try {
-      const plan = await api('/api/plan', { json: { config: exportConfig(toCfg()), cluster: cluster() } });
-      if (my !== seq) return;
-      plan.selected = null;
-      out.innerHTML = '';
-      const rec = plan.recommended;
-      out.appendChild(renderPlan(plan, {
-        onSuggest: (w) => {
-          if ('grad_ckpt' in w) $('#p-ckpt').checked = w.grad_ckpt;
-          if ('batch_size' in w) $('#p-batch').value = w.batch_size;
-          if ('seq_len' in w) $('#p-seq').value = w.seq_len;
-          if ('method' in w) $('#p-method').value = w.method;
-          run();
-        },
-      }));
-      if (rec.parallelism) {
-        const sec = document.createElement('div');
-        sec.className = 'plan-sec';
-        sec.innerHTML = `<h4>Rank layout: ${esc(rec.label)}</h4>${rankGrid(rec.parallelism, rec.gpus, P.gpus)}
-          <pre class="code" style="margin-top:12px">${esc(`strategy: 5d\nnum_gpus: ${rec.gpus}\nparallelism: ${JSON.stringify(rec.parallelism).replace(/"/g, '').replace(/:/g, ': ').replace(/,/g, ', ')}`)}</pre>`;
-        const root = out.firstElementChild;
-        root.insertBefore(sec, root.children[2] || null);
-      }
-      out.style.opacity = '';
-      $('#p-start').onclick = () => {
-        const c = toCfg();
-        if (P.algorithm !== 'pretrain') {
-          const info = catalog.algorithms.find((a) => a.id === P.algorithm);
-          if (info && info.example_dataset) c.dataset = { name: info.example_dataset.name, subset: info.example_dataset.subset || null, split: info.example_dataset.split };
-        }
-        c.strategy = rec.strategy; c.num_gpus = rec.gpus;
-        if (rec.parallelism) c.parallelism = { ...c.parallelism, ...rec.parallelism };
-        const here = P.gpu === 'local' && P.nodes === 1 && P.gpus <= local.gpus_per_node;
-        const ui = here ? { target: 'local' } : { target: 'remote', hw: { nodes: P.nodes, gpus_per_node: P.gpus, ...(P.gpu === 'local' ? {} : { gpu: P.gpu }) } };
-        store.set('omni-draft', { cfg: c, ui, step: 1 });
-        location.hash = '#/new';
-      };
+      const g = await api('/api/plan/grid', { json: { config: exportConfig(toCfg()), cluster: hardware(), axis: P.axis, num_samples: P.samples } });
+      if (!here() || my !== seq) return;
+      grid = g;
+      $('#map').style.opacity = '';
+      drawMap();
+      drawDetail();
     } catch (e) {
-      if (my !== seq) return;
-      out.style.opacity = '';
-      out.innerHTML = `<div class="panel-pad"><div class="notice error"><div>${esc(e.message)}</div></div></div>`;
+      if (!here() || my !== seq) return;
+      $('#map').style.opacity = '';
+      $('#map').innerHTML = `<div class="notice error"><div>${esc(e.message)}</div></div>`;
+      $('#cell-detail').innerHTML = '';
     }
   };
+  axisSeg.onclick = (e) => { const b = e.target.closest('button'); if (!b || b.dataset.val === P.axis) return; P.axis = b.dataset.val; P.pick = null; showAxis(); run(); };
   let t = null;
-  $('#planner-form').addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 400); });
+  $('#planner-form').addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 450); });
   $('#planner-form').addEventListener('change', () => { clearTimeout(t); t = setTimeout(run, 50); });
   run();
 }
@@ -1865,7 +2026,7 @@ function renderApi(main) {
       <div class="stack">
         ${snippet('Is distributed training needed?', 'POST a training config (config.yaml schema) and optionally the hardware. The response has the verdict, a recommended strategy or 5D layout, per-GPU memory for every option and the minimum GPU counts.',
           `curl -s ${o}/api/plan -H 'Content-Type: application/json' -d '{
-  "config": {"model_name": "meta-llama/Llama-3.1-8B", "model_type": "llm", "strategy": "solo",
+  "config": {"model_name": "meta-llama/Llama-3.1-8B", "model_type": "llm", "strategy": "auto",
              "training": {"batch_size": 1, "max_length": 4096, "gradient_checkpointing": true}},
   "cluster": {"gpu_name": "h100", "gpu_mem_gb": 80, "gpus_per_node": 8, "nodes": 1}
 }' | jq '{verdict, headline, recommended: .recommended.label, min_gpus}'`)}

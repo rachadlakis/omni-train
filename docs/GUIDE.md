@@ -156,8 +156,8 @@ Here are the most important settings:
 model_name: "facebook/opt-125m"
 
 # How to distribute the training
-strategy: "fsdp"       # solo = 1 GPU no torchrun | ddp = multi-GPU | fsdp = multi-GPU (memory efficient)
-num_gpus: 2            # how many GPUs to use
+strategy: "auto"       # auto = choose for me | solo = 1 GPU no torchrun | ddp = multi-GPU | fsdp = multi-GPU (memory efficient)
+num_gpus: "auto"       # with strategy auto: use at most this many (auto = all)
 
 # The dataset
 dataset:
@@ -176,7 +176,7 @@ training:
 **Quick tips:**
 - `batch_size: 4` or `batch_size: 2` if you get "out of memory" errors
 - `split: "train[:1%]"` for a quick test run; change to `"train"` for real training
-- `strategy: "solo"` if you only have 1 GPU and want to skip torchrun
+- leave `strategy: "auto"` if you are not sure: the launcher explains what it picks and why
 
 ---
 

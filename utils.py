@@ -220,7 +220,7 @@ class Args:
         self.dataset_text_field = "text"
         self.dataset_split = None
 
-        self.strategy = None # fsdp, ddp, solo, or 5d
+        self.strategy = None # fsdp, ddp, solo, 5d, or auto (see advisor.py)
         self.checkpoint_dir = None
         self.save: bool 
 
@@ -334,13 +334,19 @@ def build_args(cfg):
     # --------------------------------------------------
     # SYSTEM
     # --------------------------------------------------
-    args.strategy = cfg["strategy"]
-    args.num_gpus = int(cfg.get("num_gpus", 1))
+    # `auto` is filled in before training (advisor.py); here it only has to be a valid config.
+    args.strategy = str(cfg["strategy"]).strip().lower()
+    num_gpus = cfg.get("num_gpus", 1)
+    if str(num_gpus).strip().lower() == "auto":
+        if args.strategy not in {"auto", "solo"}:
+            raise ValueError(f"num_gpus: auto needs strategy: auto (got strategy: {args.strategy}). Set a number.")
+        num_gpus = 1
+    args.num_gpus = int(num_gpus)
     args.checkpoint_dir = cfg["checkpoint_dir"]
     args.save = to_bool(cfg["save"])
 
-    if args.strategy not in {"solo", "ddp", "fsdp", "5d"}:
-        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: solo, ddp, fsdp, 5d")
+    if args.strategy not in {"auto", "solo", "ddp", "fsdp", "5d"}:
+        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: auto, solo, ddp, fsdp, 5d")
     args.seed = int(cfg.get("seed", 0))
 
     # --------------------------------------------------
@@ -523,7 +529,7 @@ def build_args(cfg):
         args.custom_ffn_hidden = int(cta["ffn_hidden"]) if cta.get("ffn_hidden") else None
         args.custom_num_experts = int(cta.get("num_experts", 0) or 0)
         args.custom_top_k = int(cta.get("top_k", 2))
-        if args.strategy != "5d" and (args.custom_num_experts or args.custom_n_kv_heads):
+        if args.strategy not in {"5d", "auto"} and (args.custom_num_experts or args.custom_n_kv_heads):
             raise ValueError("custom_transformer_args.num_experts / n_kv_heads need strategy: 5d")
         if args.custom_num_experts and not 1 <= args.custom_top_k <= args.custom_num_experts:
             raise ValueError("custom_transformer_args.top_k must be between 1 and num_experts")

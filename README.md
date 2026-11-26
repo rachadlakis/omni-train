@@ -121,13 +121,29 @@ WANDB_API_KEY=your_key_here     # optional, for Weights & Biases logging
 
 ## Quick Start
 
-Open `config.yaml`, pick your model, dataset, number of GPUs, and training parameters, then launch:
+Open `config.yaml`, pick your model, dataset and training parameters, then launch:
 
 ```bash
 bash scripts/launch.sh
 ```
 
-`launch.sh` reads `strategy` and `num_gpus` from the config and decides whether to run `python train.py` (solo) or `torchrun --nproc_per_node=N train.py` (ddp/fsdp/5d).
+You do not need to know DDP or FSDP. With `strategy: auto` (the default), `launch.sh` looks at the model, your
+data and your GPUs, explains what it chose, and starts the run. An example (8 × H100):
+
+```text
+Automatic strategy: fsdp on 8 GPUs
+   Your model needs about 121 GB of GPU memory to train. Each of your 8 GPUs has 80 GB.
+
+   Recommended: split the model across your 8 GPUs (FSDP)
+      19.6 GB per GPU
+
+   Simpler or cheaper:
+      - Train a small add-on instead (LoRA): Fits on 1 GPU, 17.3 GB per GPU
+```
+
+Set `strategy: solo`, `ddp`, `fsdp` or `5d` (and `num_gpus`) to choose yourself; then you are warned before the run
+if it probably does not fit. `launch.sh` starts `python train.py` (solo) or `torchrun --nproc_per_node=N train.py`
+(ddp/fsdp/5d).
 
 **Other ways to launch:**
 
@@ -155,8 +171,8 @@ All settings live in `config.yaml`. A minimal example:
 model_name: "facebook/opt-125m"
 model_type: llm
 
-strategy: fsdp
-num_gpus: 2
+strategy: auto        # or solo, ddp, fsdp, 5d
+num_gpus: auto        # with auto: the most GPUs to use
 
 training:
   batch_size: 8
@@ -198,10 +214,31 @@ See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 
 | Strategy | When to use | How it works |
 | --- | --- | --- |
+| `auto` | Not sure (the default) | Measures the model, the data and the GPUs, and uses the simplest of the four below that fits |
 | `solo` | Single GPU | No torchrun, no process group |
 | `ddp` | Model fits in one GPU; scale throughput | Every GPU holds a full model replica; gradients synced via all-reduce |
 | `fsdp` | Large models, limited GPU memory | Parameters, gradients, and optimizer states sharded across GPUs |
 | `5d` | Very large models, long sequences, MoE, many nodes | Any mix of DP (+ZeRO-1), TP (+SP), CP, PP and EP from the `parallelism:` block |
+
+### Automatic (`strategy: auto`)
+
+```bash
+python advisor.py --config config.yaml                        # what would it choose here, and why?
+python advisor.py --config config.yaml --gpu h100 --gpus 8    # ... and on another machine?
+```
+
+Two questions decide: **does it fit in memory** (model, training method, batch, sequence length) and **is it fast
+enough** (number of examples, GPU speed)? More examples only take longer; long examples need more memory.
+`auto` takes the first of these that works: one GPU (unless it would take more than about 2 hours and there are
+more), DDP, FSDP, the same with gradient checkpointing or a smaller batch, and only then 5D.
+
+- It **keeps your training method**. If you ask for full fine-tuning it never switches to LoRA; it only tells you
+  that LoRA would be cheaper. It may turn gradient checkpointing on or lower the batch per GPU, and says so.
+- The dataset is measured with the model's tokenizer: 500 examples plus the longest ones. SFT and preference
+  batches are padded to their longest example, so short data needs less than `max_length` suggests.
+- When nothing fits, the run does not start and you get the changes that would work. The numbers are estimates; to
+  try anyway, set the strategy yourself.
+- `num_gpus: 4` means at most 4. Started with `torchrun`, all processes are used and rank 0 decides for every rank.
 
 ### 5D parallelism (`strategy: 5d`)
 
@@ -324,10 +361,14 @@ bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)
 ```
 
 - **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO, or GRPO reinforcement learning; PPO is listed as planned), a model,
-  data, a strategy (solo, DDP, FSDP or a 5D layout with a live rank map) and hyperparameters. A plan panel
-  re-estimates memory as you edit and offers its recommended strategy in one click.
+  data and hyperparameters. The strategy is automatic unless you choose one (solo, DDP, FSDP or a 5D layout with a
+  live rank map). The data step measures your dataset, and a plan panel says in plain words whether one GPU is
+  enough, what to do if not, and what would be simpler or cheaper, each with a button to use it.
 - **Runs**: a queue with live progress, loss curves and logs; logs persist in `ui/runs/` across restarts.
-- **Planner**, **Checkpoints**, **System** (GPUs, which credentials are set) and **API** (copyable curl examples).
+- **Planner**: a capacity map for any model. Rows are GPU counts, columns are training methods (full / LoRA / QLoRA)
+  or sequence lengths; each square says what that setup needs (1 GPU, DDP, FSDP, 3D/5D or too big), the memory per
+  GPU and, given a number of examples, the time. Click a square for the explanation and to start a run from it.
+- **Checkpoints**, **System** (GPUs, which credentials are set) and **API** (copyable curl examples).
 
 For a remote server (the UI has no authentication: put it behind a firewall or an authenticated proxy):
 
@@ -342,13 +383,16 @@ python planner.py --model meta-llama/Llama-3.1-8B --gpus 8 --gpu h100 --seq 4096
 python planner.py --config configs/llm_dpo_lora_single_gpu.yaml --gpu 4050
 ```
 
-It prints the verdict (single GPU / distributed optional / distributed required / does not fit), the per-GPU
+`advisor.py` (above) answers for your own GPUs and data; `planner.py` answers what-if questions for any model and
+hardware. It prints the verdict (single GPU / distributed optional / recommended for speed / required / does not fit), the per-GPU
 memory of every strategy split into weights, gradients, AdamW states, activations and logits, the recommended
 layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
 (gradient checkpointing, LoRA, QLoRA, shorter sequences). The same plan is served at `POST /api/plan`.
 Estimates follow this repo's precision rules (fp32 trainable weights, bf16 frozen LoRA base outside FSDP)
 and match measured single-GPU peaks (RTX 4050: full, SFT, DPO, GRPO) within 15%. DDP, FSDP, 5D and
 models above 0.5B parameters have not been measured, so treat those numbers as guidance.
+Times are rougher than memory: one measured run (SFT + LoRA, Qwen2.5-0.5B, RTX 4050) took 0.26 s per step
+where the planner said 0.15 s, so expect real runs to take up to about twice the estimate.
 
 ---
 
@@ -405,6 +449,7 @@ omni-train/
 ├── scripts/                # launch + SLURM utilities
 ├── tests/                  # unit and smoke tests
 ├── planner.py              # capacity planner: is distributed training needed?
+├── advisor.py              # strategy: auto — GPUs, dataset lengths, the choice in plain words
 ├── ui/                     # training console + REST API (FastAPI)
 └── docs/                   # guides and technical reference
 ```
@@ -425,7 +470,7 @@ omni-train/
 
 | Symptom | Fix |
 | --- | --- |
-| CUDA out of memory | Reduce batch size, enable gradient checkpointing, or switch to FSDP/QLoRA |
+| CUDA out of memory | Set `strategy: auto`, or reduce batch size, enable gradient checkpointing, or switch to FSDP/QLoRA |
 | `401` / `403` from Hugging Face | Verify `HF_TOKEN` in `.env` and that you accepted the model's license |
 | `ImportError: VideoReader` | Recreate `.venv` and reinstall matching torch/torchvision versions |
 | NCCL timeout | Check network / InfiniBand connectivity |

@@ -19,8 +19,9 @@ training:
   lr_scheduler: cosine          ## LR after warmup: cosine | linear (decay to 0 by the last step) | constant
   weight_decay: 0.01            ## Weight decay for optimizer
 
-strategy: fsdp              ## choose from {solo, ddp, fsdp, 5d}  (5d: see the parallelism block below)
-num_gpus: 1                 ## number of GPUs to launch with torchrun (ddp / fsdp / 5d)
+strategy: auto              ## auto = measure the model, the data and the GPUs, and use the simplest strategy that fits.
+                            ## Or choose yourself: solo, ddp, fsdp, 5d  (5d: see the parallelism block below)
+num_gpus: auto              ## with strategy: auto, the most GPUs to use (auto = all); with ddp / fsdp / 5d, the exact number
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
 

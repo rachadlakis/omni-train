@@ -86,15 +86,15 @@ def _cfg(model_dir, data_path, tmp, strategy="solo", nproc=1, **over):
     return cfg
 
 
-def _train(cfg, tmp, tag):
+def _train(cfg, tmp, tag, torchrun=0):
     path = tmp / f"{tag}.yaml"
     path.write_text(yaml.safe_dump(cfg))
     env = dict(os.environ, CONFIG_PATH=str(path), HF_HUB_OFFLINE="1", CUDA_VISIBLE_DEVICES="",
                OMP_NUM_THREADS="1", PYTHONUNBUFFERED="1", PYTHONPATH=ROOT)
-    if cfg["strategy"] == "solo":
+    if cfg["strategy"] == "solo" or (cfg["strategy"] == "auto" and not torchrun):
         cmd = [sys.executable, "train.py"]
     else:
-        cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(cfg["num_gpus"]),
+        cmd = [sys.executable, "-m", "torch.distributed.run", "--nproc_per_node", str(torchrun or cfg["num_gpus"]),
                "--master_port", str(random.randint(20000, 29999)), "train.py"]
     res = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
     out = res.stdout + res.stderr
@@ -148,6 +148,30 @@ def test_pretrain_solo_save_resume_export(tiny_model_dir, tmp_path):
     out2 = _train(resume, tmp_path, "resume")
     assert "Optimizer state restored" in out2
     assert _step_losses(out2)[0] < epochs[0]
+
+
+def _auto_cfg(tiny_model_dir, tmp_path):
+    rows = [{"prompt": p["prompt"], "completion": p["chosen"]} for p in PAIRS] * 8
+    cfg = _cfg(tiny_model_dir, _write_jsonl(tmp_path / "sft.jsonl", rows), tmp_path, algorithm={"type": "sft"})
+    cfg.update(strategy="auto", num_gpus="auto")
+    return cfg
+
+
+@pytest.mark.parametrize("nproc", [1, 2])
+def test_strategy_auto_in_train_py(tiny_model_dir, tmp_path, nproc):
+    """`python train.py` decides alone; under torchrun rank 0 decides for every rank."""
+    out = _train(_auto_cfg(tiny_model_dir, tmp_path), tmp_path, f"auto{nproc}", torchrun=nproc if nproc > 1 else 0)
+    chosen = "ddp on 2 processes" if nproc > 1 else "solo on 1 process"
+    assert out.count(f"Automatic strategy: {chosen}") == 1, out[:2000]
+    epochs = _epoch_losses(out)
+    assert epochs[-1] < epochs[0], epochs
+
+
+def test_strategy_auto_rejects_a_bad_config_on_every_rank(tiny_model_dir, tmp_path):
+    cfg = _auto_cfg(tiny_model_dir, tmp_path)
+    cfg["algorithm"] = {"type": "sft", "nonsense": 1}
+    with pytest.raises(AssertionError, match="Configuration error"):
+        _train(cfg, tmp_path, "auto_bad", torchrun=2)
 
 
 def test_resume_old_weights_only_checkpoint(tiny_model_dir, tmp_path):

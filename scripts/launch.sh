@@ -6,35 +6,43 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 CONFIG_PATH="${CONFIG_PATH:-$SCRIPT_DIR/../config.yaml}"
-NUM_GPUS="${NUM_GPUS:-}"
 MASTER_ADDR="${MASTER_ADDR:-localhost}"
 MASTER_PORT="${MASTER_PORT:-29500}"
-STRATEGY="${STRATEGY:-}"
 
-if [ -z "$STRATEGY" ] || [ -z "$NUM_GPUS" ]; then
-    read -r STRATEGY_FROM_CFG NUM_GPUS_FROM_CFG <<EOF
-$(CONFIG_PATH="$CONFIG_PATH" python - <<'PY'
+# "<strategy> <num_gpus>" of a config
+read_config() {
+    CONFIG_PATH="$1" python - <<'PY'
 import os
+import sys
 import yaml
 from pathlib import Path
-p = Path(os.getenv("CONFIG_PATH", "config.yaml"))
-if p.exists():
-        cfg = yaml.safe_load(p.read_text()) or {}
-        strategy = cfg.get("strategy", "fsdp")
-        num_gpus = int(cfg.get("num_gpus", 1) or 1)
-        print(strategy, max(1, num_gpus))
-else:
-        print("fsdp 1")
+p = Path(os.environ["CONFIG_PATH"])
+if not p.exists():
+    sys.exit(f"Config file not found: {p}")
+cfg = yaml.safe_load(p.read_text()) or {}
+num_gpus = cfg.get("num_gpus", 1) or 1
+auto = str(num_gpus).strip().lower() == "auto"
+print(str(cfg.get("strategy", "auto")).strip().lower(), "auto" if auto else max(1, int(num_gpus)))
 PY
-)
-EOF
+}
 
-    if [ -z "$STRATEGY" ]; then
-        STRATEGY="$STRATEGY_FROM_CFG"
-    fi
-    if [ -z "$NUM_GPUS" ]; then
-        NUM_GPUS="$NUM_GPUS_FROM_CFG"
-    fi
+FROM_CFG="$(read_config "$CONFIG_PATH")"
+read -r CFG_STRATEGY CFG_NUM_GPUS <<< "$FROM_CFG"
+STRATEGY="${STRATEGY:-$CFG_STRATEGY}"
+NUM_GPUS="${NUM_GPUS:-$CFG_NUM_GPUS}"
+
+# strategy: auto -> advisor.py looks at the model, the data and the GPUs, explains its choice and writes
+# the config to run. A STRATEGY / NUM_GPUS given on the command line is written into that config too,
+# because train.py reads the strategy from the config.
+if [ "$STRATEGY" = "auto" ] || [ "$STRATEGY" != "$CFG_STRATEGY" ] || [ "$NUM_GPUS" != "$CFG_NUM_GPUS" ]; then
+    RESOLVED="$(mktemp "${TMPDIR:-/tmp}/omni_run_XXXXXX")"
+    trap 'rm -f "$RESOLVED"' EXIT
+    GPU_ARGS=()
+    if [ "$NUM_GPUS" != "auto" ]; then GPU_ARGS=(--gpus "$NUM_GPUS"); fi
+    python advisor.py --config "$CONFIG_PATH" --write "$RESOLVED" --strategy "$STRATEGY" ${GPU_ARGS[@]+"${GPU_ARGS[@]}"}
+    CONFIG_PATH="$RESOLVED"
+    FROM_CFG="$(read_config "$CONFIG_PATH")"
+    read -r STRATEGY NUM_GPUS <<< "$FROM_CFG"
 fi
 
 echo "🚀 Running training..."

@@ -21,6 +21,7 @@ import time
 import importlib.util
 from collections import deque
 from pathlib import Path
+from dataclasses import asdict, replace
 from typing import Optional
 
 import yaml
@@ -113,7 +114,8 @@ IMAGES_DIR = PROJECT_ROOT / "images"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-import planner  # noqa: E402  (needs PROJECT_ROOT on sys.path)
+import advisor  # noqa: E402  (needs PROJECT_ROOT on sys.path)
+import planner  # noqa: E402
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if IMAGES_DIR.exists():
@@ -204,7 +206,8 @@ class QueueSubmitPayload(BaseModel):
 class PlanPayload(BaseModel):
     config: dict
     cluster: Optional[dict] = None   # {gpu_mem_gb, gpus_per_node, nodes, gpu_name, tflops}
-    num_samples: Optional[int] = None
+    num_samples: Optional[int] = None  # examples in the dataset; 0 = unknown, ignore the dataset of the config
+    target_hours: Optional[float] = None  # more GPUs are recommended when one takes longer than this
 
 
 class ValidateResponse(BaseModel):
@@ -259,7 +262,7 @@ def _describe_template(name: str) -> dict:
             "name": name, "model_type": str(cfg.get("model_type", "llm")), "model": cfg.get("model_name"),
             "algorithm": str(block("algorithm").get("type", "pretrain")), "method": method,
             "bits": int(quant.get("bits", 4)) if quant.get("enabled") else None,
-            "strategy": str(cfg.get("strategy", "solo")), "num_gpus": int(cfg.get("num_gpus") or 1),
+            "strategy": str(cfg.get("strategy", "solo")), "num_gpus": advisor.max_gpus(cfg) or 1,
             "dataset": block("dataset").get("name"), "moe": bool(block("custom_transformer_args").get("num_experts")),
         }
     except Exception as e:  # a broken file must not hide the others
@@ -517,7 +520,8 @@ def _parse_dataset_split_ratio(split: str) -> float:
     return max(0.0001, min(1.0, pct / 100.0))
 
 
-def _infer_dataset_size(dataset_name: str, dataset_split: str) -> int:
+def _known_dataset_size(dataset_name: str, dataset_split: str) -> Optional[int]:
+    """Rows of a well-known dataset or of an explicit slice (train[:2000]); None for anything else."""
     name = (dataset_name or "").lower()
     known_full_sizes = {
         "wikitext": 36718,
@@ -532,7 +536,7 @@ def _infer_dataset_size(dataset_name: str, dataset_split: str) -> int:
         "capybara": 16006,
         "hh-rlhf": 160800,
     }
-    base = 100000
+    base = None
     for key, size in known_full_sizes.items():
         if key in name:
             base = size
@@ -541,8 +545,13 @@ def _infer_dataset_size(dataset_name: str, dataset_split: str) -> int:
     counts = re.findall(r"\[\s*:\s*(\d+)\s*\]", dataset_split or "")
     if counts:
         return max(1, sum(int(n) for n in counts))
-    ratio = _parse_dataset_split_ratio(dataset_split)
-    return max(1, int(base * ratio))
+    return None if base is None else max(1, int(base * _parse_dataset_split_ratio(dataset_split)))
+
+
+def _infer_dataset_size(dataset_name: str, dataset_split: str) -> int:
+    """_known_dataset_size, or a guess of 100,000 rows."""
+    known = _known_dataset_size(dataset_name, dataset_split)
+    return known or max(1, int(100000 * _parse_dataset_split_ratio(dataset_split)))
 
 
 def _infer_num_params_from_model_name(model_name: str) -> int:
@@ -753,7 +762,7 @@ async def api_estimate_training_time(payload: ConfigPayload):
             gpu_name = "unknown"
 
         strategy = str(getattr(args, "strategy", mini_cfg.get("strategy", "solo"))).lower()
-        cfg_num_gpus = int(mini_cfg.get("num_gpus", 1) or 1)
+        cfg_num_gpus = advisor.max_gpus(mini_cfg) or detected_gpu_count
         num_gpus = 1 if strategy == "solo" else max(1, cfg_num_gpus)
 
         dataset_name = str(getattr(args, "dataset", mini_cfg.get("dataset", {}).get("name", "")))
@@ -876,39 +885,12 @@ async def api_estimate_training_time(payload: ConfigPayload):
 # Routes: Capacity planner ("is distributed training needed?")
 # ---------------------------------------------------------------------------
 
-_HF_CONFIG_CACHE: dict[str, Optional[dict]] = {}
-
-
-def _hf_config(model_name: str) -> Optional[dict]:
-    """config.json of a Hub model: local cache first, then the Hub (unless offline)."""
-    if not model_name or model_name in _HF_CONFIG_CACHE:
-        return _HF_CONFIG_CACHE.get(model_name)
-    result = None
-    try:
-        from transformers import AutoConfig
-        token = os.environ.get("HF_TOKEN") or _parse_dotenv(PROJECT_ROOT / ".env").get("HF_TOKEN") or None
-        for local_only in (True, False):
-            if not local_only and os.environ.get("HF_HUB_OFFLINE") == "1":
-                break
-            try:
-                result = AutoConfig.from_pretrained(model_name, token=token, local_files_only=local_only).to_dict()
-                break
-            except Exception:
-                continue
-    except Exception:
-        result = None
-    _HF_CONFIG_CACHE[model_name] = result
-    return result
+def _hf_token() -> Optional[str]:
+    return os.environ.get("HF_TOKEN") or _parse_dotenv(PROJECT_ROOT / ".env").get("HF_TOKEN") or None
 
 
 def _model_spec(cfg: dict) -> "planner.ModelSpec":
-    model_type = str(cfg.get("model_type", "llm")).lower()
-    name = str(cfg.get("model_name") or "")
-    if model_type == "custom_transformer":
-        return planner.spec_from_custom(cfg.get("custom_transformer_args") or {})
-    if name.lower() in planner.PRESETS:
-        return planner.PRESETS[name.lower()]
-    return planner.resolve_spec(name, model_type, hf_config=_hf_config(name))
+    return advisor.model_spec(cfg, _hf_token())
 
 
 def _local_cluster() -> dict:
@@ -927,21 +909,79 @@ def _local_cluster() -> dict:
 GB_BYTES = 1024 ** 3
 
 
+# What the planner needs to know about a dataset, per run configuration that changes the answer.
+_DATA_CACHE: dict[str, dict] = {}
+
+
+def _data_key(cfg: dict) -> str:
+    algo, training = cfg.get("algorithm") or {}, cfg.get("training") or {}
+    return json.dumps([cfg.get("dataset"), cfg.get("model_name"), cfg.get("model_type"), algo.get("type"),
+                       algo.get("max_prompt_length"), algo.get("system_prompt"), training.get("max_length"),
+                       training.get("batch_size")], sort_keys=True, default=str)
+
+
+def _inspect_data(cfg: dict, seconds: float = 90) -> dict:
+    """{"data": measurements or None, "error": why not}. A failure is not cached: it may be the network."""
+    key = _data_key(cfg)
+    if key not in _DATA_CACHE:
+        data, error = advisor.try_measure(cfg, seconds, token=_hf_token())
+        if error:
+            return {"data": None, "error": error}
+        while len(_DATA_CACHE) >= 200:
+            _DATA_CACHE.pop(next(iter(_DATA_CACHE)))
+        _DATA_CACHE[key] = {"data": data, "error": ""}
+    return _DATA_CACHE[key]
+
+
+def _resolve_auto(cfg: dict, limit: Optional[int] = None) -> tuple[dict, str]:
+    """`strategy: auto` for this machine: (concrete config, why in plain words). Other configs pass through."""
+    if not advisor.is_auto(cfg):
+        return cfg, ""
+    local = _local_cluster()
+    cluster = None
+    if local["detected"]:
+        caps = [n for n in (limit, advisor.max_gpus(cfg), local["gpus_per_node"]) if n]
+        cluster = planner.Cluster(gpu_mem_gb=local["gpu_mem_gb"], gpus_per_node=min(caps), gpu_name=local["gpu_name"])
+    found = _inspect_data(cfg)
+    out, plan = advisor.resolve(cfg, cluster, found["data"], token=_hf_token())
+    text = advisor.describe(plan, out)
+    if found["error"]:
+        text += f"\nCould not measure the dataset ({found['error']}); max_length was used."
+    return out, text
+
+
+@app.post("/api/data/inspect")
+def api_data_inspect(payload: ConfigPayload):
+    """Row count and real token lengths of a config's dataset. Reads a sample; large Hub datasets are
+    streamed, not downloaded. {"data": null, "error": ""} when there is nothing to measure."""
+    return _inspect_data(adapt_ui_config_to_mini(payload.config, PROJECT_ROOT))
+
+
 def _plan(payload: PlanPayload) -> dict:
     cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
     spec = _model_spec(cfg)
     work = planner.workload_from_config(cfg)
-    work.num_samples = payload.num_samples or _infer_dataset_size(
-        str((cfg.get("dataset") or {}).get("name", "")), str((cfg.get("dataset") or {}).get("split", "train")))
+    data = None
+    if payload.num_samples is None:
+        data = (_DATA_CACHE.get(_data_key(cfg)) or {}).get("data")      # measured by /api/data/inspect
+        work.num_samples = _known_dataset_size(
+            str((cfg.get("dataset") or {}).get("name", "")), str((cfg.get("dataset") or {}).get("split", "train")))
+    else:
+        work.num_samples = payload.num_samples or None
     local = _local_cluster()
     fields = {k: v for k, v in {**local, **(payload.cluster or {})}.items()
               if k in {"gpu_mem_gb", "gpus_per_node", "nodes", "gpu_name", "tflops"} and v not in (None, "")}
     cluster = planner.Cluster(**fields)
-    result = planner.plan(spec, work, cluster)
+    result = planner.plan(spec, work, cluster, data=data, target_hours=payload.target_hours or planner.TARGET_HOURS)
     strategy = str(cfg.get("strategy", "solo")).lower()
-    result["selected"] = planner.evaluate_layout(
-        spec, work, cluster, strategy, int(cfg.get("num_gpus", 1) or 1), cfg.get("parallelism"))
-    result["selected"]["strategy"] = strategy
+    if strategy == "auto":
+        result["selected"] = {**result["recommended"], "auto": True}
+    else:
+        if data:
+            work = planner.apply_data(work, data)
+        result["selected"] = planner.evaluate_layout(
+            spec, work, cluster, strategy, advisor.max_gpus(cfg) or 1, cfg.get("parallelism"))
+        result["selected"]["strategy"] = strategy
     result["local_cluster"] = local
     return result
 
@@ -950,13 +990,91 @@ def _plan(payload: PlanPayload) -> dict:
 async def plan_run(payload: PlanPayload):
     """Is distributed training needed? Recommends solo / DDP / FSDP / a 5D layout.
 
-    Returns the verdict, per-GPU memory breakdown and throughput of every strategy,
+    Returns the verdict, `advice` (the same in plain words, for people who do not know DDP or FSDP), per-GPU memory breakdown and throughput of every strategy,
     the minimum GPU count per strategy, what-if fixes, and an evaluation of the
     strategy currently in the config (`selected`).
     """
     from starlette.concurrency import run_in_threadpool
     try:
         return await run_in_threadpool(_plan, payload)
+    except Exception as e:
+        raise HTTPException(400, f"Could not plan this config: {e}")
+
+
+class GridPayload(BaseModel):
+    config: dict
+    cluster: dict                     # gpu_mem_gb, gpu_name, tflops; gpus_per_node = GPUs in one machine
+    axis: str = "method"              # columns: method (full / lora / qlora) | seq (sequence lengths)
+    seq_lens: Optional[list[int]] = None
+    num_samples: Optional[int] = None
+
+
+GRID_SEQ_LENS = [512, 2048, 8192, 32768, 131072]
+METHOD_LABELS = {"full": "Full fine-tune", "lora": "LoRA", "qlora": "QLoRA"}
+PEFT_MODEL_TYPES = {"llm", "seq2seq", "encoder", "vlm", "vision"}
+QLORA_MODEL_TYPES = {"llm", "seq2seq", "vlm"}
+
+
+def _grid_rows(per_machine: int) -> list[int]:
+    """GPU counts to show: powers of two inside one machine, then 1, 2, 4 and 8 machines."""
+    per = max(1, per_machine)
+    return sorted({n for n in (1, 2, 4, 8) if n < per} | {per * k for k in (1, 2, 4, 8)})
+
+
+def _grid_cell(spec, work, cluster) -> dict:
+    p = planner.plan(spec, work, cluster)
+    rec = p["recommended"]
+    return {"verdict": p["verdict"], "fits": p["advice"]["fits"], "strategy": rec["strategy"], "label": rec["label"],
+            "gpus": rec["gpus"], "per_gpu_gb": rec["per_gpu_gb"], "memory_gb": rec["memory_gb"],
+            "changes": rec["changes"], "parallelism": rec["parallelism"],
+            "total_seconds": rec["perf"].get("total_seconds"), "advice": p["advice"]}
+
+
+def _plan_grid(payload: GridPayload) -> dict:
+    cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
+    spec = _model_spec(cfg)
+    base = planner.workload_from_config(cfg)
+    base.num_samples = payload.num_samples or None
+    hw = payload.cluster or {}
+    gpu_mem = float(hw.get("gpu_mem_gb") or 80)
+    per = max(1, int(hw.get("gpus_per_node") or 8))
+    if payload.axis == "seq":
+        columns = []
+        for s in sorted({int(x) for x in (payload.seq_lens or GRID_SEQ_LENS) if 16 <= int(x) <= 1_048_576}):
+            change = {"seq_len": s}
+            if base.algorithm == "grpo":
+                change["completion_len"] = s // 2
+            label = f"{s // 1024}K" if s >= 1024 and s % 1024 == 0 else str(s)
+            columns.append({"key": str(s), "label": label, "title": f"{s:,} tokens", "change": change, "why": ""})
+    else:
+        mt = base.model_type
+        columns = [{"key": m, "label": "Full" if m == "full" else METHOD_LABELS[m], "title": METHOD_LABELS[m], "change": {"method": m},
+                    "why": ("" if m == "full" or (mt in (QLORA_MODEL_TYPES if m == "qlora" else PEFT_MODEL_TYPES)
+                                                  and mt != "custom_transformer")
+                            else f"Not available for model_type {mt}")}
+                   for m in ("full", "lora", "qlora")]
+    rows = _grid_rows(per)
+    cells = []
+    for n in rows:
+        cluster = planner.Cluster(gpu_mem_gb=gpu_mem, gpus_per_node=min(n, per), nodes=max(1, n // per),
+                                  gpu_name=str(hw.get("gpu_name") or "h100"), tflops=hw.get("tflops"))
+        cells.append([None if col["why"] else _grid_cell(spec, replace(base, **col["change"]), cluster)
+                      for col in columns])
+    usable = planner.Cluster(gpu_mem_gb=gpu_mem).usable_bytes / planner.GB
+    return {"model": spec.to_dict(), "workload": asdict(base), "axis": payload.axis, "rows": rows,
+            "columns": [{k: c[k] for k in ("key", "label", "title", "change", "why")} for c in columns],
+            "cells": cells, "gpu_mem_gb": gpu_mem, "usable_gb": round(usable, 2), "per_machine": per}
+
+
+@app.post("/api/plan/grid")
+async def plan_grid(payload: GridPayload):
+    """A capacity map: what one model needs for every GPU count (rows) and every training method or
+    sequence length (columns). Each cell has the recommendation and its explanation in plain words."""
+    from starlette.concurrency import run_in_threadpool
+    if payload.axis not in {"method", "seq"}:
+        raise HTTPException(400, "axis must be method or seq")
+    try:
+        return await run_in_threadpool(_plan_grid, payload)
     except Exception as e:
         raise HTTPException(400, f"Could not plan this config: {e}")
 
@@ -1114,6 +1232,8 @@ async def start_training(payload: ConfigPayload):
         mini_cfg = adapt_ui_config_to_mini(payload.config, PROJECT_ROOT)
         try:
             validate_mini_config(mini_cfg, PROJECT_ROOT)
+            if str(mini_cfg.get("launch_mode", "")).lower() != "slurm":   # there train.py decides, on the cluster's GPUs
+                mini_cfg, _ = _resolve_auto(mini_cfg)
         except Exception as e:
             raise HTTPException(400, f"Invalid training config: {e}")
         if str(mini_cfg.get("launch_mode", "")).lower() == "slurm":
@@ -1129,7 +1249,7 @@ async def start_training(payload: ConfigPayload):
 
     strategy = str(mini_cfg.get("strategy", "solo")).lower()
     strategy = strategy if strategy in {"solo", "ddp", "fsdp", "5d"} else "solo"
-    gpu_count = int(mini_cfg.get("num_gpus", 1) or 1)
+    gpu_count = advisor.max_gpus(mini_cfg) or 1
     if strategy == "solo":
         gpu_count = 1
     else:
@@ -1307,9 +1427,14 @@ async def queue_submit(payload: QueueSubmitPayload):
     except Exception as e:
         raise HTTPException(400, f"Invalid training config: {e}")
 
+    total = queue_manager.get_total_gpus()
+    from starlette.concurrency import run_in_threadpool
+    try:
+        mini_cfg, chosen = await run_in_threadpool(_resolve_auto, mini_cfg, total)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     strategy = str(mini_cfg.get("strategy", "solo")).lower()
     requested_gpus = 1 if strategy == "solo" else max(1, int(mini_cfg.get("num_gpus", payload.gpu_count) or 1))
-    total = queue_manager.get_total_gpus()
     if requested_gpus > total:
         raise HTTPException(
             400,
@@ -1318,7 +1443,7 @@ async def queue_submit(payload: QueueSubmitPayload):
         )
 
     # Calculate estimated training time
-    estimate = await api_estimate_training_time(ConfigPayload(config=payload.config))
+    estimate = await api_estimate_training_time(ConfigPayload(config=mini_cfg))
     estimated_seconds = estimate.get("est_total_seconds")
 
     name = (payload.name or "").strip()[:120] or None
@@ -1329,9 +1454,13 @@ async def queue_submit(payload: QueueSubmitPayload):
         estimated_seconds=estimated_seconds,
         name=name,
     )
+    for line in chosen.split("\n"):
+        queue_manager._append_job_log(job.id, line)
 
     response = {
         "job_id": job.id,
+        "strategy": strategy,
+        "chosen": chosen,
         "status": job.status.value,
         "gpu_count": job.gpu_count,
         "gpu_indices": job.gpu_indices,

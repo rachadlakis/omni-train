@@ -122,7 +122,7 @@ def launch_commands(cfg: dict, target: str, hw: Optional[dict] = None, file: str
             notes.append("Replace FIRST_MACHINE with the host name or IP address of one of the machines.")
         notes.append(f"Every machine must reach port {h['port']} on that machine, and have the same repository, "
                      "Python environment and YAML.")
-        if strategy == "fsdp":
+        if strategy in {"fsdp", "auto"}:
             notes.append("FSDP across machines needs checkpoint_dir on storage all machines share: the first "
                          "process writes the start weights there and the others read them.")
         notes.append("Models and datasets are downloaded on each machine unless they share a Hugging Face cache.")

@@ -29,7 +29,11 @@ WANDB_API_KEY=...     # optional
 
 ```bash
 # Reads strategy and num_gpus from config.yaml automatically
+# (strategy: auto, the default: measures model, data and GPUs first, and explains the choice)
 bash scripts/launch.sh
+
+# What would strategy: auto choose, and why?
+python advisor.py --config config.yaml
 
 # Use a different config file
 CONFIG_PATH=configs/llm_lora_ddp.yaml bash scripts/launch.sh
@@ -103,6 +107,9 @@ python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 2 --dry-ru
 config.yaml (or CONFIG_PATH env var)
     │
     ▼
+advisor.resolve_*()                        # only strategy: auto → a concrete strategy, num_gpus, parallelism
+    │
+    ▼
 utils.load_config() → utils.build_args()   # parses + validates YAML into Args dataclass
     │
     ▼
@@ -122,6 +129,7 @@ train.py main()
 
 | Strategy | When to use | Notes |
 |----------|-------------|-------|
+| `auto`   | Default     | `advisor.py` fills in one of the rows below before training starts; see "strategy: auto" |
 | `solo`   | Single GPU  | No torchrun, no process group |
 | `ddp`    | Model fits in one GPU, scale throughput | Every GPU holds full model copy; gradient sync via all-reduce |
 | `fsdp`   | Large models, limited GPU memory | Parameters/gradients/optimizer states sharded across GPUs |
@@ -181,6 +189,7 @@ Two FSDP checkpoint APIs:
 - `strategy: fsdp` + `mixed_precision` with `output_dtype` ≠ a low-precision `param_dtype` → error for llm/encoder/vision/custom_transformer (final norm/head would get mixed dtypes; `cast_forward_inputs` does not help), warning otherwise (`_check_fsdp_dtypes`)
 - `training.lr_scheduler` must be `cosine` (default), `linear` or `constant` — applied after the linear warmup
 - `peft.enabled=true` only supports model types: `llm, seq2seq, encoder, vlm, vision`
+- `strategy: auto` passes `build_args` (for validation only; train.py never runs it). `num_gpus: auto` needs `strategy: auto`
 - `algorithm:` (`post_training.config.parse_algorithm`): `type` ∈ pretrain (default) | sft | dpo | simpo | orpo | grpo; `ppo` → "planned" error; unknown keys are errors, GRPO-only keys on other types too; grpo: `num_generations` ≥ 2, `beta > 0` needs `peft.enabled`, `max_prompt_length + max_completion_length` ≤ `max_length`, rewards must be built-in names or `module:function`; non-pretrain needs `model_type: llm` and strategy solo | ddp | fsdp; `dpo_loss` ∈ sigmoid | ipo | hinge; `label_smoothing` only for dpo+sigmoid; `max_prompt_length` < `max_length`. `dataset.subset` is optional
 - `strategy: 5d` (`_parse_5d`): `dp*tp*cp*pp == num_gpus` (`dp: auto` infers it), `ep` divides dp and needs `custom_transformer_args.num_experts`, `sp` needs tp>1, sequence length divisible by cp (by cp*tp with sp), only `model_type: llm | custom_transformer`, no PEFT/quantization, unknown `parallelism` keys are errors. Model-shape checks (heads/kv heads/ffn divisible by tp, layers ≥ pp) run at startup in `parallelism.model.check_divisibility`
 
@@ -230,11 +239,18 @@ Trainable weights are always fp32 (`_load_dtype()`), because bf16 rounds most fi
 
 `plan(ModelSpec, Workload, Cluster)` answers "is distributed training needed?": per-GPU peak memory (weights / grads / AdamW / activations / logits / overhead) for solo, DDP, FSDP and every valid 5d layout, a verdict (`single_gpu | distributed_optional | distributed_required | infeasible`), the recommended option, min GPUs per strategy and what-if fixes. Pure Python (no torch). The memory model mirrors the Precision rules above (16 B/param trainable, bf16 frozen LoRA base outside FSDP, fp32 under FSDP, preference runs = 2 × batch rows, logits upcast to fp32 dominate for big vocabularies, no vocab-parallel CE under 5d). GRPO rows = batch × G; its peak is max(sampling KV cache, training) and its step time adds bandwidth-bound decoding (`GPU_CATALOG` carries GB/s). It only proposes what the trainer accepts: QLoRA never on FSDP; 5d only for full-FT pretrain on llama/mistral/qwen2/custom; 5d layouts obey `_parse_5d`. `ModelSpec` comes from `PRESETS` (offline), an HF `config.json`, `custom_transformer_args`, or a name heuristic. CLI: `python planner.py --model … --gpus 8 --gpu h100`. Tests: `tests/test_planner.py`.
 
+`plan()` tries, in order (`_pick`): one GPU if fast enough (`TARGET_HOURS`, only when row count and GPU speed are known), DDP, FSDP, the same with `_gentle_changes` (checkpointing on, batch halved), then 5d. It never changes the training method; LoRA and QLoRA appear under `alternatives`. `recommended.changes` must be applied with the option. `explain()` / `advice` is the plain-words version used by the CLI, the run log and the console. Unknown GPU types need `--gpu-mem`. Anything the trainer refuses (local files / `text_field` / `export_hf` / fp16 under 5d, MoE outside 5d) belongs in `workload_from_config` (`no_5d`, `needs_5d`), or `auto` will write a config that fails.
+
+### strategy: auto (`advisor.py`)
+
+Supplies what the planner cannot know (GPUs, config.json, dataset) and fills in `strategy`, `num_gpus`, `parallelism`, `gradient_checkpointing`, `batch_size`. Resolved by `scripts/launch.sh` (writes a temporary config, also for `STRATEGY=`/`NUM_GPUS=` overrides), `ui/app.py` on submit (`_resolve_auto`), or `train.py` (`resolve_for_process`). Under torchrun rank 0 decides and shares it through the rendezvous store: ranks that measured for themselves could disagree and hang. `measure_data` tokenises 500 rows plus the longest by text length, with the trainer's own functions (`_row_lengths`: add new algorithms there); large Hub datasets are streamed. A failed measurement never stops a run (`try_measure`). `preflight` only warns. Console: `POST /api/data/inspect` fills `_DATA_CACHE`, which `/api/plan` and submit read. Tests: `tests/test_advisor.py`, `-m e2e`.
+
 ### Web UI (`ui/`)
 
 FastAPI server (`ui/app.py`, REST docs at `/docs`) plus a single-page console in `ui/static/` (`index.html`, `app.js`, `charts.js` = charts, memory bars, log viewer, failure hints, `styles.css`, `fonts/` bundled so the console works offline: no asset may come from another host; hash routes `#/runs`, `#/run/<id>`, `#/compare/<id>,<id>` (max 3: the colours are validated for 3), `#/new`, `#/planner`, `#/checkpoints`, `#/system`, `#/api`). Requests must carry a Host header that is `localhost`, an IP address, this machine's hostname, or a name in `OMNI_UI_ALLOWED_HOSTS` (blocks DNS rebinding). Every torchrun launch, manual or queued, gets a free `--master_port`, and ddp/fsdp/5d jobs always go through torchrun, even on 1 GPU.
 
 - The console builds configs in the **`config.yaml` schema** directly (algorithm, parallelism, custom_transformer_args included); `ui/config_adapter.py` deep-merges them over the root `config.yaml` (it still also accepts the old UI schema).
+- Planner page = a capacity map (`POST /api/plan/grid`): rows = GPU counts (powers of two inside one machine, then 1/2/4/8 machines), columns = methods or sequence lengths, every cell is a full `plan()` (~0.1 s for the whole grid). It must not look like the wizard's plan panel: the wizard plans one run, the map compares many.
 - Endpoints: `POST /api/plan` (planner + evaluation of the config's own strategy as `selected`), `GET /api/catalog`, `GET /api/models/inspect`, `POST /api/config/{validate,render,parse}`, `GET /api/env/status` (booleans only), `/api/queue/*`, `/api/checkpoints` (includes `5d/`), `/api/system/gpus`. `/api/train/start` is the older direct path (no queue).
 - `ui/queue.py`: SQLite job queue (`ui/queue.db`) with priority scheduling and run names. `queue/submit` validates with `build_args` and rejects jobs asking for more GPUs than the machine has. Logs are also written to `ui/runs/<job_id>.log`; `parse_metrics` turns trainer step lines into the loss curve / progress.
 - **Where a run executes** (`ui/launchers.py`, wizard "Where it runs"): `local` (default, the queue), `remote` (other machines: `launch.sh` on one, `torchrun --rdzv_backend c10d` on several; commands only) or `slurm`. SLURM is never assumed: `slurm_status()` asks `sinfo`, because `sbatch` can be installed with no controller. Each SLURM submission writes its own config under `ui/runs/slurm/` (the job reads it when it starts). Options that become `#SBATCH` lines are pattern-checked. `POST /api/launch/commands`, `GET /api/slurm/status`, `POST /api/slurm/submit`. FSDP on several machines needs a shared `checkpoint_dir` (rank 0 writes the seed). Tests: `tests/test_launchers.py`.

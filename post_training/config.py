@@ -102,7 +102,7 @@ def parse_algorithm(cfg: dict, args) -> None:
 
     if args.model_type != "llm":
         raise ValueError(f"algorithm.type={algo} needs model_type: llm (got {args.model_type})")
-    if args.strategy not in {"solo", "ddp", "fsdp"}:
+    if args.strategy not in {"auto", "solo", "ddp", "fsdp"}:
         raise ValueError(f"algorithm.type={algo} supports strategy solo, ddp or fsdp (got {args.strategy})")
     if algo == "grpo":
         _check_grpo(args)

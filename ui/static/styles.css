@@ -595,3 +595,75 @@ input:disabled { opacity: .5; }
 .cmd-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; font-size: .84rem; font-weight: 500; }
 .cmd-notes { margin: 12px 0 0; padding-left: 18px; color: var(--ink-2); font-size: .82rem; display: grid; gap: 6px; max-width: 80ch; }
 .step-section h3 + .segmented { margin-top: 8px; }
+
+/* ---------- plan in plain words, data check ---------- */
+.verdict.distributed_recommended { --verdict: var(--signal); }
+.verdict .need { margin: 0 0 14px; }
+.verdict h3 small { display: block; font-size: .74rem; font-weight: 600; color: var(--ink-3); margin-bottom: 4px; }
+.verdict h3 .tech { font-weight: 500; font-size: .86rem; color: var(--ink-3); }
+.verdict .auto-note { color: var(--ink-3); }
+.data-check { margin-top: 14px; }
+.data-check .faint { margin-top: 8px; font-size: .8rem; }
+
+/* ---------- capacity planner: a map, not a form ---------- */
+:root { --tier-multi: #7a3fb8; --tier-multi-soft: #f3ecfb; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tier-multi: #c39bf0; --tier-multi-soft: #2a1f3a; } }
+:root[data-theme="dark"] { --tier-multi: #c39bf0; --tier-multi-soft: #2a1f3a; }
+.query { padding: 18px 24px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
+.query-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 1.02rem; color: var(--ink-2); }
+.query-line input, .query-line select { width: auto; min-width: 0; height: 36px; font-size: .95rem; color: var(--ink); font-weight: 600; }
+.query-line .q-wide { flex: 0 1 300px; }
+.query-line .q-num { width: 96px; }
+.query-line [hidden] { display: none; }
+.query-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 4px; border-top: 1px solid var(--rule-soft); margin-top: 2px; padding-top: 14px; }
+.query-foot .q-hint { font-size: .8rem; }
+.map-split { grid-template-columns: minmax(0, 1fr) 380px; }
+.map-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 16px; }
+.map-head h2 { font-size: 1.05rem; }
+.map-scroll { overflow-x: auto; margin: -6px; }
+.cap-map { border-collapse: separate; border-spacing: 6px; width: 100%; table-layout: fixed; min-width: 300px; }
+.cap-map th, .cap-map td { padding: 0; border: 0; background: none; }
+.cap-map th { font-size: .76rem; font-weight: 600; color: var(--ink-2); text-align: left; padding: 0 4px; letter-spacing: .02em; }
+.cap-map th:first-child, .cap-map td:first-child { padding-left: 0; }
+.cap-map th:last-child, .cap-map td:last-child { padding-right: 0; }
+.cap-map thead th, .cap-map tr:first-child th { padding-bottom: 2px; }
+.cap-map th[scope="row"] { width: 92px; white-space: nowrap; }
+.cap-map th small { display: block; font-weight: 400; color: var(--ink-3); font-size: .7rem; }
+.cell { width: 100%; min-height: 68px; border-radius: var(--radius); border: 1px solid transparent; padding: 8px 10px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; font: inherit; cursor: pointer;
+  position: relative; transition: box-shadow .12s, transform .12s; }
+.cell:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.cell:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.cell.on { box-shadow: 0 0 0 2px var(--ink); }
+.cell-name { font-weight: 600; font-size: .84rem; display: flex; gap: 6px; align-items: baseline; white-space: nowrap; padding-right: 10px; }
+.cell-name i { font-style: normal; font-size: .72rem; }
+.cell-gb, .cell-time { font-size: .76rem; font-variant-numeric: tabular-nums; opacity: .85; }
+.cell.first::after { content: ""; position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent); }
+.first-key { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-2); margin-right: 8px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink-2) 22%, transparent); vertical-align: 1px; }
+.cell.one { background: var(--fit-soft); color: var(--fit); border-color: color-mix(in srgb, var(--fit) 22%, transparent); }
+.cell.fsdp { background: var(--signal-soft); color: var(--signal); border-color: color-mix(in srgb, var(--signal) 22%, transparent); }
+.cell.multi { background: var(--tier-multi-soft); color: var(--tier-multi); border-color: color-mix(in srgb, var(--tier-multi) 22%, transparent); }
+.cell.no { background: var(--sunken); color: var(--ink-3); border-color: var(--rule); }
+.cell.no .cell-name { color: var(--over); }
+.cell.na { background: transparent; color: var(--ink-3); border: 1px dashed var(--rule); cursor: default; justify-content: center; align-items: center; }
+.cell.na:hover { transform: none; box-shadow: none; }
+.map-legend { margin-top: 18px; gap: 8px 18px; }
+.map-legend .k { margin-right: 6px; font-weight: 700; }
+.map-legend .k.one { color: var(--fit); } .map-legend .k.fsdp { color: var(--signal); }
+.map-legend .k.multi { color: var(--tier-multi); } .map-legend .k.no { color: var(--over); }
+.detail h3 { font-size: 1.1rem; line-height: 1.35; margin: 4px 0 6px; }
+.detail h3 .tech { font-weight: 500; font-size: .86rem; color: var(--ink-3); }
+.detail p { font-size: .88rem; margin-top: 6px; }
+.detail .small { font-size: .8rem; }
+.detail h4 { font-size: .82rem; font-weight: 600; margin: 20px 0 10px; }
+.detail-kicker { font-size: .76rem !important; color: var(--ink-3); font-weight: 600; margin: 0 !important; }
+.detail .plan-list li { display: block; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 1100px) { .map-split { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .query { padding: 16px; } .query-line { font-size: .95rem; } .query-line .q-wide { flex: 1 1 100%; }
+  .cap-map { border-spacing: 4px; } .cap-map th[scope="row"] { width: 64px; } .cell { min-height: 60px; padding: 6px 7px; }
+  .cell-name { font-size: .78rem; gap: 4px; } .cell-name i { display: none; }
+}

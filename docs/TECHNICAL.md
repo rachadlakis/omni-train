@@ -248,7 +248,7 @@ All settings are in `config.yaml`. Full reference:
 
 ```yaml
 model_name: "facebook/opt-125m"
-strategy: "fsdp"         # solo | ddp | fsdp
+strategy: "auto"         # auto | solo | ddp | fsdp | 5d
 num_gpus: 2
 
 dataset:

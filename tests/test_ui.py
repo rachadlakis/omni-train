@@ -237,3 +237,138 @@ def test_console_works_offline():
         assert "googleapis" not in text and "gstatic" not in text and "//cdn" not in text
     for url in __import__("re").findall(r"/static/([\w./-]+)", (STATIC / "index.html").read_text() + (STATIC / "styles.css").read_text()):
         assert (STATIC / url).exists(), url
+
+
+# ---------------------------------------------------------------------------
+# strategy: auto and the dataset check
+# ---------------------------------------------------------------------------
+
+import json
+
+from tests.post_training_helpers import make_tokenizer, tiny_llama
+
+FAKE_8xH100 = {"gpu_mem_gb": 80.0, "gpus_per_node": 8, "nodes": 1, "gpu_name": "NVIDIA H100 80GB HBM3", "detected": True}
+
+
+@pytest.fixture
+def eight_gpus(monkeypatch, tmp_queue):
+    monkeypatch.setattr(ui_app, "_local_cluster", lambda: dict(FAKE_8xH100))
+    monkeypatch.setattr(tmp_queue, "get_total_gpus", lambda: 8)
+    monkeypatch.setattr(tmp_queue, "allocate_gpus", lambda *a, **k: [])      # never start a real process
+    ui_app._DATA_CACHE.clear()
+    return tmp_queue
+
+
+def auto_cfg(**over):
+    return {"model_name": "meta-llama/Llama-3.1-8B", "model_type": "llm", "strategy": "auto", "num_gpus": "auto",
+            "dataset": {"name": "missing.jsonl", "subset": None, "split": "train"},
+            "training": {"epochs": 1, "batch_size": 1, "max_length": 4096, "gradient_checkpointing": True},
+            "peft": {"enabled": False}, "quantization": {"enabled": False}, "algorithm": {"type": "pretrain"}, **over}
+
+
+def test_plan_of_an_auto_config_selects_the_recommendation(client):
+    j = client.post("/api/plan", json={"config": auto_cfg(), "cluster": LOCAL_8xH100}).json()
+    assert j["selected"]["auto"] and j["selected"]["label"] == j["recommended"]["label"] == "FSDP x8"
+    assert j["advice"]["tech"] == "FSDP" and j["advice"]["others"][0]["workload"]["method"] == "lora"
+    assert client.post("/api/config/validate", json={"config": auto_cfg()}).json()["valid"]
+
+
+def test_unknown_dataset_size_gives_no_time_instead_of_a_guess(client):
+    j = client.post("/api/plan", json={"config": auto_cfg(), "cluster": LOCAL_8xH100}).json()
+    assert "total_seconds" not in j["recommended"]["perf"]
+    j = client.post("/api/plan", json={"config": auto_cfg(dataset={"name": "x/y", "split": "train[:2000]"}),
+                                       "cluster": LOCAL_8xH100}).json()
+    assert j["recommended"]["perf"]["total_steps"] == 250
+    j = client.post("/api/plan", json={"config": auto_cfg(), "cluster": LOCAL_8xH100, "num_samples": 800}).json()
+    assert j["recommended"]["perf"]["total_steps"] == 100
+
+
+def test_submitting_auto_queues_a_concrete_strategy(client, eight_gpus):
+    r = client.post("/api/queue/submit", json={"config": auto_cfg(), "name": "a"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["strategy"] == "fsdp" and j["gpu_count"] == 8 and "split the model" in j["chosen"]
+    job = eight_gpus.get_job(j["job_id"])
+    assert job.config["strategy"] == "fsdp" and job.config["num_gpus"] == 8
+    assert "Automatic strategy: fsdp on 8 GPUs" in "\n".join(eight_gpus.get_job_logs(j["job_id"]))
+
+
+def test_submitting_auto_respects_the_gpu_limit(client, eight_gpus):
+    j = client.post("/api/queue/submit", json={"config": auto_cfg(num_gpus=4)}).json()
+    assert j["gpu_count"] == 4
+
+
+def test_submitting_auto_explains_what_cannot_fit(client, eight_gpus):
+    r = client.post("/api/queue/submit", json={"config": auto_cfg(model_name="meta-llama/Llama-3.1-70B")})
+    assert r.status_code == 400 and "Does not fit on these 8 GPUs" in r.json()["detail"] and "LoRA" in r.json()["detail"]
+
+
+def test_data_inspect_measures_and_feeds_the_plan(client, tmp_path):
+    ui_app._DATA_CACHE.clear()
+    tok = make_tokenizer()
+    tiny_llama(len(tok)).save_pretrained(tmp_path / "m")
+    tok.save_pretrained(tmp_path / "m")
+    (tmp_path / "d.jsonl").write_text("".join(json.dumps({"prompt": "hello", "completion": "hello world"}) + "\n" for _ in range(12)))
+    cfg = auto_cfg(model_name=str(tmp_path / "m"), algorithm={"type": "sft"},
+                   dataset={"name": str(tmp_path / "d.jsonl"), "subset": None, "split": "train"})
+    before = client.post("/api/plan", json={"config": cfg, "cluster": LOCAL_8xH100}).json()
+    assert before["data"] is None
+    j = client.post("/api/data/inspect", json={"config": cfg}).json()
+    assert j["error"] == "" and j["data"]["rows"] == 12
+    after = client.post("/api/plan", json={"config": cfg, "cluster": LOCAL_8xH100}).json()
+    assert after["data"]["rows"] == 12 and "12 examples" in after["advice"]["data"]
+    assert after["workload"]["seq_len"] == max(8, j["data"]["longest"]) < before["workload"]["seq_len"]
+
+
+def test_data_inspect_reports_errors(client):
+    ui_app._DATA_CACHE.clear()
+    j = client.post("/api/data/inspect", json={"config": auto_cfg()}).json()
+    assert j["data"] is None and "not found" in j["error"]
+    assert not ui_app._DATA_CACHE                    # a failure may be temporary
+
+
+def test_configs_without_num_gpus_still_mean_one_gpu(client):
+    cfg = {k: v for k, v in auto_cfg(strategy="solo").items() if k != "num_gpus"}
+    assert client.post("/api/config/render", json={"config": cfg}).json()["config"]["num_gpus"] == 1
+    old = {"model": {"name": "gpt2"}, "distributed": {"strategy": "ddp"}}
+    assert client.post("/api/config/render", json={"config": old}).json()["config"]["num_gpus"] == 1
+
+
+def test_console_defaults_to_automatic():
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert "strategy: 'auto', num_gpus: 'auto'" in js and "/api/data/inspect" in js
+
+
+# ---------------------------------------------------------------------------
+# Planner page: the capacity map
+# ---------------------------------------------------------------------------
+
+def test_capacity_map_by_method(client):
+    cfg = auto_cfg(model_name="meta-llama/Llama-3.1-8B")
+    j = client.post("/api/plan/grid", json={"config": cfg, "cluster": {"gpu_mem_gb": 80, "gpu_name": "h100", "gpus_per_node": 8},
+                                            "num_samples": 20000}).json()
+    assert j["rows"] == [1, 2, 4, 8, 16, 32, 64] and [c["key"] for c in j["columns"]] == ["full", "lora", "qlora"]
+    full = [row[0] for row in j["cells"]]
+    assert not full[0]["fits"] and full[1]["strategy"] == "fsdp"       # 8B full fine-tune: FSDP from 2 GPUs
+    assert j["cells"][0][1]["fits"] and j["cells"][0][1]["strategy"] == "solo"
+    assert all(c["strategy"] != "fsdp" for row in j["cells"] for c in row[2:])   # QLoRA never on FSDP
+    assert full[1]["advice"]["tech"] == "FSDP" and full[1]["total_seconds"] > full[3]["total_seconds"]
+
+
+def test_capacity_map_by_sequence_length_reaches_3d(client):
+    cfg = auto_cfg(model_name="meta-llama/Llama-3.1-8B", dataset={"name": "some/hub-dataset", "split": "train"})   # 5d reads no local files
+    j = client.post("/api/plan/grid", json={"config": cfg, "axis": "seq",
+                                            "cluster": {"gpu_mem_gb": 80, "gpu_name": "h100", "gpus_per_node": 8}}).json()
+    assert [c["label"] for c in j["columns"]] == ["512", "2K", "8K", "32K", "128K"]
+    eight = j["cells"][j["rows"].index(8)]
+    assert eight[0]["strategy"] == "fsdp" and eight[3]["strategy"] == "5d" and eight[3]["parallelism"]["cp"] > 1
+    assert "total_seconds" not in eight[0] or eight[0]["total_seconds"] is None        # no examples given: no time
+
+
+def test_capacity_map_rows_follow_the_machine_size_and_skip_methods_a_model_lacks(client):
+    cfg = auto_cfg(model_type="custom_transformer", model_name=None,
+                   custom_transformer_args={"n_layers": 2, "dim": 64, "n_heads": 4, "vocab_size": 256, "max_seq_len": 64})
+    j = client.post("/api/plan/grid", json={"config": cfg, "cluster": {"gpu_mem_gb": 24, "gpu_name": "4090", "gpus_per_node": 4}}).json()
+    assert j["rows"] == [1, 2, 4, 8, 16, 32]
+    assert j["columns"][1]["why"] and all(row[1] is None and row[2] is None for row in j["cells"])
+    assert client.post("/api/plan/grid", json={"config": cfg, "cluster": {}, "axis": "nope"}).status_code == 400

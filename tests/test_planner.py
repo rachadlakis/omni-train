@@ -288,3 +288,108 @@ MEASURED = [
 def test_planner_matches_measured_peaks(model, work, measured_gb):
     mem = P.memory_per_gpu(P.PRESETS[model.lower()], P.Workload(**work), P.Layout("solo", 1))
     assert mem["total"] - mem["overhead"] == pytest.approx(measured_gb, rel=0.15)
+
+
+# ---------------------------------------------------------------------------
+# Simplest option first, time as a reason, plain words
+# ---------------------------------------------------------------------------
+
+def test_oversized_batch_is_lowered_before_5d():
+    m = P.PRESETS["huggingfacetb/smollm2-135m"]
+    r = P.plan(m, P.Workload(seq_len=32768, batch_size=4), H100x8)
+    assert r["recommended"]["strategy"] == "ddp" and r["recommended"]["changes"] == {"batch_size": 2}
+    assert r["recommended"]["fits"] and "smaller batch" in r["summary"]
+    one = P.plan(m, P.Workload(seq_len=32768, batch_size=4), P.Cluster(gpu_mem_gb=24, gpus_per_node=1, gpu_name="4090"))
+    assert one["verdict"] == "single_gpu" and one["recommended"]["changes"] == {"batch_size": 1}
+
+
+def test_lora_is_offered_next_to_fsdp_but_not_chosen():
+    r = P.plan(LLAMA_8B, P.Workload(), H100x8)
+    assert r["recommended"]["strategy"] == "fsdp" and not r["recommended"]["changes"]
+    (lora,) = r["alternatives"]
+    assert lora["workload"] == {"method": "lora", "lora_r": 16} and lora["strategy"] == "solo"
+    assert r["advice"]["others"][0]["title"].startswith("Train a small add-on")
+
+
+def test_alternatives_are_always_simpler():
+    for name in P.PRESETS:
+        for seq in (512, 8192):
+            r = P.plan(P.PRESETS[name], P.Workload(seq_len=seq, batch_size=2), H100x8)
+            if r["verdict"] == "distributed_required":
+                for alt in r["alternatives"]:
+                    assert P._TIER[alt["strategy"]] < P._TIER[r["recommended"]["strategy"]]
+
+
+SLOW = dict(method="lora", algorithm="sft", seq_len=1024, batch_size=8, num_samples=1_000_000)
+
+
+def test_time_is_a_reason_for_more_gpus():
+    m = P.PRESETS["qwen/qwen2.5-1.5b-instruct"]
+    r = P.plan(m, P.Workload(**SLOW), H100x8)
+    assert r["verdict"] == "distributed_recommended" and r["recommended"]["strategy"] == "ddp"
+    assert not r["distributed_needed"] and "would take" in r["advice"]["why"]
+    fast = P.plan(m, P.Workload(**{**SLOW, "num_samples": 2000}), H100x8)
+    assert fast["verdict"] == "distributed_optional" and fast["recommended"]["strategy"] == "solo"
+    unhurried = P.plan(m, P.Workload(**SLOW), H100x8, target_hours=1000)
+    assert unhurried["recommended"]["strategy"] == "solo"
+    one = P.plan(m, P.Workload(**SLOW), P.Cluster(gpu_mem_gb=80, gpus_per_node=1, gpu_name="h100"))
+    assert one["verdict"] == "single_gpu" and one["alternatives"][0]["result"].startswith("DDP x")
+    assert one["alternatives"][0]["total_seconds"] < one["recommended"]["perf"]["total_seconds"]
+
+
+def test_more_data_never_needs_more_memory():
+    m = P.PRESETS["qwen/qwen2.5-1.5b-instruct"]
+    a, b = (P.plan(m, P.Workload(**{**SLOW, "num_samples": n}), H100x8) for n in (100, 10 ** 9))
+    assert [o["per_gpu_gb"] for o in a["options"]] == [o["per_gpu_gb"] for o in b["options"]]
+
+
+def test_unknown_gpu_speed_gives_no_time():
+    m = P.PRESETS["qwen/qwen2.5-1.5b-instruct"]
+    r = P.plan(m, P.Workload(**SLOW), P.Cluster(gpu_mem_gb=80, gpus_per_node=8, gpu_name="mystery"))
+    assert r["verdict"] == "distributed_optional" and "total_seconds" not in r["recommended"]["perf"]
+    assert any("speed of 'mystery'" in n for n in r["notes"])
+
+
+def test_unknown_gpu_type_needs_its_memory(capsys):
+    with pytest.raises(SystemExit):
+        P.main(["--model", "gpt2", "--gpu", "rtx3060"])
+    assert "--gpu-mem" in capsys.readouterr().err
+    P.main(["--model", "gpt2", "--gpu", "rtx3060", "--gpu-mem", "12"])
+    assert "12 GB" in capsys.readouterr().out
+
+
+def test_base_and_instruct_share_a_preset():
+    base = P.resolve_spec("meta-llama/Llama-3.1-70B")
+    assert base.source == "preset" and base.five_d_ready and base.name == "meta-llama/Llama-3.1-70B"
+    assert base.params == P.PRESETS["meta-llama/llama-3.1-70b-instruct"].params
+    assert P.resolve_spec("Qwen/Qwen2.5-14B").five_d_ready
+    assert P.find_preset("someone/else-7b") is None
+
+
+def test_advice_names_the_dimensions_it_splits():
+    r = P.plan(P.PRESETS["qwen/qwen2.5-7b-instruct"], P.Workload(seq_len=32768), H100x8)
+    a = r["advice"]
+    assert "3D parallelism" in a["tech"] and "each layer and every long sequence" in a["title"]
+    assert "because the sequences are very long" in a["why"]
+
+
+def test_advice_for_a_run_that_does_not_fit():
+    r = P.plan(LLAMA_8B, P.Workload(), P.Cluster(gpu_mem_gb=24, gpus_per_node=1, gpu_name="4090"))
+    a = r["advice"]
+    assert not a["fits"] and a["title"] == "Does not fit on this GPU" and a["others_title"] == "What would work"
+    assert "Recommended" not in P.advice_text(r)
+
+
+def test_shorter_examples_are_suggested_from_the_data():
+    data = {"rows": 1000, "longest": 8192, "suggested_max_length": 1024, "suggested_keeps_pct": 99, "mean": 300,
+            "longest_seen": 9000, "batch_len": 400, "sampled": 500, "tips": []}
+    r = P.plan(P.PRESETS["qwen/qwen2.5-7b-instruct"], P.Workload(method="lora", algorithm="sft", seq_len=8192),
+               P.Cluster(gpu_mem_gb=24, gpus_per_node=1, gpu_name="4090"), data=data)
+    assert r["verdict"] == "infeasible"
+    assert any(s["workload"] == {"seq_len": 1024} and "99%" in s["change"] for s in r["suggestions"])
+
+
+@pytest.mark.parametrize("seconds, text", [(20, "under a minute"), (60, "about 1 minute"), (2400, "about 40 minutes"),
+                                           (5400, "about 1.5 hours"), (25200, "about 7 hours"), (3 * 86400, "about 3 days")])
+def test_duration(seconds, text):
+    assert P.duration(seconds) == text

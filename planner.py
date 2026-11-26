@@ -6,7 +6,12 @@
 `plan(model, workload, cluster)` estimates the peak memory of one GPU for every strategy
 the trainer supports (solo, DDP, FSDP, and 5d layouts of TP x PP x CP x DP), then
 recommends the simplest one that fits, with a throughput estimate, the minimum GPU count
-for each strategy and concrete fixes when nothing fits.
+for each strategy and concrete fixes when nothing fits. "Simplest" means, in order: one GPU
+(when it is fast enough), DDP, FSDP, the same with gradient checkpointing or a smaller batch,
+and only then 5d. The training method (full / LoRA / QLoRA) is the user's choice and is never
+changed here; cheaper methods are listed under `alternatives`. `explain(plan)` says all of it
+in plain words. advisor.py adds what this file does not know: the GPUs of this machine and
+the real lengths of the dataset.
 
 The memory model follows how this repo trains (see CLAUDE.md, "Precision"):
   * trainable weights, gradients and AdamW moments are fp32: 16 bytes per trainable param;
@@ -37,6 +42,7 @@ USABLE_FRACTION = 0.92      # leave room for the allocator and other processes
 CUDA_CONTEXT_GB = 0.8       # CUDA context + cuBLAS workspace
 COMM_BUFFERS_GB = 0.5       # NCCL buffers when a process group exists
 FRAGMENTATION = 1.10        # caching-allocator fragmentation on dynamic memory
+TARGET_HOURS = 2.0          # a run that fits on one GPU and takes longer than this is worth more GPUs
 
 PREFERENCE_ALGOS = {"dpo", "simpo", "orpo"}
 FIVE_D_HF_ARCHS = {"llama", "mistral", "qwen2"}
@@ -164,6 +170,10 @@ class Workload:
     epochs: int = 1
     num_generations: int = 4      # grpo: completions per prompt
     completion_len: int | None = None   # grpo: tokens generated per completion
+    avg_len: float | None = None  # measured tokens per padded row (SFT / preference): time, not memory
+    total_tokens: int | None = None     # measured tokens in the dataset: 5d packs them into blocks
+    needs_5d: bool = False        # custom_transformer MoE / grouped-query attention only run under 5d
+    no_5d: str = ""               # why this run cannot use 5d although the model could
 
     @property
     def rows(self) -> int:
@@ -190,6 +200,10 @@ class Cluster:
             return float(self.tflops)
         hit = match_gpu(self.gpu_name)
         return float(hit[2]) if hit else 100.0
+
+    @property
+    def speed_known(self) -> bool:
+        return bool(self.tflops) or match_gpu(self.gpu_name) is not None
 
     @property
     def bandwidth_gbs(self) -> float:
@@ -343,13 +357,24 @@ def spec_from_params(params: int, name: str = "") -> ModelSpec:
     return spec
 
 
+def find_preset(name: str) -> ModelSpec | None:
+    """The preset of this model. Base and Instruct versions have the same architecture."""
+    n = (name or "").lower()
+    base = re.sub(r"-(instruct|chat|base|it)$", "", n)
+    for candidate in (n, base, base + "-instruct"):
+        if candidate in PRESETS:
+            hit = PRESETS[candidate]
+            return hit if candidate == n else replace(hit, name=name)
+    return None
+
+
 def resolve_spec(model_name: str, model_type: str = "llm", custom_args: dict | None = None,
                  hf_config: dict | None = None) -> ModelSpec:
     if model_type == "custom_transformer":
         return spec_from_custom(custom_args or {})
     if hf_config:
         return spec_from_hf_config(hf_config, model_name)
-    preset = PRESETS.get((model_name or "").lower())
+    preset = find_preset(model_name)
     if preset:
         return preset
     guess = params_from_name(model_name)
@@ -479,9 +504,10 @@ def throughput(m: ModelSpec, w: Workload, lay: Layout, c: Cluster) -> dict:
         dense = 4 * P
     if w.grad_ckpt:
         dense += 2 * P                                  # one extra forward
-    attn = 12 * m.layers * m.hidden * w.seq_len         # SDPA fwd+bwd, causal ~ half of 2*s per token
+    length = w.avg_len if w.avg_len and lay.strategy != "5d" else w.seq_len
+    attn = 12 * m.layers * m.hidden * length            # SDPA fwd+bwd, causal ~ half of 2*s per token
     flops_per_token = dense + attn * 0.5
-    tokens_per_step = w.rows * w.seq_len * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)
+    tokens_per_step = w.rows * length * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)
     mfu = MFU[lay.strategy]
     if lay.strategy == "5d":
         mfu *= lay.micro_batches / (lay.micro_batches + lay.pp - 1)   # pipeline bubble
@@ -508,9 +534,12 @@ def throughput(m: ModelSpec, w: Workload, lay: Layout, c: Cluster) -> dict:
         step_s += gen_s
         out["step_seconds"] = round(step_s, 4)
         out["tokens_per_second"] = round(tokens_per_step / step_s) if step_s else None
-    if w.num_samples:
+    samples = w.num_samples
+    if lay.strategy == "5d" and w.total_tokens:         # 5d packs text into full blocks
+        samples = max(1, w.total_tokens // (w.seq_len + 1))
+    if samples and c.speed_known:                       # no total time for a GPU of unknown speed
         samples_per_step = w.batch_size * lay.dp * (lay.micro_batches if lay.strategy == "5d" else 1)  # prompts for grpo
-        steps = math.ceil(w.num_samples / max(1, samples_per_step)) * max(1, w.epochs)
+        steps = math.ceil(samples / max(1, samples_per_step)) * max(1, w.epochs)
         out["total_steps"] = steps
         out["total_seconds"] = round(steps * step_s, 1)
     return out
@@ -528,6 +557,8 @@ def five_d_eligibility(m: ModelSpec, w: Workload) -> str | None:
     """None if strategy: 5d can run this, else why not."""
     if w.model_type not in {"llm", "custom_transformer"}:
         return f"5d supports llm and custom_transformer, not {w.model_type}"
+    if w.no_5d:
+        return w.no_5d
     if not m.five_d_ready:
         return f"5d loads Hugging Face llama / mistral / qwen2 only (this model is '{m.arch or 'unknown'}')"
     if w.method != "full":
@@ -611,89 +642,157 @@ def min_gpus_5d(m, w, c) -> tuple[int, Layout] | None:
     return None
 
 
-def plan(m: ModelSpec, w: Workload, c: Cluster) -> dict:
-    """Recommend a strategy + layout for this model, workload and cluster."""
+def _hours(o: Option | None) -> float | None:
+    seconds = o.perf.get("total_seconds") if o else None
+    return None if seconds is None else seconds / 3600
+
+
+def _candidates(m, w, c) -> dict[str, Option]:
+    """Every strategy the trainer accepts for this run, as configured, whether it fits or not."""
     N = c.total_gpus
-    options: list[Option] = []
+    out: dict[str, Option] = {}
+    if not w.needs_5d:
+        out["solo"] = _option(m, w, c, Layout("solo", 1, dp=1))
+        if N > 1:
+            out["ddp"] = _option(m, w, c, Layout("ddp", N, dp=N))
+            if w.method != "qlora":
+                out["fsdp"] = _option(m, w, c, Layout("fsdp", N, dp=N))
+    if (N > 1 or w.needs_5d) and five_d_eligibility(m, w) is None:
+        five = _best_5d(m, w, c, N)
+        if five is None and w.needs_5d:     # nothing else can run it: keep the closest layout
+            every = [_option(m, w, c, lay) for lay in five_d_layouts(m, w, N, c.gpus_per_node)]
+            five = min(every, key=lambda o: o.memory["total"]) if every else None
+        if five:
+            out["5d"] = five
+    return out
+
+
+def _simple_pick(cands, c, target_hours, all_gpus) -> Option | None:
+    """One GPU, DDP or FSDP: the simplest that fits and is fast enough. None when none fits."""
+    solo = cands.get("solo")
+    multi = next((o for o in (cands.get("ddp"), cands.get("fsdp")) if o and o.fits), None)
+    if solo and solo.fits and not (all_gpus and c.total_gpus > 1):
+        hours = _hours(solo)
+        return solo if multi is None or (hours is not None and hours <= target_hours) else multi
+    return multi
+
+
+def _gentle_changes(w: Workload) -> list[dict]:
+    """Changes that keep the training method: checkpointing gives the same gradients, a smaller
+    batch per GPU only means more steps. Cheapest first."""
+    out, base = [], {}
+    if not w.grad_ckpt:
+        base = {"grad_ckpt": True}
+        out.append(dict(base))
+    batch = w.batch_size
+    while batch > 1:
+        batch = max(1, batch // 2)
+        out.append({**base, "batch_size": batch})
+    return out
+
+
+def _pick(m, w, c, target_hours, all_gpus) -> tuple[Option | None, dict]:
+    """(recommended option, changes it needs). Simple strategies are tried with every gentle change
+    before 5d, so a too large batch never turns into context or tensor parallelism."""
+    tries = [{}] + _gentle_changes(w)
+    cands = {i: _candidates(m, replace(w, **ch), c) for i, ch in enumerate(tries[:1])}
+    for i, ch in enumerate(tries):
+        cands[i] = cands.get(i) or _candidates(m, replace(w, **ch), c)
+        rec = _simple_pick(cands[i], c, target_hours, all_gpus)
+        if rec:
+            return rec, ch
+    for i, ch in enumerate(tries):
+        five = cands[i].get("5d")
+        if five and five.fits:
+            return five, ch
+    return None, {}
+
+
+def plan(m: ModelSpec, w: Workload, c: Cluster, data: dict | None = None,
+         target_hours: float = TARGET_HOURS, all_gpus: bool = False) -> dict:
+    """Recommend a strategy + layout for this model, workload and cluster.
+
+    data: advisor.measure_data() result, if the dataset was measured.
+    all_gpus: the process count is already fixed (torchrun), so one GPU is not an option.
+    """
+    if data:
+        w = apply_data(w, data)
+    N = c.total_gpus
     notes: list[str] = []
     suggestions: list[dict] = []
 
-    solo = _option(m, w, c, Layout("solo", 1, dp=1))
-    options.append(solo)
-    ddp = fsdp = five = None
-    if N > 1:
-        ddp = _option(m, w, c, Layout("ddp", N, dp=N))
-        options.append(ddp)
-        if w.method != "qlora":
-            fsdp = _option(m, w, c, Layout("fsdp", N, dp=N))
-            options.append(fsdp)
-        else:
-            notes.append("FSDP cannot shard bitsandbytes-quantized layers: QLoRA runs on solo or DDP.")
+    cands = _candidates(m, w, c)
+    options = list(cands.values())
+    one = cands.get("solo") or _option(m, w, c, Layout("solo", 1, dp=1))   # what one GPU would need
+    ddp, fsdp, five = cands.get("ddp"), cands.get("fsdp"), cands.get("5d")
     why_not_5d = five_d_eligibility(m, w)
-    if why_not_5d is None and N > 1:
-        five = _best_5d(m, w, c, N)
-        if five:
-            options.append(five)
+    if N > 1 and w.method == "qlora":
+        notes.append("FSDP cannot shard bitsandbytes-quantized layers: QLoRA runs on solo or DDP.")
 
-    if solo.fits:
-        if N > 1 and ddp and ddp.fits:
-            verdict, rec = "distributed_optional", ddp
-            headline = "Fits on one GPU. Distributed training is optional."
-            speed = solo.perf["step_seconds"] * N / ddp.perf["step_seconds"] if ddp.perf["step_seconds"] else N
-            summary = (f"One GPU needs ~{solo.memory['total']:.1f} GB of {c.gpu_mem_gb:g} GB. "
-                       f"DDP across {N} GPUs keeps a full copy on each and gives ~{speed:.1f}x the throughput.")
-        else:
-            verdict, rec = "single_gpu", solo
-            headline = "Fits on one GPU. No distributed training needed."
-            summary = f"Peak memory is ~{solo.memory['total']:.1f} GB of {c.gpu_mem_gb:g} GB available."
-    elif fsdp and fsdp.fits:
-        verdict, rec = "distributed_required", fsdp
+    rec, changes = _pick(m, w, c, target_hours, all_gpus)
+    w2 = replace(w, **changes)
+    solo2 = _option(m, w2, c, Layout("solo", 1, dp=1)) if changes else one
+    hours_one = _hours(solo2) if solo2.fits else None
+    slow = hours_one is not None and hours_one > target_hours
+    if rec and rec.layout.gpus == 1:
+        verdict = "distributed_optional" if N > 1 and not w.needs_5d else "single_gpu"
+        headline = ("Fits on one GPU. Distributed training is optional." if N > 1 else
+                    "Fits on one GPU. No distributed training needed.")
+        summary = f"Peak memory is ~{rec.memory['total']:.1f} GB of {c.gpu_mem_gb:g} GB available."
+        if N > 1 and hours_one is not None and not slow:
+            summary += f" One GPU finishes in {duration(hours_one * 3600)}, so more GPUs are not needed."
+    elif rec and solo2.fits:
+        verdict = "distributed_recommended" if slow else "distributed_optional"
+        speed = solo2.perf["step_seconds"] * N / rec.perf["step_seconds"] if rec.perf["step_seconds"] else N
+        headline = (f"Fits on one GPU, but is slow there: use {rec.layout.label()}." if slow else
+                    "Fits on one GPU. Distributed training is optional.")
+        how = "DDP" if rec.layout.strategy == "ddp" else rec.layout.label()
+        summary = (f"One GPU needs ~{solo2.memory['total']:.1f} GB of {c.gpu_mem_gb:g} GB. "
+                   f"{how} across {N} GPUs gives ~{speed:.1f}x the throughput.")
+        if slow:
+            summary += f" One GPU would take {duration(hours_one * 3600)}."
+    elif rec and rec.layout.strategy == "fsdp":
+        verdict = "distributed_required"
         headline = f"Needs distributed training: shard with FSDP across {N} GPUs."
-        summary = (f"One GPU would need ~{solo.memory['total']:.1f} GB (limit {c.gpu_mem_gb:g} GB). FSDP shards "
-                   f"weights, gradients and AdamW states, bringing it to ~{fsdp.memory['total']:.1f} GB per GPU.")
-    elif five:
-        verdict, rec = "distributed_required", five
-        headline = f"Needs 5D parallelism: {five.layout.label()}."
-        why = ("activations dominate at this sequence length" if (fsdp and fsdp.memory["activations"] + fsdp.memory["logits"]) > (fsdp.memory["total"] / 2)
-               else "even fully sharded model states do not fit")
-        summary = (f"FSDP on {N} GPUs still needs ~{(fsdp or ddp or solo).memory['total']:.1f} GB per GPU ({why}). "
-                   f"Splitting layers (TP/PP) and the sequence (CP) brings it to ~{five.memory['total']:.1f} GB.")
+        summary = (f"One GPU would need ~{solo2.memory['total']:.1f} GB (limit {c.gpu_mem_gb:g} GB). FSDP shards "
+                   f"weights, gradients and AdamW states, bringing it to ~{rec.memory['total']:.1f} GB per GPU.")
+    elif rec:
+        verdict = "distributed_required"
+        headline = f"Needs 5D parallelism: {rec.layout.label()}."
+        ref = fsdp or ddp or one
+        summary = (f"FSDP on {N} GPUs still needs ~{ref.memory['total']:.1f} GB per GPU ({_why_fsdp_fails(fsdp)}). "
+                   f"Splitting layers (TP/PP) and the sequence (CP) brings it to ~{rec.memory['total']:.1f} GB."
+                   if not w.needs_5d else
+                   f"This model only runs under strategy 5d; {rec.layout.label()} needs ~{rec.memory['total']:.1f} GB per GPU.")
     else:
         verdict = "infeasible"
-        rec = min((o for o in options), key=lambda o: o.memory["total"])
+        rec = min(options or [one], key=lambda o: o.memory["total"])
         headline = f"Does not fit on {N} x {c.gpu_mem_gb:g} GB GPUs as configured."
         summary = (f"The best option ({rec.layout.label()}) still needs ~{rec.memory['total']:.1f} GB per GPU. "
                    "See the suggestions below.")
+    if changes:
+        summary += f" This needs {changes_text(changes, w)}."
 
     # How many GPUs each strategy would need
-    mg_fsdp = min_gpus_fsdp(m, w, c)
+    mg_fsdp = None if w.needs_5d else min_gpus_fsdp(m, w, c)
     mg_5d = min_gpus_5d(m, w, c)
-    min_gpus = {"single": 1 if solo.fits else None, "fsdp": mg_fsdp,
+    min_gpus = {"single": 1 if one.fits and not w.needs_5d else None, "fsdp": mg_fsdp,
                 "5d": mg_5d[0] if mg_5d else None,
                 "5d_layout": mg_5d[1].label() if mg_5d else None}
 
-    # What-if suggestions when it does not fit on this cluster
+    # What-if changes: fixes when nothing fits, simpler or cheaper options otherwise
+    steps = _what_ifs(w, data)
+    alternatives = []
     if verdict == "infeasible":
-        steps = []   # (label, changes), cheapest first; also applied cumulatively below
-        if not w.grad_ckpt:
-            steps.append(("Enable gradient checkpointing", {"grad_ckpt": True}))
-        if w.batch_size > 1:
-            steps.append(("Lower batch size to 1 (more steps, same data)", {"batch_size": 1}))
-        if w.method == "full" and w.model_type in {"llm", "seq2seq", "encoder", "vlm", "vision"}:
-            steps.append(("Switch to LoRA (r=16)", {"method": "lora", "lora_r": 16}))
-        if w.method in {"full", "lora"} and w.model_type in {"llm", "vlm", "seq2seq"}:
-            steps.append(("Switch to QLoRA (4-bit base)", {"method": "qlora", "quant_bits": 4}))
-        if w.seq_len > 1024:
-            steps.append((f"Shorten max_length to {w.seq_len // 2}", {"seq_len": w.seq_len // 2}))
-        for label, changes in steps:
-            sub = plan_core_fit(m, replace(w, **changes), c)
+        for label, change in steps:
+            sub = plan_core_fit(m, replace(w, **change), c)
             if sub:
                 suggestions.append({"change": label, "result": sub["label"], "per_gpu_gb": sub["per_gpu_gb"],
-                                    "workload": changes})
+                                    "workload": change})
         if not suggestions and len(steps) > 1:
             combined, labels = {}, []
-            for label, changes in steps:
-                combined.update(changes)
+            for label, change in steps:
+                combined.update(change)
                 labels.append(label.split(" (")[0])
                 sub = plan_core_fit(m, replace(w, **combined), c)
                 if sub:
@@ -707,11 +806,30 @@ def plan(m: ModelSpec, w: Workload, c: Cluster) -> dict:
         more = [n for n in (mg_fsdp, mg_5d[0] if mg_5d else None) if n and n > N]
         if N == 1 and more:
             headline = f"Needs distributed training: at least {min(more)} GPUs of {c.gpu_mem_gb:g} GB."
+    elif verdict == "distributed_required":
+        for label, change in steps:
+            sub = plan_core_fit(m, replace(w2, **change), c)
+            if sub and _TIER[sub["strategy"]] < _TIER[rec.layout.strategy]:
+                alternatives.append({"change": label, "result": sub["label"], "per_gpu_gb": sub["per_gpu_gb"],
+                                     "workload": {**changes, **change}, "strategy": sub["strategy"], "gpus": sub["gpus"],
+                                     "parallelism": sub["parallelism"]})
+                if sub["strategy"] == "solo":
+                    break                    # the rest only gets more drastic
+    if verdict != "infeasible" and N == 1 and slow and not w.needs_5d:
+        gpus = min(8, max(2, math.ceil(hours_one / target_hours)))
+        faster = throughput(m, w2, Layout("ddp", gpus, dp=gpus), replace(c, gpus_per_node=gpus, nodes=1))
+        alternatives.append({"change": f"Use {gpus} GPUs", "result": f"DDP x{gpus}", "per_gpu_gb": None, "workload": {},
+                             "strategy": "ddp", "gpus": gpus, "parallelism": None,
+                             "total_seconds": faster.get("total_seconds")})
 
     if why_not_5d and N > 1 and verdict in {"distributed_required", "infeasible"}:
         notes.append(f"5D layouts not considered: {why_not_5d}.")
     if m.source == "estimate":
         notes.append("Architecture inferred from the model name; load its config for a sharper estimate.")
+    if w.model_type in {"vision", "yolo", "vlm", "encoder", "seq2seq"}:
+        notes.append("The memory model is built for causal language models; take this as a rough guide.")
+    if not c.speed_known:
+        notes.append(f"The speed of '{c.gpu_name}' is not known, so no total time is given and speed does not count.")
     if w.algorithm in PREFERENCE_ALGOS:
         notes.append(f"{w.algorithm.upper()} forwards chosen + rejected together: {w.rows} sequences per GPU per step.")
     if w.algorithm == "dpo":
@@ -723,38 +841,231 @@ def plan(m: ModelSpec, w: Workload, c: Cluster) -> dict:
     if rec.layout.strategy == "5d" and rec.layout.tp > 1:
         notes.append("Keep TP inside a node (NVLink); PP and DP can cross nodes.")
 
-    return {
+    out = {
         "verdict": verdict,
-        "distributed_needed": verdict in {"distributed_required", "infeasible"} and not solo.fits,
+        "distributed_needed": verdict in {"distributed_required", "infeasible"} and not one.fits,
         "headline": headline,
         "summary": summary,
-        "recommended": rec.to_dict(),
+        "recommended": {**rec.to_dict(), "changes": changes},
         "options": [o.to_dict() for o in options],
         "min_gpus": min_gpus,
         "suggestions": suggestions,
+        "alternatives": alternatives,
         "notes": notes,
+        "one_gpu": {"per_gpu_gb": solo2.memory["total"], "fits": solo2.fits, "hours": hours_one},
+        "target_hours": target_hours,
+        "data": data,
         "model": m.to_dict(),
         "workload": asdict(w),
         "cluster": {**asdict(c), "total_gpus": N, "usable_gb": round(c.usable_bytes / GB, 2),
-                    "peak_tflops": c.peak_tflops},
+                    "peak_tflops": c.peak_tflops, "speed_known": c.speed_known},
     }
+    out["advice"] = explain(out)
+    return out
+
+
+_TIER = {"solo": 0, "ddp": 1, "fsdp": 2, "5d": 3}
+
+
+def _why_fsdp_fails(fsdp: Option | None) -> str:
+    if fsdp and fsdp.memory["activations"] + fsdp.memory["logits"] > fsdp.memory["total"] / 2:
+        return "activations dominate at this sequence length"
+    return "even fully sharded model states do not fit"
+
+
+def _what_ifs(w: Workload, data: dict | None) -> list[tuple[str, dict]]:
+    """(label, workload changes), cheapest first."""
+    steps: list[tuple[str, dict]] = []
+    if not w.grad_ckpt:
+        steps.append(("Enable gradient checkpointing", {"grad_ckpt": True}))
+    if w.batch_size > 1:
+        steps.append(("Lower batch size to 1 (more steps, same data)", {"batch_size": 1}))
+    shorter = (data or {}).get("suggested_max_length")
+    if shorter and shorter < w.seq_len and w.algorithm != "grpo":
+        steps.append((f"Shorten max_length to {shorter} (keeps {data['suggested_keeps_pct']:g}% of the examples whole)",
+                      {"seq_len": shorter}))
+    if w.method == "full" and w.model_type in {"llm", "seq2seq", "encoder", "vlm", "vision"}:
+        steps.append(("Switch to LoRA (r=16)", {"method": "lora", "lora_r": 16}))
+    if w.method in {"full", "lora"} and w.model_type in {"llm", "vlm", "seq2seq"}:
+        steps.append(("Switch to QLoRA (4-bit base)", {"method": "qlora", "quant_bits": 4}))
+    if not shorter and w.seq_len > 1024:
+        steps.append((f"Shorten max_length to {w.seq_len // 2}", {"seq_len": w.seq_len // 2}))
+    return steps
 
 
 def plan_core_fit(m: ModelSpec, w: Workload, c: Cluster) -> dict | None:
     """Smallest-effort option that fits on this cluster, or None."""
     N = c.total_gpus
-    candidates = [Layout("solo", 1, dp=1)]
-    if N > 1 and w.method != "qlora":
-        candidates.append(Layout("fsdp", N, dp=N))
-    for lay in candidates:
-        o = _option(m, w, c, lay)
-        if o.fits:
-            return {"label": lay.label(), "per_gpu_gb": o.memory["total"]}
-    if N > 1 and not five_d_eligibility(m, w):
-        best = _best_5d(m, w, c, N)
-        if best:
-            return {"label": best.layout.label(), "per_gpu_gb": best.memory["total"]}
-    return None
+    candidates = []
+    if not w.needs_5d:
+        candidates.append(Layout("solo", 1, dp=1))
+        if N > 1 and w.method != "qlora":
+            candidates.append(Layout("fsdp", N, dp=N))
+    picked = next((o for o in (_option(m, w, c, lay) for lay in candidates) if o.fits), None)
+    if picked is None and (N > 1 or w.needs_5d) and not five_d_eligibility(m, w):
+        picked = _best_5d(m, w, c, N)
+    if picked is None:
+        return None
+    return {"label": picked.layout.label(), "per_gpu_gb": picked.memory["total"], "strategy": picked.layout.strategy,
+            "gpus": picked.layout.gpus, "parallelism": picked.layout.parallelism_block()}
+
+
+# ---------------------------------------------------------------------------
+# Measured data and plain words
+# ---------------------------------------------------------------------------
+
+def apply_data(w: Workload, data: dict) -> Workload:
+    """The workload with what the dataset really holds (advisor.measure_data).
+
+    Pretraining pads (or packs, under 5d) every row to max_length, so only the number of rows and
+    tokens counts. SFT and preference batches are padded to their longest row: short examples need
+    less memory than max_length suggests."""
+    out = replace(w, num_samples=data.get("rows") or w.num_samples, total_tokens=data.get("total_tokens"))
+    longest = data.get("longest")
+    if not longest:
+        return out
+    if w.algorithm == "sft" or w.algorithm in PREFERENCE_ALGOS:
+        out.seq_len = max(8, min(w.seq_len, longest))
+        if data.get("batch_len"):
+            out.avg_len = min(out.seq_len, data["batch_len"])
+    elif w.algorithm == "grpo":
+        completion = w.completion_len or w.seq_len // 2
+        out.seq_len = min(w.seq_len, longest + completion)
+    return out
+
+
+def duration(seconds: float) -> str:
+    """'about 40 minutes'"""
+    for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= 1.5 * size or (unit == "minute" and seconds >= 60):
+            n = seconds / size
+            text = f"{n:.0f}" if n >= 9.5 or unit == "minute" else f"{n:.1f}".rstrip("0").rstrip(".")
+            return f"about {text} {unit}{'' if text == '1' else 's'}"
+    return "under a minute" if seconds < 60 else "about 1 minute"
+
+
+def gb_text(gb: float) -> str:
+    return f"{gb:.0f} GB" if gb >= 100 else f"{gb:.1f} GB"
+
+
+def changes_text(changes: dict, w: Workload) -> str:
+    parts = []
+    if changes.get("grad_ckpt"):
+        parts.append("gradient checkpointing on")
+    if "batch_size" in changes:
+        parts.append(f"a smaller batch per GPU ({w.batch_size} -> {changes['batch_size']})")
+    return " and ".join(parts)
+
+
+def _layout_words(option: dict) -> tuple[str, str]:
+    """(what it does in plain words, technical name) of a plan option."""
+    n, strategy = option["gpus"], option["strategy"]
+    if strategy == "solo":
+        return "Use one GPU", ""
+    if strategy == "ddp":
+        return f"Use {n} GPUs, each with its own copy of the model", "DDP"
+    if strategy == "fsdp":
+        return f"Split the model across your {n} GPUs", "FSDP"
+    par = option["parallelism"] or {}
+    parts = [text for key, text in (("tp", "each layer"), ("pp", "the stack of layers"), ("cp", "every long sequence"),
+                                    ("ep", "the experts")) if int(par.get(key, 1)) > 1]
+    dims = sum(int(par.get(k, 1)) > 1 for k in ("dp", "tp", "pp", "cp", "ep"))
+    what = " and ".join([", ".join(parts[:-1]), parts[-1]] if len(parts) > 1 else parts)
+    title = f"Split {what} across your {n} GPUs" if parts else f"Use {n} GPUs"
+    return title, (f"{dims}D parallelism, " if dims > 1 else "") + option["label"]
+
+
+def explain(p: dict) -> dict:
+    """The plan for someone who does not know DDP or FSDP. All strings."""
+    c, w, data, rec = p["cluster"], p["workload"], p.get("data"), p["recommended"]
+    N, size = c["total_gpus"], f"{c['gpu_mem_gb']:g} GB"
+    gpus = f"Your GPU has {size}." if N == 1 else f"Each of your {N} GPUs has {size}."
+    noun = "run" if p["model"].get("name") == "custom_transformer" else "model"
+    need = f"Your {noun} needs about {gb_text(p['one_gpu']['per_gpu_gb'])} of GPU memory to train. {gpus}"
+
+    data_text = ""
+    if data and data.get("mean"):
+        what = {"grpo": "prompts", "pretrain": "texts"}.get(w["algorithm"], "examples")
+        approx = "" if data.get("rows_exact", True) else "about "
+        rows = f"{approx}{data['rows']:,} {what}" if data.get("rows") else f"{data['sampled']:,} {what} checked"
+        data_text = (f"Your data: {rows}, about {data['mean']:,.0f} tokens each "
+                     f"(longest{'' if data.get('longest_exact') else ' seen'} {data['longest_seen']:,}).")
+
+    title, tech = _layout_words(rec)
+    fits = p["verdict"] != "infeasible"
+    seconds = rec["perf"].get("total_seconds")
+    detail = f"{gb_text(rec['per_gpu_gb'])} per GPU" + (f", {duration(seconds)}" if seconds else "")
+    why = ""
+    if not fits:
+        title = f"Does not fit on {'this GPU' if N == 1 else f'these {N} GPUs'}"
+        detail = f"The closest option ({rec['label']}) still needs {gb_text(rec['per_gpu_gb'])} per GPU."
+        tech = ""
+    elif rec["strategy"] == "5d":
+        fsdp = next((o for o in p["options"] if o["strategy"] == "fsdp"), None)
+        if fsdp:
+            long_seq = fsdp["memory_gb"]["activations"] + fsdp["memory_gb"]["logits"] > fsdp["per_gpu_gb"] / 2
+            why = (f"Splitting only the model (FSDP) would still need {gb_text(fsdp['per_gpu_gb'])} per GPU, because "
+                   + ("the sequences are very long." if long_seq else "the model is very large."))
+    elif p["verdict"] == "distributed_recommended":
+        why = f"It fits on one GPU, but would take {duration(p['one_gpu']['hours'] * 3600)} there."
+    elif p["verdict"] == "distributed_optional" and rec["strategy"] != "solo":
+        why = "It also fits on one GPU; more GPUs only make it faster."
+    elif p["verdict"] == "distributed_optional" and p["one_gpu"]["hours"] is not None:
+        why = "One GPU is fast enough, so the others can stay free."
+
+    changes = []
+    ch = rec.get("changes") or {}
+    if ch.get("grad_ckpt"):
+        changes.append("Turns gradient checkpointing on: same result, less memory, about 30% slower.")
+    if "batch_size" in ch:
+        changes.append(f"Lowers the batch per GPU from {w['batch_size']} to {ch['batch_size']}: same data, more steps.")
+
+    others = []
+    for alt in p["alternatives"] + (p["suggestions"] if not fits else []):
+        others.append({**alt, **_alternative_words(alt, w)})
+    others_title = ("What would work" if not fits else
+                    "Simpler or cheaper" if p["verdict"] == "distributed_required" else "Faster")
+    tips = list(data.get("tips", [])) if data and rec["strategy"] != "5d" else []    # 5d packs: nothing is cut
+    return {"need": need, "data": data_text, "title": title, "tech": tech, "detail": detail, "why": why,
+            "changes": changes, "fits": fits, "others": others, "others_title": others_title,
+            "tips": tips}
+
+
+def _alternative_words(alt: dict, w: dict) -> dict:
+    ch = alt["workload"]
+    method = ch.get("method") if ch.get("method") != w["method"] else None
+    if method == "lora":
+        title, why = "Train a small add-on instead (LoRA)", "The model itself stays frozen, so the result differs from full training."
+    elif method == "qlora":
+        title, why = "Train a small add-on on a compressed model (QLoRA)", "Needs the least memory; slower, and slightly less exact."
+    elif "seq_len" in ch and len(ch) == 1:
+        title, why = alt["change"], "Longer examples are cut."
+    else:
+        title, why = alt["change"], ""
+    if method and "+" in alt["change"]:
+        title, why = alt["change"], ""
+    where = alt["result"]
+    m = re.fullmatch(r"(FSDP|DDP) x(\d+)", where)
+    where = "1 GPU" if where == "SOLO" else f"{m[2]} GPUs ({m[1]})" if m else where
+    detail = f"fits on {where}" + (f", {gb_text(alt['per_gpu_gb'])} per GPU" if alt.get("per_gpu_gb") else "")
+    if not alt.get("per_gpu_gb"):
+        detail = (f"with {m[1]}" if m else where) + (f", {duration(alt['total_seconds'])}" if alt.get("total_seconds") else "")
+    return {"title": title, "detail": detail[0].upper() + detail[1:], "why": why}
+
+
+def advice_text(p: dict) -> str:
+    """explain(p) as terminal text."""
+    a = p["advice"]
+    lines = [a["need"]] + ([a["data"]] if a["data"] else [])
+    tech = f" ({a['tech']})" if a["tech"] else ""
+    lines += ["", (f"Recommended: {a['title'][0].lower() + a['title'][1:]}{tech}" if a["fits"] else a["title"]),
+              f"   {a['detail']}"]
+    lines += [f"   {t}" for t in ([a["why"]] if a["why"] else []) + a["changes"]]
+    if a["others"]:
+        lines += ["", f"{a['others_title']}:"]
+        lines += [f"   - {o['title']}: {o['detail']}" for o in a["others"]]
+    lines += [f"Tip: {t}" for t in a["tips"]]
+    return "\n".join(lines)
 
 
 def needs_distributed(model: ModelSpec, workload: Workload, cluster: Cluster) -> bool:
@@ -786,6 +1097,19 @@ def workload_from_config(cfg: dict) -> Workload:
         prompt_len = int(algo.get("max_prompt_length") or seq // 2)
         completion = int(algo.get("max_completion_length") or seq - prompt_len)
         seq = min(seq, prompt_len + completion)
+    custom = cfg.get("custom_transformer_args") or {}
+    # what the trainer would refuse under 5d although the model could run there
+    data_name = str((cfg.get("dataset") or {}).get("name") or "").lower()
+    no_5d = ""
+    if str((cfg.get("save_load") or {}).get("export_hf", False)).lower() in {"true", "1"}:
+        no_5d = "save_load.export_hf is for solo, DDP and FSDP (5d writes its own export)"
+    elif model_type == "llm" and data_name.endswith((".json", ".jsonl", ".csv", ".parquet", ".txt")):
+        no_5d = "5d reads Hub datasets only, not local files"
+    elif model_type == "llm" and ((cfg.get("dataset") or {}).get("text_field") or "text") != "text":
+        no_5d = "5d needs a dataset column named 'text'"
+    elif str(dist.get("mixed_precision", True)).lower() in {"true", "1"} and str(dist.get("param_dtype", "")).lower() == "float16":
+        no_5d = "5d supports bfloat16 mixed precision only"
+    needs_5d = model_type == "custom_transformer" and bool(custom.get("num_experts") or custom.get("n_kv_heads"))
     return Workload(
         method=method, algorithm=str(algo.get("type", "pretrain")).lower(), model_type=model_type,
         batch_size=int(tr.get("batch_size", 1)), seq_len=seq,
@@ -795,6 +1119,7 @@ def workload_from_config(cfg: dict) -> Workload:
         micro_batches=int(par.get("micro_batches", 1)), pp_schedule=str(par.get("pp_schedule", "1f1b")),
         epochs=int(tr.get("epochs", 1)),
         num_generations=int(algo.get("num_generations", 4)), completion_len=completion,
+        needs_5d=needs_5d, no_5d=no_5d,
     )
 
 
@@ -820,6 +1145,17 @@ def evaluate_layout(m: ModelSpec, w: Workload, c: Cluster, strategy: str, gpus: 
 # CLI
 # ---------------------------------------------------------------------------
 
+def cluster_from_names(gpu: str | None, gpu_mem: float | None, gpus: int = 1, nodes: int = 1) -> Cluster:
+    """Cluster from what a person typed. A GPU type we do not know needs its memory: guessing it
+    would say "fits" for a card that is too small."""
+    hit = match_gpu(gpu or ("" if gpu_mem else "h100"))
+    if gpu and not hit and not gpu_mem:
+        raise ValueError(f"unknown GPU type '{gpu}'. Give its memory with --gpu-mem, e.g. --gpu-mem 12. "
+                         f"Known types: {', '.join(GPU_CATALOG)}")
+    return Cluster(gpu_mem_gb=gpu_mem or hit[1], gpus_per_node=gpus, nodes=nodes,
+                   gpu_name=gpu or ("H100" if not gpu_mem else "unknown"))
+
+
 def _print_plan(p: dict) -> None:
     m, rec = p["model"], p["recommended"]
     print(f"\nModel     {m['name']}  ({m['params'] / 1e9:.2f}B params, {m['layers']} layers, "
@@ -831,12 +1167,13 @@ def _print_plan(p: dict) -> None:
     print(f"Workload  {w['algorithm']} / {w['method']}, batch {w['batch_size']} x seq {w['seq_len']}, "
           f"grad ckpt {'on' if w['grad_ckpt'] else 'off'}\n")
     print(f"=> {p['headline']}\n   {p['summary']}\n")
+    print("In plain words\n" + "\n".join("   " + line for line in advice_text(p).split("\n")) + "\n")
     print(f"{'option':<34}{'per GPU':>10}{'fits':>6}{'tok/s':>12}")
     for o in p["options"]:
         tps = o["perf"].get("tokens_per_second")
         print(f"{o['label']:<34}{o['per_gpu_gb']:>8.1f}GB{('yes' if o['fits'] else 'no'):>6}{(f'{tps:,}' if tps else '-'):>12}")
     mem = rec["memory_gb"]
-    print(f"\nRecommended: {rec['label']}  ->  " + ", ".join(
+    print(f"\n{'Closest' if p['verdict'] == 'infeasible' else 'Recommended'}: {rec['label']}  ->  " + ", ".join(
         f"{k} {mem[k]:.1f}" for k in ("weights", "gradients", "optimizer", "activations", "logits", "overhead")) + " GB")
     if rec["parallelism"]:
         print("parallelism:", json.dumps(rec["parallelism"]))
@@ -844,7 +1181,7 @@ def _print_plan(p: dict) -> None:
     layout_5d = f" ({mg['5d_layout']})" if mg["5d_layout"] else ""
     print(f"Min GPUs: single={'yes' if mg['single'] else 'no'}, fsdp={mg['fsdp'] or '-'}, "
           f"5d={mg['5d'] or '-'}{layout_5d}")
-    for s in p["suggestions"]:
+    for s in p["suggestions"] + p["alternatives"]:
         extra = f" -> {s['result']}" + (f" at {s['per_gpu_gb']:.1f} GB/GPU" if s.get("per_gpu_gb") else "")
         print(f"  * {s['change']}{extra}")
     for n in p["notes"]:
@@ -864,8 +1201,11 @@ def main(argv=None) -> None:
     ap.add_argument("--no-ckpt", action="store_true", help="gradient checkpointing off")
     ap.add_argument("--gpus", type=int, default=1, help="GPUs per node")
     ap.add_argument("--nodes", type=int, default=1)
-    ap.add_argument("--gpu", default="H100", help="GPU type (h100, a100-80, 4090, ...)")
+    ap.add_argument("--gpu", help="GPU type: h100 (default), a100-80, 4090, ...; another type needs --gpu-mem")
     ap.add_argument("--gpu-mem", type=float, help="GB per GPU (default: from --gpu)")
+    ap.add_argument("--samples", type=int, help="examples in the dataset, for the total time")
+    ap.add_argument("--target-hours", type=float, default=TARGET_HOURS,
+                    help=f"more GPUs are worth it when one takes longer than this (default {TARGET_HOURS:g})")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
 
@@ -887,10 +1227,16 @@ def main(argv=None) -> None:
         m = spec_from_params(int(a.params * 1e9), name)
     else:
         m = resolve_spec(name, w.model_type, cfg.get("custom_transformer_args"))
-    gpu = match_gpu(a.gpu)
-    mem = a.gpu_mem or (gpu[1] if gpu else 80)
-    c = Cluster(gpu_mem_gb=mem, gpus_per_node=a.gpus, nodes=a.nodes, gpu_name=a.gpu)
-    p = plan(m, w, c)
+        if m.source == "estimate":                  # not a preset: read the model's own config.json
+            import advisor
+            m = advisor.model_spec({**cfg, "model_name": name, "model_type": w.model_type})
+    try:
+        c = cluster_from_names(a.gpu, a.gpu_mem, a.gpus, a.nodes)
+    except ValueError as e:
+        ap.error(str(e))
+    if a.samples:
+        w.num_samples = a.samples
+    p = plan(m, w, c, target_hours=a.target_hours)
     print(json.dumps(p, indent=2)) if a.json else _print_plan(p)
 
 
