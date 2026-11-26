@@ -155,6 +155,8 @@ def test_build_args_accepts_auto_but_not_auto_gpus_with_a_fixed_strategy():
     with pytest.raises(ValueError, match="num_gpus: auto needs strategy: auto"):
         build_args(cfg(strategy="fsdp"))
     assert build_args(cfg(strategy="solo")).num_gpus == 1
+    with pytest.raises(ValueError, match="Unsupported strategy=nope"):     # the real problem is named first
+        build_args(cfg(strategy="nope"))
 
 
 # ---- measuring --------------------------------------------------------------

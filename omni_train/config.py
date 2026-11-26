@@ -146,6 +146,8 @@ def build_args(cfg):
     # --------------------------------------------------
     # `auto` is filled in before training (advisor.py); here it only has to be a valid config.
     args.strategy = str(cfg["strategy"]).strip().lower()
+    if args.strategy not in {"auto", "solo", "ddp", "fsdp", "5d"}:
+        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: auto, solo, ddp, fsdp, 5d")
     num_gpus = cfg.get("num_gpus", 1)
     if str(num_gpus).strip().lower() == "auto":
         if args.strategy not in {"auto", "solo"}:
@@ -154,9 +156,6 @@ def build_args(cfg):
     args.num_gpus = int(num_gpus)
     args.checkpoint_dir = cfg["checkpoint_dir"]
     args.save = to_bool(cfg["save"])
-
-    if args.strategy not in {"auto", "solo", "ddp", "fsdp", "5d"}:
-        raise ValueError(f"Unsupported strategy={args.strategy}. Use one of: auto, solo, ddp, fsdp, 5d")
     args.seed = int(cfg.get("seed", 0))
 
     # --------------------------------------------------
