@@ -24,6 +24,7 @@ strategy: auto              ## auto = measure the model, the data and the GPUs, 
 num_gpus: auto              ## with strategy: auto, the most GPUs to use (auto = all); with ddp / fsdp / 5d, the exact number
 checkpoint_dir: checkpoints ## directory to save checkpoints. 
 save: true                  ## whether to save checkpoints. Options: true, false
+seed: 0                     ## shuffle order, new-layer init (LoRA), sampling (GRPO / PPO), dropout: same seed = same run
 
 dist_parameters:
   mixed_precision: true       ## Use Mixed Precision? 

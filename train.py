@@ -8,6 +8,7 @@
 # ----------------------------------------------------------------------
 
 import os
+import random
 from dotenv import load_dotenv 
 import sys
 import time
@@ -52,11 +53,8 @@ transformers.logging.disable_progress_bar()
 # ----------------------------
 
 # ----------------------------------------------------------------------
-# Seed 
+# Seed: set from the config's `seed` at the start of main(), see seed_everything()
 # ----------------------------------------------------------------------
-
-torch.manual_seed(1234)
-torch.cuda.manual_seed_all(1234)
 
 # ----------------------------------------------------------------------
 # Env Variables
@@ -110,9 +108,20 @@ warnings.filterwarnings("ignore", message=".*inputs will be cast.*", category=Us
 EXPERIMENTAL_MODEL_TYPES = {"seq2seq", "encoder", "vision", "yolo", "vlm"}
 
 
+def seed_everything(seed: int) -> None:
+    """The config's `seed` (default 0) drives every random choice: weight init of new layers
+    (LoRA, random init), the solo shuffle, sampling in GRPO / PPO, dropout. 1234 + seed keeps the
+    default identical to the fixed 1234 used before. Same on every rank, so all ranks build the
+    same model; the DistributedSampler gets `seed` too, so the data order follows it."""
+    random.seed(1234 + seed)
+    torch.manual_seed(1234 + seed)
+    torch.cuda.manual_seed_all(1234 + seed)
+
+
 def main(args):
     """Main training loop for distributed training. 
     Initializes distributed environment, loads model and data, and runs training epochs."""
+    seed_everything(args.seed)
     try:
         checkpointer = None
         if args.model_type in EXPERIMENTAL_MODEL_TYPES and int(os.environ.get("RANK", "0")) == 0:
@@ -289,6 +298,7 @@ def main(args):
                 batch_size=args.batch_size,
                 max_length=args.max_length, 
                 model_type=args.model_type,
+                seed=args.seed,
                 vocab_size=getattr(args, "custom_vocab_size", None),
                 custom_max_seq_len=getattr(args, "custom_max_seq_len", None),
                 text_field=getattr(args, "dataset_text_field", "text"),

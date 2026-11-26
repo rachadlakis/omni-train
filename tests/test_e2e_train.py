@@ -122,6 +122,20 @@ IDS = torch.tensor([[1, 9, 10, 11, 12, 13, 14, 2]])
 
 # ----------------------------------------------------------------------
 @pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
+def test_seed_decides_the_run(tiny_model_dir, tmp_path, strategy, nproc):
+    """`seed` reaches the shuffle (solo DataLoader / DistributedSampler) and torch: the same seed gives
+    the same run, another seed another one. It used to be ignored outside post-training and 5d."""
+    data = _write_jsonl(tmp_path / "text.jsonl", _text_rows())
+    runs = {}
+    for tag, seed in (("a", 0), ("b", 0), ("c", 1)):
+        cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=1)
+        cfg["seed"] = seed
+        runs[tag] = _step_losses(_train(cfg, tmp_path, f"seed_{tag}"))
+    assert runs["a"] == runs["b"], "same seed, different run"
+    assert runs["a"] != runs["c"], "seed changed nothing"
+
+
+@pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
 def test_resume_keeps_tied_embeddings(tmp_path, strategy, nproc):
     """Most small LLMs (OPT, Qwen2.5-0.5B, Llama-3.2-1B) share the input embedding and the LM head.
     A resume must build the same tied model: untying it adds a parameter, so the saved AdamW state

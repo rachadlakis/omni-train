@@ -141,7 +141,7 @@ def _rank0_first():
         dist_barrier(local_rank)  # release the other ranks
 
 
-def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, world_size, batch_size, max_length, model_type="llm", **kwargs):
+def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, world_size, batch_size, max_length, model_type="llm", seed=0, **kwargs):
     try:
         # ---------------------------------------------------------------
         # Synthetic dataloader for the custom transformer (no HF dataset)
@@ -168,6 +168,7 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
                     num_replicas=world_size, 
                     rank=rank, 
                     shuffle=True,
+                    seed=seed,
                     drop_last=True,  # drop last to ensure even batches across ranks
                 )
                 shuffle = False
@@ -298,6 +299,7 @@ def get_dataloader(dataset, dataset_full_name, dataset_split, tokenizer, rank, w
                 num_replicas=world_size,
                 rank=rank,
                 shuffle=True,
+                seed=seed,       # config `seed`: the shuffle order
                 drop_last=True,
             )
             shuffle = False
