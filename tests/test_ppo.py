@@ -14,7 +14,7 @@ from omni_train.post_training.grpo import completion_mask_from
 from omni_train.post_training.ppo import PPOObjective, normalize_advantages
 from omni_train.post_training.reward_model import RewardModel, parse_reward_model
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 CPU = torch.device("cpu")
 

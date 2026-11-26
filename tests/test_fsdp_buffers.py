@@ -13,8 +13,8 @@ import torch.nn as nn
 from accelerate import init_empty_weights
 from transformers import AutoModel, AutoModelForCausalLM, BertConfig, LlamaConfig
 
-from omni_train import distributed_utils
-from omni_train.distributed_utils import _remove_seed_dir, _restore_buffers, _snapshot_buffers
+from omni_train.strategies import fsdp as fsdp_strategy
+from omni_train.strategies.fsdp import _remove_seed_dir, _restore_buffers, _snapshot_buffers
 
 
 def _llama3_config():
@@ -120,7 +120,7 @@ def test_buffer_without_snapshot_falls_back_to_zeros():
 
 
 def test_remove_seed_dir_only_removes_own_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(distributed_utils, "dist_barrier", lambda local_rank: None)
+    monkeypatch.setattr(fsdp_strategy, "dist_barrier", lambda local_rank: None)
     root = tmp_path / "pretrained_seed"
     mine = root / "fsdp" / "dcp_api" / "1000"
     other = root / "fsdp" / "dcp_api" / "2000"   # a concurrent run's seed
@@ -134,7 +134,7 @@ def test_remove_seed_dir_only_removes_own_run(tmp_path, monkeypatch):
 
 
 def test_remove_seed_dir_prunes_empty_parents(tmp_path, monkeypatch):
-    monkeypatch.setattr(distributed_utils, "dist_barrier", lambda local_rank: None)
+    monkeypatch.setattr(fsdp_strategy, "dist_barrier", lambda local_rank: None)
     root = tmp_path / "pretrained_seed"
     mine = root / "fsdp" / "dcp_api" / "1000"
     mine.mkdir(parents=True)
@@ -144,7 +144,7 @@ def test_remove_seed_dir_prunes_empty_parents(tmp_path, monkeypatch):
 
 
 def test_remove_seed_dir_non_zero_rank_keeps_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(distributed_utils, "dist_barrier", lambda local_rank: None)
+    monkeypatch.setattr(fsdp_strategy, "dist_barrier", lambda local_rank: None)
     mine = tmp_path / "pretrained_seed" / "1000"
     mine.mkdir(parents=True)
     _remove_seed_dir(str(mine), str(tmp_path / "pretrained_seed"), local_rank=1, rank=1)

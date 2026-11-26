@@ -1,6 +1,6 @@
-"""Tests for build_args config validation guards in utils.py."""
+"""Tests for build_args config validation guards in omni_train/config.py."""
 import pytest
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 
 # ------------------------------------------------------------------
@@ -211,7 +211,7 @@ _CONFIGS = sorted(_glob.glob(_os.path.join(_os.path.dirname(_os.path.dirname(__f
 @pytest.mark.parametrize("path", _CONFIGS, ids=[_os.path.basename(p) for p in _CONFIGS])
 def test_example_config_is_valid(path):
     import warnings
-    from omni_train.utils import build_args
+    from omni_train.config import build_args
     with open(path) as f, warnings.catch_warnings():
         warnings.simplefilter("ignore")
         build_args(_yaml.safe_load(f))

@@ -26,29 +26,20 @@ from omni_train import advisor
 from omni_train.model import Transformer 
 from omni_train.checkpoint import Checkpointer
 from omni_train.data import get_dataloader
-from omni_train.utils import (
-    plot_losses_in_terminal,
-    print_config,
-    estimate_training_time,
-)
-from omni_train.distributed_utils import (
-    BACKEND,
-    print_on_rank_0,
-    print_banner_on_rank_0,
-    print_on_all_ranks,
+from omni_train.config import build_args, load_config
+from omni_train.console import (
     gpu_memory_snapshot,
-    print_training_vram_estimate,
-    setup_dist_process_group,
-    cleanup,
-    apply_solo,
-    apply_ddp,
-    apply_fsdp,
-    save_checkpoint,
-    restore_optimizer_state,
+    plot_losses_in_terminal,
+    print_banner_on_rank_0,
+    print_config,
+    print_on_all_ranks,
+    print_on_rank_0,
 )
+from omni_train.distributed import BACKEND, cleanup, dist_barrier, setup_dist_process_group
+from omni_train.estimates import estimate_training_time, print_training_vram_estimate
+from omni_train.optim import lr_multiplier, restore_optimizer_state
+from omni_train.strategies import apply_ddp, apply_fsdp, apply_solo, save_checkpoint
 import wandb
-
-from omni_train.utils import build_args, load_config, dist_barrier, lr_multiplier
 
 import transformers
 transformers.logging.disable_progress_bar()
@@ -332,7 +323,7 @@ def main(args):
             )
             print_on_rank_0(rank,f"Estimated time | total≈{time_est['human_readable']} | total minutes≈{time_est['total_minutes']} min | total hours≈{time_est['total_hours']} h ","⏱️",)
         
-        # Mixed precision for solo/DDP: weights stay fp32 (see distributed_utils._load_dtype),
+        # Mixed precision for solo/DDP: weights stay fp32 (see strategies.common._load_dtype),
         # forward/backward run under autocast. FSDP gets this from its MixedPrecisionPolicy.
         amp_dtype = DTYPE_MAP.get(args.param_dtype, torch.float32)
         use_autocast = args.mixed_precision and args.strategy != "fsdp" and amp_dtype != torch.float32

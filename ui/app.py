@@ -18,7 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import importlib.util
 from collections import deque
 from pathlib import Path
 from dataclasses import asdict, replace
@@ -621,13 +620,12 @@ def _normalize_gpu_type(gpu_name: str) -> str:
 
 
 def _load_mini_utils_module(project_root: Path):
-    utils_path = project_root / "omni_train" / "utils.py"
-    spec = importlib.util.spec_from_file_location("fsdp_mini_utils", str(utils_path))
-    if not spec or not spec.loader:
-        raise RuntimeError(f"Failed to load utils module from {utils_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """build_args and the time / VRAM estimates, as one namespace (they live in two modules)."""
+    from types import SimpleNamespace
+
+    from omni_train import config, estimates
+    return SimpleNamespace(build_args=config.build_args, estimate_training_time=estimates.estimate_training_time,
+                           estimate_training_vram=estimates.estimate_training_vram)
 
 
 
@@ -635,7 +633,7 @@ def _load_mini_utils_module(project_root: Path):
 async def list_checkpoints(dir: str = "checkpoints"):
     """List checkpoints under the configured checkpoint directory.
 
-    Layout (per save_checkpoint in distributed_utils.py):
+    Layout (per save_checkpoint in omni_train/strategies/common.py):
       <dir>/solo/<ts>[<tag>].pt                            (file)
       <dir>/ddp/<ts>[<tag>].pt                             (file)
       <dir>/fsdp/dcp_api/<ts>[<tag>]/                      (dir)

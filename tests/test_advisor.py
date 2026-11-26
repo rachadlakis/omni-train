@@ -14,7 +14,7 @@ import yaml
 from omni_train import advisor
 from omni_train import planner as P
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LLAMA = "meta-llama/Llama-3.1-8B"

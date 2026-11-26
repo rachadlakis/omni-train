@@ -74,7 +74,7 @@ class Checkpointer:
         # method. set_model_state_dict uses copy_() internally, which requires real CUDA
         # storage. Calling it on a meta-device model deadlocks silently (NCCL initiates the
         # broadcast but copy_() into a meta tensor has no storage to write into).
-        # apply_fsdp in distributed_utils.py handles this with model.to_empty(device=device)
+        # apply_fsdp in strategies/fsdp.py handles this with model.to_empty(device=device)
         # before every load_model() call on a PATH-3 FSDP model.
         if self.dcp_api:
             import torch.distributed as dist

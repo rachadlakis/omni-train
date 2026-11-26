@@ -7,8 +7,8 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
-from omni_train.distributed_utils import print_on_rank_0, print_on_all_ranks
-from omni_train.utils import dist_barrier
+from omni_train.console import print_on_rank_0, print_on_all_ranks
+from omni_train.distributed import dist_barrier
 
 
 # ----------------------------------------------------------------------

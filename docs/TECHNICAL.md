@@ -7,7 +7,7 @@ For high-level setup and usage see the [README](../README.md). For a beginner-fr
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-2. [Distributed Setup](#2-distributed-setup-distributed_utilspy)
+2. [Distributed Setup](#2-distributed-setup-omni_traindistributedpy-and-omni_trainstrategies)
 3. [DDP Path](#3-ddp-path)
 4. [FSDP Path](#4-fsdp-path)
 5. [Checkpointing](#5-checkpointing-checkpointpy)
@@ -35,12 +35,12 @@ launch.sh  ──────────────►  torchrun / python
                                train.py  (main)
                           ┌────────┴────────┐
                           ▼                 ▼
-              distributed_utils.py      data.py
-              (DDP / FSDP setup)     (tokenize, sampler)
+        strategies/ + distributed.py    data.py
+           (solo / DDP / FSDP setup)    (tokenize, sampler)
                           │
                     ┌─────┴─────┐
                     ▼           ▼
-              checkpoint.py   utils.py
+              checkpoint.py   console.py
               (save/load)     (plots, formatting)
 ```
 
@@ -50,7 +50,7 @@ launch.sh  ──────────────►  torchrun / python
 
 ---
 
-## 2. Distributed Setup (`omni_train/distributed_utils.py`)
+## 2. Distributed Setup (`omni_train/distributed.py` and `omni_train/strategies/`)
 
 `torchrun` injects `RANK`, `LOCAL_RANK`, and `WORLD_SIZE` as environment variables before Python starts.
 

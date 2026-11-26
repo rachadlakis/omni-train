@@ -103,7 +103,9 @@ python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 2 --dry-ru
 
 ### Layout
 
-Library code lives in the `omni_train/` package; only `train.py` (entry point), `config.yaml` and `pyproject.toml` sit at the root. Import with the package name (`from omni_train.utils import build_args`, `from omni_train import planner`), never bare `utils`/`data`/`model`: `ui/`, `scripts/` and `tests/` run with the repo root on `sys.path` (cwd, `PYTHONPATH=ROOT` in the subprocess tests). CLIs: `python -m omni_train.planner`, `python -m omni_train.advisor` (or `omni-plan` / `omni-advise` after `pip install -e .`). Pytest settings and markers are in `pyproject.toml`.
+Library code lives in the `omni_train/` package; only `train.py` (entry point), `config.yaml` and `pyproject.toml` sit at the root. Import with the package name (`from omni_train.config import build_args`, `from omni_train import planner`), never bare `utils`/`data`/`model`: `ui/`, `scripts/` and `tests/` run with the repo root on `sys.path` (cwd, `PYTHONPATH=ROOT` in the subprocess tests). CLIs: `python -m omni_train.planner`, `python -m omni_train.advisor` (or `omni-plan` / `omni-advise` after `pip install -e .`). Pytest settings and markers are in `pyproject.toml`.
+
+Modules: `config` (load_config, Args, build_args and its checks), `console` (rank-aware prints, banners, config table, loss plot), `distributed` (backend, process group setup/cleanup, dist_barrier), `optim` (LR schedule, restore AdamW on resume), `estimates` (startup VRAM/time estimates; the planner is `planner`), `strategies/` (`common`: model classes, dtypes, LoRA/QLoRA, layer detection, save_checkpoint; `solo`, `ddp`, `fsdp`: one apply_* each), plus `data`, `checkpoint`, `export`, `model`, `planner`, `advisor`, `parallelism/` (5d) and `post_training/`. Monkeypatch a name where it is used: `_remove_seed_dir` calls `omni_train.strategies.fsdp.dist_barrier`.
 
 ### Configuration Flow
 
@@ -114,13 +116,13 @@ config.yaml (or CONFIG_PATH env var)
 advisor.resolve_*()                        # only strategy: auto → a concrete strategy, num_gpus, parallelism
     │
     ▼
-utils.load_config() → utils.build_args()   # parses + validates YAML into Args dataclass
+config.load_config() → config.build_args()   # parses + validates YAML into Args dataclass
     │
     ▼
 train.py main()
     ├── strategy: 5d → parallelism.trainer.train_5d(args)   # own model + loop, returns
     ├── algorithm: sft|dpo|simpo|orpo|grpo|ppo → post_training data + objective (same model setup/loop)
-    ├── distributed_utils.apply_solo/ddp/fsdp()   # model setup
+    ├── strategies.apply_solo/ddp/fsdp()   # model setup
     ├── data.get_dataloader()                       # HF dataset + DistributedSampler
     └── checkpoint.Checkpointer                    # FSDP save/load
 ```
@@ -176,7 +178,7 @@ checkpoints/
 
 Checkpoint folders are named with Unix millisecond timestamps. PEFT/quantization runs append a tag (e.g., `__lora_q4`). `get_latest_checkpoint_folder()` picks the numerically largest timestamp prefix.
 
-**Resume (solo/DDP):** `distributed_utils.restore_optimizer_state` reloads the AdamW moments and resets each group's `lr`/`initial_lr`/`weight_decay` to the new config, because the LR schedule restarts on resume. Older weights-only `.pt` files still load (AdamW starts fresh, with a notice). FSDP restores via `Checkpointer.load_optim`.
+**Resume (solo/DDP):** `optim.restore_optimizer_state` reloads the AdamW moments and resets each group's `lr`/`initial_lr`/`weight_decay` to the new config, because the LR schedule restarts on resume. Older weights-only `.pt` files still load (AdamW starts fresh, with a notice). FSDP restores via `Checkpointer.load_optim`.
 
 **HF export** (`omni_train/export.py`, `save_load.export_hf: true`, `export_dtype` bfloat16 | float16 | float32): runs after training on every rank. Solo/DDP merge LoRA in place on the finished model. FSDP all-gathers the full state dict to rank 0 (`get_model_state_dict(full_state_dict, cpu_offload)`), which rebuilds the model on CPU (`rebuild_from_state_dict`) and merges. Quantized runs export only `adapter/`; `scripts/merge_lora.py` merges it into the full-precision base. Not for 5d (it has its own `<ts>/hf/` export) or `custom_transformer`.
 
@@ -229,7 +231,7 @@ For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables
 
 ### Layer Detection for FSDP Sharding
 
-`get_model_layers(model)` in `omni_train/distributed_utils.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
+`get_model_layers(model)` in `omni_train/strategies/common.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
 
 ### Non-Persistent Buffers (RoPE `inv_freq`, `position_ids`)
 

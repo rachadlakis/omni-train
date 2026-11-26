@@ -439,10 +439,14 @@ omni-train/
 ├── config.yaml             # active configuration
 ├── pyproject.toml          # package metadata, CLI entry points, pytest settings
 ├── omni_train/             # the library: everything train.py, the UI and the tests import
-│   ├── distributed_utils.py    # solo / ddp / fsdp model setup
+│   ├── strategies/             # solo / ddp / fsdp model setup (one module each, + common)
 │   ├── checkpoint.py           # distributed checkpointing
 │   ├── data.py                 # dataloaders per model type
-│   ├── utils.py                # config parsing + validation
+│   ├── config.py               # config parsing + validation (build_args)
+│   ├── distributed.py          # process groups: backend, setup, barriers
+│   ├── console.py              # rank-aware printing, config table, loss plot
+│   ├── optim.py                # LR schedule, optimizer state on resume
+│   ├── estimates.py            # VRAM and time estimates printed at startup
 │   ├── model.py                # custom_transformer toy model
 │   ├── export.py               # Hugging Face export (+ LoRA merge)
 │   ├── planner.py              # capacity planner: is distributed training needed?

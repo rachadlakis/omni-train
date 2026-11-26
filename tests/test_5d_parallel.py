@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(ROOT, "tests", "dist5d_worker.py")
 sys.path.insert(0, ROOT)
 
-from omni_train.utils import build_args  # noqa: E402
+from omni_train.config import build_args  # noqa: E402
 from tests.dist_device import dist_env, require_ranks  # noqa: E402
 
 STEPS = 3

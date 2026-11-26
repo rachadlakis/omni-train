@@ -16,7 +16,7 @@ from omni_train.post_training.data import (
 )
 from omni_train.post_training.objectives import PreferenceObjective, SFTObjective
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 
 # ----------------------------------------------------------------------

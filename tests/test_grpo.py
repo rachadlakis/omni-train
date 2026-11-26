@@ -12,7 +12,7 @@ from omni_train.post_training import rewards as R
 from omni_train.post_training.data import collate_grpo, split_grpo_row, tokenize_grpo
 from omni_train.post_training.grpo import GRPOObjective, build_rollout, completion_mask_from
 from tests.post_training_helpers import make_tokenizer, tiny_llama
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 
 # ----------------------------------------------------------------------

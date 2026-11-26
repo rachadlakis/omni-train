@@ -125,7 +125,7 @@ def _apply_overrides(cfg: dict, overrides: dict) -> dict:
 def _find_checkpoint_path(tmpdir: str, strategy: str, distribute_api: str) -> str:
     """Return the resume_path for the checkpoint produced in the previous phase.
 
-    Checkpoint locations (set by save_checkpoint in distributed_utils.py):
+    Checkpoint locations (set by save_checkpoint in omni_train/strategies/common.py):
       solo  → {tmpdir}/solo/{timestamp}[__tag].pt
       ddp   → {tmpdir}/ddp/{timestamp}[__tag].pt
       fsdp  → {tmpdir}/fsdp/{dcp_api|dtensor_api}/{latest_timestamp}/

@@ -65,7 +65,7 @@ def main():
         named = lambda: model.module.named_parameters()  # noqa: E731
     else:
         from torch.distributed._composable.fsdp import fully_shard
-        from omni_train.distributed_utils import get_model_layers
+        from omni_train.strategies.common import get_model_layers
         for stack, _ in get_model_layers(model):  # same per-layer sharding as apply_fsdp
             for layer in stack:
                 fully_shard(layer)

@@ -108,7 +108,7 @@ class TestExport:
         assert os.path.exists(os.path.join(out, "tokenizer_config.json"))
 
     def test_export_config_rules(self, cfg):
-        from omni_train.utils import build_args
+        from omni_train.config import build_args
         cfg["save_load"]["export_hf"] = True
         assert build_args(cfg).export_hf
         cfg["save_load"]["export_dtype"] = "int8"
@@ -122,7 +122,7 @@ class TestExport:
 
 class TestOptimizerResume:
     def _setup(self, tmp_path, lr=1e-3):
-        from omni_train.distributed_utils import restore_optimizer_state
+        from omni_train.optim import restore_optimizer_state
         model = torch.nn.Linear(4, 3)
         opt = torch.optim.AdamW(model.parameters(), lr=lr)
         model(torch.randn(2, 4)).sum().backward()

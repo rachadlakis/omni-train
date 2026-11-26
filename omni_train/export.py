@@ -57,7 +57,7 @@ def full_state_dict(model, strategy):
 def rebuild_from_state_dict(module, state_dict, model_type: str):
     """A CPU copy of `module` (HF model or PeftModel) holding `state_dict`, with LoRA
     merged. Used for FSDP, whose live parameters are sharded across ranks."""
-    from omni_train.distributed_utils import _get_auto_model_class
+    from omni_train.strategies.common import _get_auto_model_class
     config = copy.deepcopy(_base_config(module))
     model = _get_auto_model_class(model_type).from_config(config, dtype=torch.float32)
     if _is_peft(module):
@@ -80,7 +80,7 @@ def rebuild_from_state_dict(module, state_dict, model_type: str):
 def export_hf(model, tokenizer, args, rank, strategy, out_dir=None):
     """Write the HF export. Call on EVERY rank (FSDP gathers collectively).
     Returns the output folder (rank 0) or None."""
-    from omni_train.distributed_utils import _checkpoint_run_tag
+    from omni_train.strategies.common import _checkpoint_run_tag
     if out_dir is None:
         out_dir = os.path.join(args.checkpoint_dir, "hf", f"{int(time.time() * 1000)}{_checkpoint_run_tag(args)}")
     module = _unwrap(model, strategy)

@@ -20,7 +20,7 @@ import torch.distributed as dist  # noqa: E402
 import yaml  # noqa: E402
 
 from omni_train.parallelism.trainer import FiveDRun  # noqa: E402
-from omni_train.utils import build_args  # noqa: E402
+from omni_train.config import build_args  # noqa: E402
 
 
 def main():

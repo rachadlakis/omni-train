@@ -4,7 +4,7 @@ of config.yaml variables (model/dataset held fixed via the shared cfg fixture).
 """
 import copy
 import pytest
-from omni_train.utils import build_args
+from omni_train.config import build_args
 
 
 # ======================================================================

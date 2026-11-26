@@ -312,7 +312,7 @@ def make_loader(dataset, collate, rank, world_size, batch_size, shuffle=True, dr
 def get_post_training_data(args, tokenizer, rank, world_size):
     """Returns (dataset, collate_fn, training DataLoader)."""
     from omni_train.data import _rank0_first
-    from omni_train.distributed_utils import print_on_rank_0
+    from omni_train.console import print_on_rank_0
     with _rank0_first():  # rank 0 fills the HF cache first
         raw = load_raw(args.dataset, args.dataset_full_name, args.dataset_split)
         print_on_rank_0(rank, f"Raw dataset: {len(raw)} rows | columns={raw.column_names}", "📂")

@@ -79,7 +79,8 @@ class FiveDRun:
 
     # ------------------------------------------------------------------ setup
     def setup(self):
-        from omni_train.distributed_utils import print_banner_on_rank_0, print_on_rank_0, setup_dist_process_group
+        from omni_train.console import print_banner_on_rank_0, print_on_rank_0
+        from omni_train.distributed import setup_dist_process_group
 
         a = self.args
         _ensure_dist_env()
@@ -192,8 +193,9 @@ class FiveDRun:
 
     # ------------------------------------------------------------------- loop
     def train(self):
-        from omni_train.distributed_utils import cleanup, print_banner_on_rank_0
-        from omni_train.utils import lr_multiplier, plot_losses_in_terminal
+        from omni_train.console import plot_losses_in_terminal, print_banner_on_rank_0
+        from omni_train.distributed import cleanup
+        from omni_train.optim import lr_multiplier
 
         a, pc = self.args, self.pc
         steps = self.sampler.steps_per_epoch

@@ -307,7 +307,7 @@ def apply_option(cfg: dict, option: dict) -> dict:
         training["batch_size"] = int(changes["batch_size"])
     dist = out.get("dist_parameters") or {}
     if out["strategy"] == "fsdp" and _truthy(dist.get("mixed_precision", False)) and dist.get("param_dtype"):
-        dist["output_dtype"] = dist["param_dtype"]      # FSDP needs one dtype (utils._check_fsdp_dtypes)
+        dist["output_dtype"] = dist["param_dtype"]      # FSDP needs one dtype (config._check_fsdp_dtypes)
     return out
 
 
