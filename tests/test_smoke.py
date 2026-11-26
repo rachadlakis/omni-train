@@ -6,7 +6,7 @@ Run with:
     python -m pytest -m smoke -v
     python -m pytest -m smoke -v -k "fsdp"   # filter by name
 
-These tests are EXCLUDED from the default pytest run (`-m "not smoke"` in pytest.ini).
+These tests are EXCLUDED from the default pytest run (`-m "not smoke"` in pyproject.toml).
 Requirements:
   • At least one GPU (CUDA) — tests are skipped automatically on CPU-only machines.
   • HuggingFace access to facebook/opt-125m (public, no token needed).
