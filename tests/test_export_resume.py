@@ -33,7 +33,7 @@ def _logits(model):
 class TestExport:
     def test_rebuild_from_state_dict_merges_lora(self):
         """FSDP path: rank 0 rebuilds the model from the gathered state dict."""
-        from export import rebuild_from_state_dict
+        from omni_train.export import rebuild_from_state_dict
         tok = make_tokenizer()
         peft = _lora(tiny_llama(len(tok)))
         merged = rebuild_from_state_dict(peft, {k: v.clone() for k, v in peft.state_dict().items()}, "llm")
@@ -41,7 +41,7 @@ class TestExport:
         torch.testing.assert_close(_logits(merged.eval()), _logits(peft), atol=1e-5, rtol=1e-5)
 
     def test_rebuild_rejects_wrong_state_dict(self):
-        from export import rebuild_from_state_dict
+        from omni_train.export import rebuild_from_state_dict
         tok = make_tokenizer()
         model = tiny_llama(len(tok))
         sd = model.state_dict()
@@ -55,7 +55,7 @@ class TestExport:
         """Missing lm_head: fine when tied to the embedding, an error (not a random
         output layer) when it is its own weight."""
         from transformers import LlamaForCausalLM
-        from export import rebuild_from_state_dict
+        from omni_train.export import rebuild_from_state_dict
         config = tiny_llama(len(make_tokenizer())).config
         config.tie_word_embeddings = tied
         model = LlamaForCausalLM(config).eval()
@@ -72,7 +72,7 @@ class TestExport:
     @pytest.mark.parametrize("peft", [False, True])
     def test_export_solo(self, tmp_path, peft):
         from transformers import AutoModelForCausalLM
-        from export import export_hf
+        from omni_train.export import export_hf
         tok = make_tokenizer()
         model = tiny_llama(len(tok)).eval()
         if peft:
@@ -108,7 +108,7 @@ class TestExport:
         assert os.path.exists(os.path.join(out, "tokenizer_config.json"))
 
     def test_export_config_rules(self, cfg):
-        from utils import build_args
+        from omni_train.utils import build_args
         cfg["save_load"]["export_hf"] = True
         assert build_args(cfg).export_hf
         cfg["save_load"]["export_dtype"] = "int8"
@@ -122,7 +122,7 @@ class TestExport:
 
 class TestOptimizerResume:
     def _setup(self, tmp_path, lr=1e-3):
-        from distributed_utils import restore_optimizer_state
+        from omni_train.distributed_utils import restore_optimizer_state
         model = torch.nn.Linear(4, 3)
         opt = torch.optim.AdamW(model.parameters(), lr=lr)
         model(torch.randn(2, 4)).sum().backward()

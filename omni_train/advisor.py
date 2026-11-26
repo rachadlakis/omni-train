@@ -1,8 +1,8 @@
 """Which strategy should this run use? `strategy: auto`, and the answer in plain words.
 
-    python advisor.py --config config.yaml                    # this machine's GPUs, the real dataset
-    python advisor.py --config config.yaml --gpu h100 --gpus 8    # some other machine
-    python advisor.py --config config.yaml --write run.yaml   # the same config with `auto` filled in
+    python -m omni_train.advisor --config config.yaml                    # this machine's GPUs, the real dataset
+    python -m omni_train.advisor --config config.yaml --gpu h100 --gpus 8    # some other machine
+    python -m omni_train.advisor --config config.yaml --write run.yaml   # the same config with `auto` filled in
 
 planner.py does the arithmetic; this file supplies what it needs to know:
   * detect_cluster(): the GPUs of this machine (the smallest one counts);
@@ -30,7 +30,7 @@ import random
 import sys
 import threading
 
-import planner
+from omni_train import planner
 
 SAMPLE = 500                     # rows tokenised
 SCAN = 20_000                    # rows whose text length is read, to find the longest ones
@@ -111,13 +111,13 @@ def model_spec(cfg: dict, token: str | None = None) -> planner.ModelSpec:
 # ---------------------------------------------------------------------------
 
 def _is_local(name: str) -> bool:
-    from data import LOCAL_FORMATS
+    from omni_train.data import LOCAL_FORMATS
     return os.path.splitext(str(name))[1].lower() in LOCAL_FORMATS
 
 
 def _open_rows(name, subset, split, token):
     """(indexable or list of rows, total row count or None, every row is here)."""
-    from data import load_any_dataset
+    from omni_train.data import load_any_dataset
     if _is_local(name) or os.environ.get("HF_HUB_OFFLINE") == "1":
         ds = load_any_dataset(name, subset, split)
         return ds, len(ds), True
@@ -164,7 +164,7 @@ def _round_up(n: int, step: int = 64) -> int:
 
 def _row_lengths(kind: str, cfg: dict, tokenizer):
     """row -> list of token lengths before max_length cuts them (one per sequence), [] = row is dropped."""
-    from post_training import data as ptd
+    from omni_train.post_training import data as ptd
     algo = cfg.get("algorithm") or {}
     if kind == "sft":
         return lambda row: [len(ptd.tokenize_sft(row, tokenizer, 10 ** 9)["input_ids"])]

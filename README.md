@@ -21,7 +21,7 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 - **Distributed checkpointing** — both DCP and DTensor APIs.
 - **Multi-modality** — LLMs, seq2seq, encoders, image classification, object detection, and vision-language models.
 - **SLURM multi-node** — batch script and Python launcher included.
-- **Capacity planner** — `planner.py` answers “is distributed training needed?”: per-GPU memory for solo / DDP / FSDP / 5D, a recommended layout, the minimum GPU count and fixes when nothing fits.
+- **Capacity planner** — `omni_train/planner.py` answers “is distributed training needed?”: per-GPU memory for solo / DDP / FSDP / 5D, a recommended layout, the minimum GPU count and fixes when nothing fits.
 - **Training console** — a browser UI and REST API to plan, queue and monitor pretraining, SFT and preference runs (5D included).
 
 ---
@@ -223,8 +223,8 @@ See [`docs/TECHNICAL.md`](docs/TECHNICAL.md) for the full configuration schema.
 ### Automatic (`strategy: auto`)
 
 ```bash
-python advisor.py --config config.yaml                        # what would it choose here, and why?
-python advisor.py --config config.yaml --gpu h100 --gpus 8    # ... and on another machine?
+python -m omni_train.advisor --config config.yaml                        # what would it choose here, and why?
+python -m omni_train.advisor --config config.yaml --gpu h100 --gpus 8    # ... and on another machine?
 ```
 
 Two questions decide: **does it fit in memory** (model, training method, batch, sequence length) and **is it fast
@@ -379,11 +379,11 @@ uvicorn ui.app:app --host 0.0.0.0 --port 8787
 ### Is distributed training needed?
 
 ```bash
-python planner.py --model meta-llama/Llama-3.1-8B --gpus 8 --gpu h100 --seq 4096
-python planner.py --config configs/llm_dpo_lora_single_gpu.yaml --gpu 4050
+python -m omni_train.planner --model meta-llama/Llama-3.1-8B --gpus 8 --gpu h100 --seq 4096
+python -m omni_train.planner --config configs/llm_dpo_lora_single_gpu.yaml --gpu 4050
 ```
 
-`advisor.py` (above) answers for your own GPUs and data; `planner.py` answers what-if questions for any model and
+`omni_train/advisor.py` (above) answers for your own GPUs and data; `omni_train/planner.py` answers what-if questions for any model and
 hardware. It prints the verdict (single GPU / distributed optional / recommended for speed / required / does not fit), the per-GPU
 memory of every strategy split into weights, gradients, AdamW states, activations and logits, the recommended
 layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
@@ -435,21 +435,23 @@ python -m pytest -m dist
 
 ```text
 omni-train/
-├── train.py                # entry point
+├── train.py                # entry point (python train.py / torchrun train.py)
 ├── config.yaml             # active configuration
-├── distributed_utils.py    # solo / ddp / fsdp model setup
-├── checkpoint.py           # distributed checkpointing
-├── data.py                 # dataloaders per model type
-├── utils.py                # config parsing + validation
-├── model.py                # custom_transformer toy model
-├── parallelism/            # strategy: 5d — DP, TP+SP, CP, PP, EP, ZeRO-1
-├── post_training/          # algorithm: sft / dpo / simpo / orpo
-├── export.py               # Hugging Face export (+ LoRA merge)
+├── pyproject.toml          # package metadata, CLI entry points, pytest settings
+├── omni_train/             # the library: everything train.py, the UI and the tests import
+│   ├── distributed_utils.py    # solo / ddp / fsdp model setup
+│   ├── checkpoint.py           # distributed checkpointing
+│   ├── data.py                 # dataloaders per model type
+│   ├── utils.py                # config parsing + validation
+│   ├── model.py                # custom_transformer toy model
+│   ├── export.py               # Hugging Face export (+ LoRA merge)
+│   ├── planner.py              # capacity planner: is distributed training needed?
+│   ├── advisor.py              # strategy: auto — GPUs, dataset lengths, the choice in plain words
+│   ├── parallelism/            # strategy: 5d — DP, TP+SP, CP, PP, EP, ZeRO-1
+│   └── post_training/          # algorithm: sft / dpo / simpo / orpo / grpo / ppo
 ├── configs/                # ready-made example configs
 ├── scripts/                # launch + SLURM utilities
-├── tests/                  # unit and smoke tests
-├── planner.py              # capacity planner: is distributed training needed?
-├── advisor.py              # strategy: auto — GPUs, dataset lengths, the choice in plain words
+├── tests/                  # unit, e2e, dist and smoke tests
 ├── ui/                     # training console + REST API (FastAPI)
 └── docs/                   # guides and technical reference
 ```

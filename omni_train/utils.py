@@ -549,7 +549,7 @@ def build_args(cfg):
     # --------------------------------------------------
     # POST-TRAINING (SFT / DPO / SimPO / ORPO)
     # --------------------------------------------------
-    from post_training.config import parse_algorithm
+    from omni_train.post_training.config import parse_algorithm
     parse_algorithm(cfg, args)
 
     # --------------------------------------------------

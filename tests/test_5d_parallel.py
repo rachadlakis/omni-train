@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKER = os.path.join(ROOT, "tests", "dist5d_worker.py")
 sys.path.insert(0, ROOT)
 
-from utils import build_args  # noqa: E402
+from omni_train.utils import build_args  # noqa: E402
 from tests.dist_device import dist_env, require_ranks  # noqa: E402
 
 STEPS = 3
@@ -156,9 +156,9 @@ def single_process_group():
 
 
 def _ours(model_dir):
-    from parallelism import ParallelContext
-    from parallelism.hf import config_from_hf, load_hf_weights
-    from parallelism.model import PipelineStage
+    from omni_train.parallelism import ParallelContext
+    from omni_train.parallelism.hf import config_from_hf, load_hf_weights
+    from omni_train.parallelism.model import PipelineStage
     stage = PipelineStage(config_from_hf(model_dir, SEQ), ParallelContext(), seeded=False)
     load_hf_weights(stage, model_dir)
     return stage
@@ -177,7 +177,7 @@ def test_hf_parity(tiny_models, single_process_group, kind):
 
 def test_hf_export_roundtrip(tiny_models, single_process_group, tmp_path):
     from transformers import AutoModelForCausalLM
-    from parallelism.hf import export_hf
+    from omni_train.parallelism.hf import export_hf
     src = tiny_models["qwen2"]
     stage = _ours(src)
     export_hf(stage, src, str(tmp_path / "hf"))

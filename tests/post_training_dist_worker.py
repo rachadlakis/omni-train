@@ -22,10 +22,10 @@ import torch  # noqa: E402
 import torch.distributed as dist  # noqa: E402
 from datasets import Dataset  # noqa: E402
 
-from post_training.data import collate_preference, make_loader, tokenize_preference  # noqa: E402
-from post_training.grpo import GRPOObjective, build_rollout, completion_mask_from  # noqa: E402
-from post_training.objectives import PreferenceObjective  # noqa: E402
-from post_training.ppo import PPOObjective  # noqa: E402
+from omni_train.post_training.data import collate_preference, make_loader, tokenize_preference  # noqa: E402
+from omni_train.post_training.grpo import GRPOObjective, build_rollout, completion_mask_from  # noqa: E402
+from omni_train.post_training.objectives import PreferenceObjective  # noqa: E402
+from omni_train.post_training.ppo import PPOObjective  # noqa: E402
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama  # noqa: E402
 
 
@@ -65,7 +65,7 @@ def main():
         named = lambda: model.module.named_parameters()  # noqa: E731
     else:
         from torch.distributed._composable.fsdp import fully_shard
-        from distributed_utils import get_model_layers
+        from omni_train.distributed_utils import get_model_layers
         for stack, _ in get_model_layers(model):  # same per-layer sharding as apply_fsdp
             for layer in stack:
                 fully_shard(layer)

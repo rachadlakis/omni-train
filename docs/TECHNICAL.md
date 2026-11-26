@@ -50,7 +50,7 @@ launch.sh  ──────────────►  torchrun / python
 
 ---
 
-## 2. Distributed Setup (`distributed_utils.py`)
+## 2. Distributed Setup (`omni_train/distributed_utils.py`)
 
 `torchrun` injects `RANK`, `LOCAL_RANK`, and `WORLD_SIZE` as environment variables before Python starts.
 
@@ -155,7 +155,7 @@ Path B: rank 0 saves the seed file, calls `dist.barrier()`, then all ranks load 
 
 ---
 
-## 5. Checkpointing (`checkpoint.py`)
+## 5. Checkpointing (`omni_train/checkpoint.py`)
 
 The `Checkpointer` class is initialized with a `folder` path and a `dcp_api` boolean.
 
@@ -183,7 +183,7 @@ Manual sharding using `distribute_tensor`:
 
 ---
 
-## 6. Data Pipeline (`data.py`)
+## 6. Data Pipeline (`omni_train/data.py`)
 
 ```
 Raw HF Dataset

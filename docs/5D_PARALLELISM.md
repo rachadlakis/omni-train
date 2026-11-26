@@ -6,12 +6,12 @@ It follows the ideas in Hugging Face's *Ultra-Scale Playbook* and uses plain
 
 | Dimension | YAML key | What it splits | Code |
 |---|---|---|---|
-| **DP** data parallel (+ bucketing, overlap, no_sync) | `dp` | the batch | `parallelism/data_parallel.py` |
-| **ZeRO-1** | `zero1` | AdamW states, over DP | `parallelism/zero.py` |
-| **TP** tensor parallel (+ **SP** sequence parallel) | `tp`, `sp` | attention heads / MLP width | `parallelism/tensor_parallel.py` |
-| **CP** context parallel (ring attention) | `cp` | the sequence | `parallelism/context_parallel.py` |
-| **PP** pipeline parallel (AFAB, 1F1B) | `pp`, `pp_schedule` | the layers | `parallelism/pipeline_parallel.py` |
-| **EP** expert parallel (MoE, all-to-all) | `ep` | the experts | `parallelism/expert_parallel.py` |
+| **DP** data parallel (+ bucketing, overlap, no_sync) | `dp` | the batch | `omni_train/parallelism/data_parallel.py` |
+| **ZeRO-1** | `zero1` | AdamW states, over DP | `omni_train/parallelism/zero.py` |
+| **TP** tensor parallel (+ **SP** sequence parallel) | `tp`, `sp` | attention heads / MLP width | `omni_train/parallelism/tensor_parallel.py` |
+| **CP** context parallel (ring attention) | `cp` | the sequence | `omni_train/parallelism/context_parallel.py` |
+| **PP** pipeline parallel (AFAB, 1F1B) | `pp`, `pp_schedule` | the layers | `omni_train/parallelism/pipeline_parallel.py` |
+| **EP** expert parallel (MoE, all-to-all) | `ep` | the experts | `omni_train/parallelism/expert_parallel.py` |
 
 ## Quick start
 
@@ -91,7 +91,7 @@ layout**. To change layouts, start a new run with `model_name: checkpoints/5d/<t
 **Rank grid.** Ranks sit on a grid `[dp, pp, cp, tp]` with TP changing fastest, so TP ranks are
 neighbours on the same node (NVLink). EP reuses the DP axis: `dp_rank = chunk × ep + ep_rank`.
 
-**One training step** (`parallelism/trainer.py`):
+**One training step** (`omni_train/parallelism/trainer.py`):
 1. `BlockSampler` gives this rank `micro_batches` micro-batches (CP ranks keep their slice).
 2. `PipelineEngine.train_step` runs AFAB or 1F1B. With `pp=1` it is plain gradient accumulation.
 3. During the last backward, DP hooks launch bucketed all-reduces (overlap with compute).

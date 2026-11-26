@@ -2,8 +2,8 @@
 import pytest
 import torch
 
-from model import ModelArgs, Transformer, TransformerBlock
-from distributed_utils import get_model_layers
+from omni_train.model import ModelArgs, Transformer, TransformerBlock
+from omni_train.distributed_utils import get_model_layers
 
 
 TINY = ModelArgs(n_layers=2, vocab_size=16, max_seq_len=8, dim=16, n_heads=4, dropout_p=0.0)

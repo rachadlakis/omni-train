@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omni-train"
+version = "0.1.0"
+description = "Distributed fine-tuning for LLMs: solo, DDP, FSDP2 and 5D parallelism, LoRA/QLoRA, SFT/DPO/GRPO/PPO"
+readme = "README.md"
+requires-python = ">=3.10"
+# PyTorch is installed separately (CUDA or CPU wheel index), see README.
+dynamic = ["dependencies"]
+
+[project.scripts]
+omni-plan = "omni_train.planner:main"
+omni-advise = "omni_train.advisor:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["omni_train*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = '-v --tb=short -m "not smoke and not dist and not e2e"'
+markers = [
+    "smoke: real training subprocess tests — require GPU, ~30-60 s each",
+    "dist: multi-process strategy: 5d layout tests on CPU (gloo) — a few minutes, no GPU",
+    "e2e: train.py end to end on CPU (solo + 2-process DDP, tiny local model) — ~2 min, no GPU",
+]

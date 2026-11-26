@@ -11,10 +11,10 @@ import sys
 import pytest
 import yaml
 
-import advisor
-import planner as P
+from omni_train import advisor
+from omni_train import planner as P
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from utils import build_args
+from omni_train.utils import build_args
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LLAMA = "meta-llama/Llama-3.1-8B"
@@ -167,7 +167,7 @@ def sft_rows(n=40, long=None):
 
 
 def test_measure_sft_counts_the_trainers_tokens(tmp_path):
-    from post_training.data import tokenize_sft
+    from omni_train.post_training.data import tokenize_sft
     tok = make_tokenizer()
     rows = sft_rows(long=300)
     c = cfg(dataset={"name": jsonl(tmp_path / "d.jsonl", rows), "split": "train"}, algorithm={"type": "sft"})
@@ -265,7 +265,7 @@ def test_cli_writes_a_concrete_config(tmp_path, tiny_model_dir):
     c = cfg(model_name=tiny_model_dir, dataset={"name": jsonl(tmp_path / "d.jsonl", sft_rows()), "split": "train"},
             algorithm={"type": "sft"})
     (tmp_path / "c.yaml").write_text(yaml.safe_dump(c))
-    r = subprocess.run([sys.executable, "advisor.py", "--config", str(tmp_path / "c.yaml"), "--gpu", "h100", "--gpus", "8",
+    r = subprocess.run([sys.executable, "-m", "omni_train.advisor", "--config", str(tmp_path / "c.yaml"), "--gpu", "h100", "--gpus", "8",
                         "--write", str(tmp_path / "out.yaml")], cwd=ROOT, env=env(), capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     assert "Your data: 40 examples" in r.stdout and "Recommended: use one GPU" in r.stdout
@@ -275,7 +275,7 @@ def test_cli_writes_a_concrete_config(tmp_path, tiny_model_dir):
 
 def test_cli_refuses_an_unknown_gpu(tmp_path):
     (tmp_path / "c.yaml").write_text(yaml.safe_dump(cfg()))
-    r = subprocess.run([sys.executable, "advisor.py", "--config", str(tmp_path / "c.yaml"), "--gpu", "rtx9999", "--no-data"],
+    r = subprocess.run([sys.executable, "-m", "omni_train.advisor", "--config", str(tmp_path / "c.yaml"), "--gpu", "rtx9999", "--no-data"],
                        cwd=ROOT, env=env(), capture_output=True, text=True, timeout=120)
     assert r.returncode == 1 and "--gpu-mem" in r.stderr
 

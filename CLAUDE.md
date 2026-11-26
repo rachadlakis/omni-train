@@ -33,7 +33,7 @@ WANDB_API_KEY=...     # optional
 bash scripts/launch.sh
 
 # What would strategy: auto choose, and why?
-python advisor.py --config config.yaml
+python -m omni_train.advisor --config config.yaml
 
 # Use a different config file
 CONFIG_PATH=configs/llm_lora_ddp.yaml bash scripts/launch.sh
@@ -101,6 +101,10 @@ python scripts/launch_slurm.py --config configs/llm_fsdp.yaml --nodes 2 --dry-ru
 
 ## Architecture
 
+### Layout
+
+Library code lives in the `omni_train/` package; only `train.py` (entry point), `config.yaml` and `pyproject.toml` sit at the root. Import with the package name (`from omni_train.utils import build_args`, `from omni_train import planner`), never bare `utils`/`data`/`model`: `ui/`, `scripts/` and `tests/` run with the repo root on `sys.path` (cwd, `PYTHONPATH=ROOT` in the subprocess tests). CLIs: `python -m omni_train.planner`, `python -m omni_train.advisor` (or `omni-plan` / `omni-advise` after `pip install -e .`). Pytest settings and markers are in `pyproject.toml`.
+
 ### Configuration Flow
 
 ```
@@ -129,7 +133,7 @@ train.py main()
 
 | Strategy | When to use | Notes |
 |----------|-------------|-------|
-| `auto`   | Default     | `advisor.py` fills in one of the rows below before training starts; see "strategy: auto" |
+| `auto`   | Default     | `omni_train/advisor.py` fills in one of the rows below before training starts; see "strategy: auto" |
 | `solo`   | Single GPU  | No torchrun, no process group |
 | `ddp`    | Model fits in one GPU, scale throughput | Every GPU holds full model copy; gradient sync via all-reduce |
 | `fsdp`   | Large models, limited GPU memory | Parameters/gradients/optimizer states sharded across GPUs |
@@ -174,7 +178,7 @@ Checkpoint folders are named with Unix millisecond timestamps. PEFT/quantization
 
 **Resume (solo/DDP):** `distributed_utils.restore_optimizer_state` reloads the AdamW moments and resets each group's `lr`/`initial_lr`/`weight_decay` to the new config, because the LR schedule restarts on resume. Older weights-only `.pt` files still load (AdamW starts fresh, with a notice). FSDP restores via `Checkpointer.load_optim`.
 
-**HF export** (`export.py`, `save_load.export_hf: true`, `export_dtype` bfloat16 | float16 | float32): runs after training on every rank. Solo/DDP merge LoRA in place on the finished model. FSDP all-gathers the full state dict to rank 0 (`get_model_state_dict(full_state_dict, cpu_offload)`), which rebuilds the model on CPU (`rebuild_from_state_dict`) and merges. Quantized runs export only `adapter/`; `scripts/merge_lora.py` merges it into the full-precision base. Not for 5d (it has its own `<ts>/hf/` export) or `custom_transformer`.
+**HF export** (`omni_train/export.py`, `save_load.export_hf: true`, `export_dtype` bfloat16 | float16 | float32): runs after training on every rank. Solo/DDP merge LoRA in place on the finished model. FSDP all-gathers the full state dict to rank 0 (`get_model_state_dict(full_state_dict, cpu_offload)`), which rebuilds the model on CPU (`rebuild_from_state_dict`) and merges. Quantized runs export only `adapter/`; `scripts/merge_lora.py` merges it into the full-precision base. Not for 5d (it has its own `<ts>/hf/` export) or `custom_transformer`.
 
 Two FSDP checkpoint APIs:
 - **DCP API** (`distribute_api: dcp_api`): uses `torch.distributed.checkpoint.state_dict` — rank 0 broadcasts state, simpler
@@ -207,7 +211,7 @@ Two FSDP checkpoint APIs:
 
 Experimental types print a one-line notice at startup (`train.py`, `EXPERIMENTAL_MODEL_TYPES`). New features target `llm` first; `strategy: 5d` is an advanced mode, not the default recommendation.
 
-### Data Pipeline by Model Type (`data.py`)
+### Data Pipeline by Model Type (`omni_train/data.py`)
 
 `dataset.name` is a Hub dataset or a local `.json/.jsonl/.csv/.parquet/.txt` file (`data.load_any_dataset`, also used by post-training); `dataset.text_field` renames the pretrain text column to `text`. `get_dataloader()` branches on `model_type` to decide how raw dataset rows become batches. Each type expects a specific dataset schema:
 
@@ -225,7 +229,7 @@ For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables
 
 ### Layer Detection for FSDP Sharding
 
-`get_model_layers(model)` in `distributed_utils.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
+`get_model_layers(model)` in `omni_train/distributed_utils.py` probes common HF architecture patterns (`model.decoder.layers`, `model.encoder.layers`, `transformer.h`, `model.layers`) to find transformer blocks for per-layer sharding. Unknown architectures fall back to root-only sharding.
 
 ### Non-Persistent Buffers (RoPE `inv_freq`, `position_ids`)
 
@@ -235,13 +239,13 @@ For VLM, `train.py` loads an `AutoProcessor` (not a bare tokenizer) and disables
 
 Trainable weights are always fp32 (`_load_dtype()`), because bf16 rounds most fine-tuning-sized AdamW updates to zero. `mixed_precision: true` casts at compute time instead: FSDP via `MixedPrecisionPolicy`, solo/DDP via `torch.autocast` in `train.py` (plus `GradScaler` for float16). The only low-precision storage is a frozen PEFT base outside FSDP; PEFT keeps the adapters in fp32. FSDP2 needs one dtype per parameter group, so FSDP + PEFT stays fp32 throughout.
 
-### Capacity planner (`planner.py`)
+### Capacity planner (`omni_train/planner.py`)
 
-`plan(ModelSpec, Workload, Cluster)` answers "is distributed training needed?": per-GPU peak memory (weights / grads / AdamW / activations / logits / overhead) for solo, DDP, FSDP and every valid 5d layout, a verdict (`single_gpu | distributed_optional | distributed_required | infeasible`), the recommended option, min GPUs per strategy and what-if fixes. Pure Python (no torch). The memory model mirrors the Precision rules above (16 B/param trainable, bf16 frozen LoRA base outside FSDP, fp32 under FSDP, preference runs = 2 × batch rows, logits upcast to fp32 dominate for big vocabularies, no vocab-parallel CE under 5d). GRPO rows = batch × G; its peak is max(sampling KV cache, training) and its step time adds bandwidth-bound decoding (`GPU_CATALOG` carries GB/s). It only proposes what the trainer accepts: QLoRA never on FSDP; 5d only for full-FT pretrain on llama/mistral/qwen2/custom; 5d layouts obey `_parse_5d`. `ModelSpec` comes from `PRESETS` (offline), an HF `config.json`, `custom_transformer_args`, or a name heuristic. CLI: `python planner.py --model … --gpus 8 --gpu h100`. Tests: `tests/test_planner.py`.
+`plan(ModelSpec, Workload, Cluster)` answers "is distributed training needed?": per-GPU peak memory (weights / grads / AdamW / activations / logits / overhead) for solo, DDP, FSDP and every valid 5d layout, a verdict (`single_gpu | distributed_optional | distributed_required | infeasible`), the recommended option, min GPUs per strategy and what-if fixes. Pure Python (no torch). The memory model mirrors the Precision rules above (16 B/param trainable, bf16 frozen LoRA base outside FSDP, fp32 under FSDP, preference runs = 2 × batch rows, logits upcast to fp32 dominate for big vocabularies, no vocab-parallel CE under 5d). GRPO rows = batch × G; its peak is max(sampling KV cache, training) and its step time adds bandwidth-bound decoding (`GPU_CATALOG` carries GB/s). It only proposes what the trainer accepts: QLoRA never on FSDP; 5d only for full-FT pretrain on llama/mistral/qwen2/custom; 5d layouts obey `_parse_5d`. `ModelSpec` comes from `PRESETS` (offline), an HF `config.json`, `custom_transformer_args`, or a name heuristic. CLI: `python -m omni_train.planner --model … --gpus 8 --gpu h100`. Tests: `tests/test_planner.py`.
 
 `plan()` tries, in order (`_pick`): one GPU if fast enough (`TARGET_HOURS`, only when row count and GPU speed are known), DDP, FSDP, the same with `_gentle_changes` (checkpointing on, batch halved), then 5d. It never changes the training method; LoRA and QLoRA appear under `alternatives`. `recommended.changes` must be applied with the option. `explain()` / `advice` is the plain-words version used by the CLI, the run log and the console. Unknown GPU types need `--gpu-mem`. Anything the trainer refuses (local files / `text_field` / `export_hf` / fp16 under 5d, MoE outside 5d) belongs in `workload_from_config` (`no_5d`, `needs_5d`), or `auto` will write a config that fails.
 
-### strategy: auto (`advisor.py`)
+### strategy: auto (`omni_train/advisor.py`)
 
 Supplies what the planner cannot know (GPUs, config.json, dataset) and fills in `strategy`, `num_gpus`, `parallelism`, `gradient_checkpointing`, `batch_size`. Resolved by `scripts/launch.sh` (writes a temporary config, also for `STRATEGY=`/`NUM_GPUS=` overrides), `ui/app.py` on submit (`_resolve_auto`), or `train.py` (`resolve_for_process`). Under torchrun rank 0 decides and shares it through the rendezvous store: ranks that measured for themselves could disagree and hang. `measure_data` tokenises 500 rows plus the longest by text length, with the trainer's own functions (`_row_lengths`: add new algorithms there); large Hub datasets are streamed. A failed measurement never stops a run (`try_measure`). `preflight` only warns. Console: `POST /api/data/inspect` fills `_DATA_CACHE`, which `/api/plan` and submit read. Tests: `tests/test_advisor.py`, `-m e2e`.
 
@@ -257,30 +261,30 @@ FastAPI server (`ui/app.py`, REST docs at `/docs`) plus a single-page console in
 - Saved configs enter the wizard only through `loadConfig()` (a plain merge over `defaultConfig()` resurrects rewards and system prompts the config left out). Async pages check `stillHere()` after every await. `GET /api/configs` also returns `templates` described from the YAML; `/api/queue/jobs` rows carry a `summary`; `/api/queue/jobs/{id}/log` is the full log.
 - UI tests must not use `with TestClient(...)` (the startup hook would open the real `ui/queue.db`); use a `QueueManager(db_path=tmp)` monkeypatched into `ui.app.queue_manager`.
 
-### Post-training (`algorithm:` block, `post_training/`)
+### Post-training (`algorithm:` block, `omni_train/post_training/`)
 
 SFT and preference optimisation reuse the normal solo/DDP/FSDP setup (LoRA/QLoRA included) and the normal loop. `train.py` swaps in `post_training.data.get_post_training_data` for the dataloader and calls `objective(model, batch, device) -> (loss, metrics)` instead of the model-type branch.
 
-- **Data** (`post_training/data.py`): SFT takes `messages` | `prompt`+`completion` | Alpaca `instruction`(+`input`)+`output` | `text`. Preference takes `prompt`+`chosen`+`rejected`, chosen/rejected conversations (last turn is the answer), or hh-rlhf strings. With a chat template the prompt is rendered with `add_generation_prompt=True` and must be a string prefix of the full conversation. Prompt and answer are tokenised separately so the mask boundary is exact. Without a template: BOS + prompt + answer + EOS. Preference batches are `[2B, T]` (chosen rows then rejected) so one forward covers both, which FSDP needs. Local `.json/.jsonl/.csv/.parquet` files work as `dataset.name`.
+- **Data** (`omni_train/post_training/data.py`): SFT takes `messages` | `prompt`+`completion` | Alpaca `instruction`(+`input`)+`output` | `text`. Preference takes `prompt`+`chosen`+`rejected`, chosen/rejected conversations (last turn is the answer), or hh-rlhf strings. With a chat template the prompt is rendered with `add_generation_prompt=True` and must be a string prefix of the full conversation. Prompt and answer are tokenised separately so the mask boundary is exact. Without a template: BOS + prompt + answer + EOS. Preference batches are `[2B, T]` (chosen rows then rejected) so one forward covers both, which FSDP needs. Local `.json/.jsonl/.csv/.parquet` files work as `dataset.name`.
 - **DPO reference:** the policy at step 0 is the reference, so `PreferenceObjective.precompute_reference` scores every pair once (eval mode, no grad, all ranks, all-gathered) and caches `[N, 2]` floats. No second model is kept, for every strategy.
-- **GRPO** (`post_training/grpo.py`, `rewards.py`): the objective does the rollout inside the step: G samples per prompt (`generate`, eval mode, no grad; `synced_gpus` under FSDP), rewards on the decoded text, group-normalised advantages, then one forward with grad and `losses.grpo_loss` (clipped, `loss_type` grpo | dapo | dr_grpo; dapo all-reduces the global token count). `training.batch_size` = prompts per GPU. KL reference = LoRA adapters disabled (`attach_reference`). Keep: `position_ids` from the left-padded mask (absolute-position models), logits ÷ temperature, dropout off, and `torch.clear_autocast_cache()` after the no-grad work (train.py's autocast cache otherwise hands the training forward detached bf16 LoRA weights: no gradient / CheckpointError). The `Rollout` dataclass + `build_rollout` let the dist test feed fixed completions.
-- **PPO** (`post_training/ppo.py`, subclass of `GRPOObjective`, shares `sample()`): `wrap_loader` replaces the dataloader with one that does a rollout per batch and yields `ppo_epochs × num_minibatches` minibatches, so each gradient step is a normal train.py step (LR schedule and step counts included). Values come from a forward pre-hook on `lm_head` (inside the model's forward, which FSDP needs) into `value_head`, one fp32 linear layer that is NOT part of the wrapped model: own AdamW, gradients averaged by hand in `step_extra` (called between `scaler.step` and `scaler.update`), saved by `save_extra` as `<checkpoint>.value_head` / `<folder>/value_head.pt`. So checkpoints, resume and HF export of the policy are unchanged. Advantages are normalised over the global batch and losses divide by global tokens ÷ world. `beta` = KL penalty in the per-token reward (LoRA adapters off), needs LoRA.
-- **Reward models** (`post_training/reward_model.py`, `algorithm.reward_model`, GRPO and PPO): any 1-output sequence classifier, frozen, whole on every GPU; a checkpoint without its scoring head is refused. `rewards` defaults to `accuracy` only when no reward model is given.
+- **GRPO** (`omni_train/post_training/grpo.py`, `rewards.py`): the objective does the rollout inside the step: G samples per prompt (`generate`, eval mode, no grad; `synced_gpus` under FSDP), rewards on the decoded text, group-normalised advantages, then one forward with grad and `losses.grpo_loss` (clipped, `loss_type` grpo | dapo | dr_grpo; dapo all-reduces the global token count). `training.batch_size` = prompts per GPU. KL reference = LoRA adapters disabled (`attach_reference`). Keep: `position_ids` from the left-padded mask (absolute-position models), logits ÷ temperature, dropout off, and `torch.clear_autocast_cache()` after the no-grad work (train.py's autocast cache otherwise hands the training forward detached bf16 LoRA weights: no gradient / CheckpointError). The `Rollout` dataclass + `build_rollout` let the dist test feed fixed completions.
+- **PPO** (`omni_train/post_training/ppo.py`, subclass of `GRPOObjective`, shares `sample()`): `wrap_loader` replaces the dataloader with one that does a rollout per batch and yields `ppo_epochs × num_minibatches` minibatches, so each gradient step is a normal train.py step (LR schedule and step counts included). Values come from a forward pre-hook on `lm_head` (inside the model's forward, which FSDP needs) into `value_head`, one fp32 linear layer that is NOT part of the wrapped model: own AdamW, gradients averaged by hand in `step_extra` (called between `scaler.step` and `scaler.update`), saved by `save_extra` as `<checkpoint>.value_head` / `<folder>/value_head.pt`. So checkpoints, resume and HF export of the policy are unchanged. Advantages are normalised over the global batch and losses divide by global tokens ÷ world. `beta` = KL penalty in the per-token reward (LoRA adapters off), needs LoRA.
+- **Reward models** (`omni_train/post_training/reward_model.py`, `algorithm.reward_model`, GRPO and PPO): any 1-output sequence classifier, frozen, whole on every GPU; a checkpoint without its scoring head is refused. `rewards` defaults to `accuracy` only when no reward model is given.
 - **Sampling** (`GRPOObjective.sample`): runs under `_blank_generation_config`, because `generate()` fills unset values from the model's own generation_config (Qwen: repetition_penalty 1.1, top_k 20) and the answers would not come from the policy being scored. Pass every sampling value explicitly (`top_k=0`, not None).
 - **Optimizer order:** build the optimizer before any no-grad forward. After one, FSDP's root still holds full copies of its weights, and an optimizer built then updates those instead of the shards (bit a test worker; train.py is fine).
-- **Losses** (`post_training/losses.py`) return per-example values and are averaged over pairs, so DDP/FSDP gradients equal one process on the global batch. SFT uses HF's per-rank token mean (the standard convention, not world-size invariant). `sequence_logps` goes one row at a time in fp32 to avoid a `[B, T, V]` fp32 log-softmax.
+- **Losses** (`omni_train/post_training/losses.py`) return per-example values and are averaged over pairs, so DDP/FSDP gradients equal one process on the global batch. SFT uses HF's per-rank token mean (the standard convention, not world-size invariant). `sequence_logps` goes one row at a time in fp32 to avoid a `[B, T, V]` fp32 log-softmax.
 - **Testing rule:** `tests/test_post_training_dist.py -m dist` compares losses AND every parameter's gradient to 1 process. DDP runs on CPU. FSDP cases need ≥ 2 GPUs (FSDP2 has no CPU support in torch 2.6) and are skipped otherwise.
 - **Not supported yet:** KTO, reward-model training, packing, 5d; a separate critic model; GRPO `num_iterations > 1` and full-FT GRPO with `beta > 0`.
 
-### 5D Parallelism (`strategy: 5d`, `parallelism/`)
+### 5D Parallelism (`strategy: 5d`, `omni_train/parallelism/`)
 
-`train.py` hands 5d runs to `parallelism.trainer.FiveDRun`, which has its own Llama-style model (`parallelism/model.py`), not the HF/`model.py` classes. Plain `torch.distributed`; no Megatron/DeepSpeed.
+`train.py` hands 5d runs to `parallelism.trainer.FiveDRun`, which has its own Llama-style model (`omni_train/parallelism/model.py`), not the HF/`omni_train/model.py` classes. Plain `torch.distributed`; no Megatron/DeepSpeed.
 
 - **Rank grid** `[dp, pp, cp, tp]`, TP fastest (neighbours → NVLink). EP reuses the DP axis (`dp_rank = chunk*ep + ep_rank`). `ParallelContext` builds every group; all ranks must create all groups in the same order.
-- **Models:** `custom_transformer` (seeded weights, optional MoE/GQA) or HF `llm` of type llama/mistral/qwen2 (`parallelism/hf.py`). HF weights are read slice by slice from safetensors (no full-model load); RoPE `inv_freq` comes from HF's own `*RotaryEmbedding` class (rope scaling handled). Other HF types raise. Vocab is padded to a multiple of tp; padded logits are sliced off.
+- **Models:** `custom_transformer` (seeded weights, optional MoE/GQA) or HF `llm` of type llama/mistral/qwen2 (`omni_train/parallelism/hf.py`). HF weights are read slice by slice from safetensors (no full-model load); RoPE `inv_freq` comes from HF's own `*RotaryEmbedding` class (rope scaling handled). Other HF types raise. Vocab is padded to a multiple of tp; padded logits are sliced off.
 - **Gradient sync** (`data_parallel.py`): dense grads averaged over DP×CP; expert grads summed over the ranks holding the same experts and divided by **dp×cp**, not by that group's size (each expert already got the summed gradient of the EP ranks it served); non-TP weights summed over TP when SP is on; tied embeddings split by PP summed over `embed_tie_group`.
 - **Grad clipping** (`optim.global_grad_norm`) counts each element once: TP shards summed over TP, experts over EP, stages over PP, the tied LM-head copy skipped.
-- **Data** (`parallelism/data.py`): fixed `[N, max_length+1]` token blocks, packed HF text (`text` column) or `dataset.name: synthetic`. Sample order depends only on (seed, epoch, step), never on the layout. Global batch = `batch_size × micro_batches × dp`.
+- **Data** (`omni_train/parallelism/data.py`): fixed `[N, max_length+1]` token blocks, packed HF text (`text` column) or `dataset.name: synthetic`. Sample order depends only on (seed, epoch, step), never on the layout. Global batch = `batch_size × micro_batches × dp`.
 - **Precision:** fp32 weights + optimizer, bf16 autocast when `mixed_precision: true` (fp16 rejected). Activations between PP stages are fp32.
 - **Checkpoints:** `checkpoints/5d/<ts>/rank_XXXXX.pt` + `layout.json`; resume needs the same layout. LLM runs also export a normal HF checkpoint to `<ts>/hf/`, which is how to change layouts.
 - **Testing rule:** `tests/test_5d_parallel.py -m dist` compares losses, the global grad norm **and every parameter's gradient** to a 1-process run. Keep the gradient comparison: AdamW cancels per-tensor gradient scale, so a loss-only check passed an `ep`× expert-gradient bug. Default-suite tests check HF logit parity and export round trip.

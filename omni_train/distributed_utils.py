@@ -20,9 +20,9 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
-from checkpoint import Checkpointer
+from omni_train.checkpoint import Checkpointer
 from dotenv import load_dotenv
-from utils import dist_barrier, inspect_model
+from omni_train.utils import dist_barrier, inspect_model
 from datetime import timedelta
 
 
@@ -192,7 +192,7 @@ def print_training_vram_estimate(rank, model, args, world_size):
     vram = None
     if vram_type and layers and hidden and seq_len and batch:
         try:
-            from utils import estimate_training_vram
+            from omni_train.utils import estimate_training_vram
             vram = estimate_training_vram(
                 model_type=vram_type,
                 num_params=num_params,
@@ -640,7 +640,7 @@ def apply_solo(device, rank, args):
     """Loads a single-process model and moves it to the selected device."""
     try:
         if getattr(args, "model_type", "llm") == "custom_transformer":
-            from model import Transformer, ModelArgs
+            from omni_train.model import Transformer, ModelArgs
             model_args = ModelArgs(
                 n_layers=args.custom_n_layers,
                 vocab_size=args.custom_vocab_size,
@@ -742,7 +742,7 @@ def apply_ddp(local_rank, rank, device, args):
     """
     try:
         if getattr(args, "model_type", "llm") == "custom_transformer":
-            from model import Transformer, ModelArgs
+            from omni_train.model import Transformer, ModelArgs
             model_args = ModelArgs(
                 n_layers=args.custom_n_layers,
                 vocab_size=args.custom_vocab_size,
@@ -879,7 +879,7 @@ def _apply_fsdp_custom_transformer(args, device, rank):
     has no init_weights() and no non-persistent buffers (it uses learned positional
     embeddings, not RoPE), so the reset_parameters() walk fully populates it —
     no buffer snapshot/restore needed. Returns (model, None)."""
-    from model import Transformer, ModelArgs
+    from omni_train.model import Transformer, ModelArgs
     model_args = ModelArgs(
         n_layers=args.custom_n_layers,
         vocab_size=args.custom_vocab_size,

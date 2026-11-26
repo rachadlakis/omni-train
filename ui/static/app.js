@@ -2082,7 +2082,7 @@ EOF`)}
         ${snippet('Follow a run', 'Status, the last log lines, the parsed loss curve and progress.',
           `curl -s ${o}/api/queue/jobs/<job_id>?tail=50 | jq '{status, progress: .metrics.progress, last: .logs[-1]}'`)}
         ${snippet('From the command line', 'The same planner runs without the server.',
-          'python planner.py --model Qwen/Qwen2.5-7B-Instruct --method lora --algorithm dpo --gpus 4 --gpu a100-80 --seq 2048')}
+          'python -m omni_train.planner --model Qwen/Qwen2.5-7B-Instruct --method lora --algorithm dpo --gpus 4 --gpu a100-80 --seq 2048')}
       </div>
     </div>`;
   $$('[data-copy]', main).forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });

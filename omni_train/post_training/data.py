@@ -269,7 +269,7 @@ def collate_grpo(rows, pad_id: int) -> dict:
 # ----------------------------------------------------------------------
 
 def load_raw(name, subset, split):
-    from data import load_any_dataset  # Hub dataset or local file
+    from omni_train.data import load_any_dataset  # Hub dataset or local file
     return load_any_dataset(name, subset, split)
 
 
@@ -311,8 +311,8 @@ def make_loader(dataset, collate, rank, world_size, batch_size, shuffle=True, dr
 
 def get_post_training_data(args, tokenizer, rank, world_size):
     """Returns (dataset, collate_fn, training DataLoader)."""
-    from data import _rank0_first
-    from distributed_utils import print_on_rank_0
+    from omni_train.data import _rank0_first
+    from omni_train.distributed_utils import print_on_rank_0
     with _rank0_first():  # rank 0 fills the HF cache first
         raw = load_raw(args.dataset, args.dataset_full_name, args.dataset_split)
         print_on_rank_0(rank, f"Raw dataset: {len(raw)} rows | columns={raw.column_names}", "📂")

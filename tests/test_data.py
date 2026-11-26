@@ -3,8 +3,8 @@ import pytest
 import torch
 from datasets import Dataset
 
-import data
-from data import _vlm_collate, get_dataloader
+from omni_train import data
+from omni_train.data import _vlm_collate, get_dataloader
 
 
 # ------------------------------------------------------------------

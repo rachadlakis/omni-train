@@ -13,8 +13,8 @@ import torch.nn as nn
 from accelerate import init_empty_weights
 from transformers import AutoModel, AutoModelForCausalLM, BertConfig, LlamaConfig
 
-import distributed_utils
-from distributed_utils import _remove_seed_dir, _restore_buffers, _snapshot_buffers
+from omni_train import distributed_utils
+from omni_train.distributed_utils import _remove_seed_dir, _restore_buffers, _snapshot_buffers
 
 
 def _llama3_config():

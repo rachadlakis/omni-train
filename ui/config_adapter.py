@@ -222,7 +222,7 @@ def adapt_ui_config_to_mini(raw: dict[str, Any], project_root: Path) -> dict[str
 
 
 def validate_mini_config(mini_cfg: dict[str, Any], project_root: Path) -> None:
-    utils_path = project_root / "utils.py"
+    utils_path = project_root / "omni_train" / "utils.py"
     spec = importlib.util.spec_from_file_location("fsdp_mini_utils", str(utils_path))
     if not spec or not spec.loader:
         raise RuntimeError(f"Failed to load utils module from {utils_path}")
@@ -232,6 +232,6 @@ def validate_mini_config(mini_cfg: dict[str, Any], project_root: Path) -> None:
 
     build_args = getattr(module, "build_args", None)
     if build_args is None:
-        raise RuntimeError("build_args() was not found in fsdp-mini-project utils.py")
+        raise RuntimeError("build_args() was not found in omni_train/utils.py")
 
     build_args(mini_cfg)

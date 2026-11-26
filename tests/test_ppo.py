@@ -8,13 +8,13 @@ import types
 import pytest
 import torch
 
-from post_training import losses as L
-from post_training.data import collate_grpo, tokenize_grpo
-from post_training.grpo import completion_mask_from
-from post_training.ppo import PPOObjective, normalize_advantages
-from post_training.reward_model import RewardModel, parse_reward_model
+from omni_train.post_training import losses as L
+from omni_train.post_training.data import collate_grpo, tokenize_grpo
+from omni_train.post_training.grpo import completion_mask_from
+from omni_train.post_training.ppo import PPOObjective, normalize_advantages
+from omni_train.post_training.reward_model import RewardModel, parse_reward_model
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from utils import build_args
+from omni_train.utils import build_args
 
 CPU = torch.device("cpu")
 
@@ -341,7 +341,7 @@ def test_parse_reward_model():
 
 @pytest.mark.parametrize("algo", ["ppo", "grpo"])
 def test_rollout_with_a_reward_model(rm_dir, algo):
-    from post_training.grpo import GRPOObjective
+    from omni_train.post_training.grpo import GRPOObjective
     tok = make_tokenizer()
     model = tiny_llama(len(tok))
     spec = parse_reward_model({"name": rm_dir, "weight": 2.0})

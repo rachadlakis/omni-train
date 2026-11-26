@@ -4,7 +4,7 @@ import torch
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from distributed_utils import (
+from omni_train.distributed_utils import (
     _load_dtype,
     _checkpoint_run_tag,
     _normalize_target_modules,
@@ -228,13 +228,13 @@ def test_load_dtype_no_mixed_precision_is_fp32():
     ("CPU", 40),
 ])
 def test_match_gpu_tflops(name, expected):
-    from utils import _match_gpu_tflops
+    from omni_train.utils import _match_gpu_tflops
     table = {"a100": 312, "l40s": 362, "l40": 181, "l4": 120, "a4000": 77, "a2": 31, "4090": 83}
     assert _match_gpu_tflops(name, table, default=40) == expected
 
 
 def test_estimate_training_time_uses_full_gpu_name():
-    from utils import estimate_training_time
+    from omni_train.utils import estimate_training_time
     common = dict(num_params=125_000_000, steps_per_epoch=100, epochs=1, batch_size=8)
     fast = estimate_training_time(gpu_type="NVIDIA H100 80GB HBM3", **common)
     unknown = estimate_training_time(gpu_type="Some Unknown GPU", **common)

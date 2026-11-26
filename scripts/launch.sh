@@ -39,7 +39,7 @@ if [ "$STRATEGY" = "auto" ] || [ "$STRATEGY" != "$CFG_STRATEGY" ] || [ "$NUM_GPU
     trap 'rm -f "$RESOLVED"' EXIT
     GPU_ARGS=()
     if [ "$NUM_GPUS" != "auto" ]; then GPU_ARGS=(--gpus "$NUM_GPUS"); fi
-    python advisor.py --config "$CONFIG_PATH" --write "$RESOLVED" --strategy "$STRATEGY" ${GPU_ARGS[@]+"${GPU_ARGS[@]}"}
+    python -m omni_train.advisor --config "$CONFIG_PATH" --write "$RESOLVED" --strategy "$STRATEGY" ${GPU_ARGS[@]+"${GPU_ARGS[@]}"}
     CONFIG_PATH="$RESOLVED"
     FROM_CFG="$(read_config "$CONFIG_PATH")"
     read -r STRATEGY NUM_GPUS <<< "$FROM_CFG"

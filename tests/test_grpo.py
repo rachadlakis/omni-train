@@ -7,12 +7,12 @@ import types
 import pytest
 import torch
 
-from post_training import losses as L
-from post_training import rewards as R
-from post_training.data import collate_grpo, split_grpo_row, tokenize_grpo
-from post_training.grpo import GRPOObjective, build_rollout, completion_mask_from
+from omni_train.post_training import losses as L
+from omni_train.post_training import rewards as R
+from omni_train.post_training.data import collate_grpo, split_grpo_row, tokenize_grpo
+from omni_train.post_training.grpo import GRPOObjective, build_rollout, completion_mask_from
 from tests.post_training_helpers import make_tokenizer, tiny_llama
-from utils import build_args
+from omni_train.utils import build_args
 
 
 # ----------------------------------------------------------------------
@@ -103,7 +103,7 @@ def test_reward_spec_and_custom_import():
     assert R.parse_reward_spec({"accuracy": 1, "format": 0.2}) == {"accuracy": 1.0, "format": 0.2}
     with pytest.raises(ValueError, match="Unknown reward"):
         R.parse_reward_spec(["acc"])
-    fns = R.build_rewards({"post_training.rewards:contains": 0.5})
+    fns = R.build_rewards({"omni_train.post_training.rewards:contains": 0.5})
     assert fns[0][1] is R.contains and fns[0][2] == 0.5
     with pytest.raises(ValueError, match="Cannot import"):
         R.build_rewards(["nope.module:fn"])

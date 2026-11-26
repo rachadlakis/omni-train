@@ -9,14 +9,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from post_training import losses as L
-from post_training.data import (
+from omni_train.post_training import losses as L
+from omni_train.post_training.data import (
     IGNORE_INDEX, collate_preference, collate_sft, split_preference_row,
     tokenize_preference, tokenize_sft,
 )
-from post_training.objectives import PreferenceObjective, SFTObjective
+from omni_train.post_training.objectives import PreferenceObjective, SFTObjective
 from tests.post_training_helpers import PAIRS, make_tokenizer, tiny_llama
-from utils import build_args
+from omni_train.utils import build_args
 
 
 # ----------------------------------------------------------------------
@@ -375,7 +375,7 @@ class TestObjectives:
 
     def test_disable_dropout(self):
         from peft import LoraConfig, get_peft_model
-        from post_training.objectives import disable_dropout
+        from omni_train.post_training.objectives import disable_dropout
         from transformers import OPTConfig, OPTForCausalLM
         model = OPTForCausalLM(OPTConfig(vocab_size=50, hidden_size=16, ffn_dim=32, num_hidden_layers=2,
                                          num_attention_heads=2, max_position_embeddings=64,

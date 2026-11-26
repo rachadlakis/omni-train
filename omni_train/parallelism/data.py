@@ -32,7 +32,7 @@ def synthetic_blocks(n: int, seq_len: int, vocab: int, seed: int = 0) -> torch.T
 def text_blocks(args, tokenizer, rank: int) -> torch.Tensor:
     from datasets import load_dataset
 
-    from data import _rank0_first  # rank 0 fills the HF cache, the others reuse it
+    from omni_train.data import _rank0_first  # rank 0 fills the HF cache, the others reuse it
 
     with _rank0_first():
         ds = load_dataset(args.dataset, args.dataset_full_name, split=args.dataset_split,

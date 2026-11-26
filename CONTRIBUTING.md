@@ -56,12 +56,12 @@ bash scripts/gpu_check.sh           # quick: NCCL + dist on GPUs + curated smoke
 If you're not sure where to start, these are well-scoped and genuinely useful:
 
 - **Add a new example config** — pick a model or use case not yet covered in `configs/`. Follow the structure of an existing config and add a row to the README table.
-- **Extend layer detection** — `get_model_layers()` in `distributed_utils.py` probes common HF architecture patterns. If you find a model whose layers aren't detected, add the pattern there.
+- **Extend layer detection** — `get_model_layers()` in `omni_train/distributed_utils.py` probes common HF architecture patterns. If you find a model whose layers aren't detected, add the pattern there.
 - **Write tests** — `tests/` has good coverage of config validation but light coverage of data loading and checkpoint paths.
 - **Improve the Web UI** — `ui/static/app.js` and `ui/static/styles.css`. The UI is functional but there is room to improve the job history view and error display.
 
 **Advanced:**
-- **Extend `strategy: 5d`** (`parallelism/`) — LoRA under TP, more HF architectures (Qwen3, Gemma, Mixtral MoE checkpoints), vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules. Any change to gradient sync must keep `python -m pytest -m dist` green; it compares every parameter's gradient against a 1-process run.
+- **Extend `strategy: 5d`** (`omni_train/parallelism/`) — LoRA under TP, more HF architectures (Qwen3, Gemma, Mixtral MoE checkpoints), vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules. Any change to gradient sync must keep `python -m pytest -m dist` green; it compares every parameter's gradient against a 1-process run.
 
 ---
 
@@ -76,7 +76,7 @@ These are non-obvious rules that will break training silently if ignored. Read t
 4-bit and 8-bit quantized weights have no differentiable backward pass. You cannot train them directly with AdamW. Any quantization without `peft.enabled: true` must raise an error in `build_args()`.
 
 **Config changes must go through `build_args()`.**
-All config validation lives in `utils.py::build_args()`. If you add a new config field, add it to the `Args` dataclass and validate it there. Do not add conditional logic inside `train.py` or `distributed_utils.py` based on raw config values.
+All config validation lives in `omni_train/utils.py::build_args()`. If you add a new config field, add it to the `Args` dataclass and validate it there. Do not add conditional logic inside `train.py` or `omni_train/distributed_utils.py` based on raw config values.
 
 **Meta-device init is FSDP-only.**
 The meta-device loading path only applies when PEFT and quantization are both disabled. If you add a new loading path, make sure it does not break this invariant.
@@ -93,7 +93,7 @@ Use `_load_dtype()` when building a model. Mixed precision is a compute-time cas
 
 - **One feature or fix per PR.** Mixed PRs are hard to review and hard to revert.
 - **Add a config example** if you're adding a new capability. If it runs, it works.
-- **Touch `build_args()` or `distributed_utils.py`?** Add a unit test in `tests/test_config_validation.py` or `tests/test_config_combinations.py`.
+- **Touch `build_args()` or `omni_train/distributed_utils.py`?** Add a unit test in `tests/test_config_validation.py` or `tests/test_config_combinations.py`.
 - **Touch the checkpoint logic?** Verify both `dcp_api` and `dtensor_api` paths still work.
 - Keep PR descriptions short: what changed and why, not how.
 

@@ -141,7 +141,7 @@ algorithm:
 `training.batch_size` counts **prompts** per GPU, so a step trains on `batch_size × G` answers.
 `max_prompt_length + max_completion_length` must fit in `training.max_length`.
 
-**Rewards** (`post_training/rewards.py`):
+**Rewards** (`omni_train/post_training/rewards.py`):
 
 | name | value |
 |---|---|
@@ -192,7 +192,7 @@ harder or easier prompts), `len` (average answer tokens) and `kl`. The console c
 
 **Memory and speed.** Sampling holds a KV cache for `batch_size × G` sequences, and decoding is
 memory-bandwidth bound, so a GRPO step costs much more than an SFT step on the same tokens.
-`python planner.py --config <yaml>` includes both phases.
+`python -m omni_train.planner --config <yaml>` includes both phases.
 
 ## PPO
 

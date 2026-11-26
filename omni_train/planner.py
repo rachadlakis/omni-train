@@ -1,7 +1,7 @@
 """Capacity planner: does a training run need distributed training, and which layout?
 
-    python planner.py --model meta-llama/Llama-3.1-8B --gpus 8 --gpu H100 --seq 4096
-    python planner.py --config configs/llm_dpo_lora_single_gpu.yaml --gpus 1 --gpu-mem 6
+    python -m omni_train.planner --model meta-llama/Llama-3.1-8B --gpus 8 --gpu H100 --seq 4096
+    python -m omni_train.planner --config configs/llm_dpo_lora_single_gpu.yaml --gpus 1 --gpu-mem 6
 
 `plan(model, workload, cluster)` estimates the peak memory of one GPU for every strategy
 the trainer supports (solo, DDP, FSDP, and 5d layouts of TP x PP x CP x DP), then
@@ -1291,7 +1291,7 @@ def main(argv=None) -> None:
     else:
         m = resolve_spec(name, w.model_type, cfg.get("custom_transformer_args"))
         if m.source == "estimate":                  # not a preset: read the model's own config.json
-            import advisor
+            from omni_train import advisor
             m = advisor.model_spec({**cfg, "model_name": name, "model_type": w.model_type})
     try:
         c = cluster_from_names(a.gpu, a.gpu_mem, a.gpus, a.nodes)

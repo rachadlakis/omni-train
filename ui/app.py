@@ -114,8 +114,8 @@ IMAGES_DIR = PROJECT_ROOT / "images"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-import advisor  # noqa: E402  (needs PROJECT_ROOT on sys.path)
-import planner  # noqa: E402
+from omni_train import advisor  # noqa: E402  (needs PROJECT_ROOT on sys.path)
+from omni_train import planner  # noqa: E402
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if IMAGES_DIR.exists():
@@ -621,7 +621,7 @@ def _normalize_gpu_type(gpu_name: str) -> str:
 
 
 def _load_mini_utils_module(project_root: Path):
-    utils_path = project_root / "utils.py"
+    utils_path = project_root / "omni_train" / "utils.py"
     spec = importlib.util.spec_from_file_location("fsdp_mini_utils", str(utils_path))
     if not spec or not spec.loader:
         raise RuntimeError(f"Failed to load utils module from {utils_path}")

@@ -7,7 +7,7 @@ import math
 import pytest
 import yaml
 
-import planner as P
+from omni_train import planner as P
 
 LLAMA_8B = P.PRESETS["meta-llama/llama-3.1-8b"]
 H100x8 = P.Cluster(gpu_mem_gb=80, gpus_per_node=8, nodes=1, gpu_name="h100")

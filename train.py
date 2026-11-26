@@ -22,16 +22,16 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DistributedSampler 
 
-import advisor
-from model import Transformer 
-from checkpoint import Checkpointer
-from data import get_dataloader
-from utils import (
+from omni_train import advisor
+from omni_train.model import Transformer 
+from omni_train.checkpoint import Checkpointer
+from omni_train.data import get_dataloader
+from omni_train.utils import (
     plot_losses_in_terminal,
     print_config,
     estimate_training_time,
 )
-from distributed_utils import (
+from omni_train.distributed_utils import (
     BACKEND,
     print_on_rank_0,
     print_banner_on_rank_0,
@@ -48,7 +48,7 @@ from distributed_utils import (
 )
 import wandb
 
-from utils import build_args, load_config, dist_barrier, lr_multiplier
+from omni_train.utils import build_args, load_config, dist_barrier, lr_multiplier
 
 import transformers
 transformers.logging.disable_progress_bar()
@@ -127,7 +127,7 @@ def main(args):
 
         ## 5D parallelism (DP, TP+SP, CP, PP, EP) has its own model and loop.
         if args.strategy == "5d":
-            from parallelism.trainer import train_5d
+            from omni_train.parallelism.trainer import train_5d
             train_5d(args)
             return
 
@@ -278,8 +278,8 @@ def main(args):
         print_banner_on_rank_0(rank, "PREPARING DATA")
         objective = None   # post-training (sft/dpo/...) replaces the per-step loss
         if args.algorithm != "pretrain":
-            from post_training.data import get_post_training_data
-            from post_training.objectives import build_objective
+            from omni_train.post_training.data import get_post_training_data
+            from omni_train.post_training.objectives import build_objective
             objective = build_objective(args, tokenizer)
             pt_dataset, pt_collate, dataloader = get_post_training_data(args, tokenizer, rank, world_size)
             if hasattr(objective, "wrap_loader"):   # PPO: one batch -> a rollout, then several gradient steps
@@ -505,7 +505,7 @@ def main(args):
                 objective.save_extra(saved_to)
 
         if args.export_hf:
-            from export import export_hf
+            from omni_train.export import export_hf
             print_banner_on_rank_0(rank, "EXPORTING (HUGGING FACE FORMAT)")
             out_dir = export_hf(model, tokenizer, args, rank, args.strategy)
             if rank == 0:
