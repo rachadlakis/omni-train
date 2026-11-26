@@ -115,7 +115,7 @@ utils.load_config() → utils.build_args()   # parses + validates YAML into Args
     ▼
 train.py main()
     ├── strategy: 5d → parallelism.trainer.train_5d(args)   # own model + loop, returns
-    ├── algorithm: sft|dpo|simpo|orpo|grpo → post_training data + objective (same model setup/loop)
+    ├── algorithm: sft|dpo|simpo|orpo|grpo|ppo → post_training data + objective (same model setup/loop)
     ├── distributed_utils.apply_solo/ddp/fsdp()   # model setup
     ├── data.get_dataloader()                       # HF dataset + DistributedSampler
     └── checkpoint.Checkpointer                    # FSDP save/load
@@ -190,7 +190,7 @@ Two FSDP checkpoint APIs:
 - `training.lr_scheduler` must be `cosine` (default), `linear` or `constant` — applied after the linear warmup
 - `peft.enabled=true` only supports model types: `llm, seq2seq, encoder, vlm, vision`
 - `strategy: auto` passes `build_args` (for validation only; train.py never runs it). `num_gpus: auto` needs `strategy: auto`
-- `algorithm:` (`post_training.config.parse_algorithm`): `type` ∈ pretrain (default) | sft | dpo | simpo | orpo | grpo; `ppo` → "planned" error; unknown keys are errors, GRPO-only keys on other types too; grpo: `num_generations` ≥ 2, `beta > 0` needs `peft.enabled`, `max_prompt_length + max_completion_length` ≤ `max_length`, rewards must be built-in names or `module:function`; non-pretrain needs `model_type: llm` and strategy solo | ddp | fsdp; `dpo_loss` ∈ sigmoid | ipo | hinge; `label_smoothing` only for dpo+sigmoid; `max_prompt_length` < `max_length`. `dataset.subset` is optional
+- `algorithm:` (`post_training.config.parse_algorithm`): `type` ∈ pretrain (default) | sft | dpo | simpo | orpo | grpo | ppo; unknown keys are errors, RL-, GRPO- and PPO-only keys on other types too; grpo: `num_generations` ≥ 2; ppo: `num_minibatches` divides `batch_size × num_generations`; both: `beta > 0` needs `peft.enabled`, `max_prompt_length + max_completion_length` ≤ `max_length`, rewards must be built-in names or `module:function`; non-pretrain needs `model_type: llm` and strategy solo | ddp | fsdp; `dpo_loss` ∈ sigmoid | ipo | hinge; `label_smoothing` only for dpo+sigmoid; `max_prompt_length` < `max_length`. `dataset.subset` is optional
 - `strategy: 5d` (`_parse_5d`): `dp*tp*cp*pp == num_gpus` (`dp: auto` infers it), `ep` divides dp and needs `custom_transformer_args.num_experts`, `sp` needs tp>1, sequence length divisible by cp (by cp*tp with sp), only `model_type: llm | custom_transformer`, no PEFT/quantization, unknown `parallelism` keys are errors. Model-shape checks (heads/kv heads/ffn divisible by tp, layers ≥ pp) run at startup in `parallelism.model.check_divisibility`
 
 ### Model Types
@@ -264,9 +264,13 @@ SFT and preference optimisation reuse the normal solo/DDP/FSDP setup (LoRA/QLoRA
 - **Data** (`post_training/data.py`): SFT takes `messages` | `prompt`+`completion` | Alpaca `instruction`(+`input`)+`output` | `text`. Preference takes `prompt`+`chosen`+`rejected`, chosen/rejected conversations (last turn is the answer), or hh-rlhf strings. With a chat template the prompt is rendered with `add_generation_prompt=True` and must be a string prefix of the full conversation. Prompt and answer are tokenised separately so the mask boundary is exact. Without a template: BOS + prompt + answer + EOS. Preference batches are `[2B, T]` (chosen rows then rejected) so one forward covers both, which FSDP needs. Local `.json/.jsonl/.csv/.parquet` files work as `dataset.name`.
 - **DPO reference:** the policy at step 0 is the reference, so `PreferenceObjective.precompute_reference` scores every pair once (eval mode, no grad, all ranks, all-gathered) and caches `[N, 2]` floats. No second model is kept, for every strategy.
 - **GRPO** (`post_training/grpo.py`, `rewards.py`): the objective does the rollout inside the step: G samples per prompt (`generate`, eval mode, no grad; `synced_gpus` under FSDP), rewards on the decoded text, group-normalised advantages, then one forward with grad and `losses.grpo_loss` (clipped, `loss_type` grpo | dapo | dr_grpo; dapo all-reduces the global token count). `training.batch_size` = prompts per GPU. KL reference = LoRA adapters disabled (`attach_reference`). Keep: `position_ids` from the left-padded mask (absolute-position models), logits ÷ temperature, dropout off, and `torch.clear_autocast_cache()` after the no-grad work (train.py's autocast cache otherwise hands the training forward detached bf16 LoRA weights: no gradient / CheckpointError). The `Rollout` dataclass + `build_rollout` let the dist test feed fixed completions.
+- **PPO** (`post_training/ppo.py`, subclass of `GRPOObjective`, shares `sample()`): `wrap_loader` replaces the dataloader with one that does a rollout per batch and yields `ppo_epochs × num_minibatches` minibatches, so each gradient step is a normal train.py step (LR schedule and step counts included). Values come from a forward pre-hook on `lm_head` (inside the model's forward, which FSDP needs) into `value_head`, one fp32 linear layer that is NOT part of the wrapped model: own AdamW, gradients averaged by hand in `step_extra` (called between `scaler.step` and `scaler.update`), saved by `save_extra` as `<checkpoint>.value_head` / `<folder>/value_head.pt`. So checkpoints, resume and HF export of the policy are unchanged. Advantages are normalised over the global batch and losses divide by global tokens ÷ world. `beta` = KL penalty in the per-token reward (LoRA adapters off), needs LoRA.
+- **Reward models** (`post_training/reward_model.py`, `algorithm.reward_model`, GRPO and PPO): any 1-output sequence classifier, frozen, whole on every GPU; a checkpoint without its scoring head is refused. `rewards` defaults to `accuracy` only when no reward model is given.
+- **Sampling** (`GRPOObjective.sample`): runs under `_blank_generation_config`, because `generate()` fills unset values from the model's own generation_config (Qwen: repetition_penalty 1.1, top_k 20) and the answers would not come from the policy being scored. Pass every sampling value explicitly (`top_k=0`, not None).
+- **Optimizer order:** build the optimizer before any no-grad forward. After one, FSDP's root still holds full copies of its weights, and an optimizer built then updates those instead of the shards (bit a test worker; train.py is fine).
 - **Losses** (`post_training/losses.py`) return per-example values and are averaged over pairs, so DDP/FSDP gradients equal one process on the global batch. SFT uses HF's per-rank token mean (the standard convention, not world-size invariant). `sequence_logps` goes one row at a time in fp32 to avoid a `[B, T, V]` fp32 log-softmax.
 - **Testing rule:** `tests/test_post_training_dist.py -m dist` compares losses AND every parameter's gradient to 1 process. DDP runs on CPU. FSDP cases need ≥ 2 GPUs (FSDP2 has no CPU support in torch 2.6) and are skipped otherwise.
-- **Not supported yet:** PPO, KTO, reward models, packing, 5d; GRPO `num_iterations > 1` and full-FT GRPO with `beta > 0`.
+- **Not supported yet:** KTO, reward-model training, packing, 5d; a separate critic model; GRPO `num_iterations > 1` and full-FT GRPO with `beta > 0`.
 
 ### 5D Parallelism (`strategy: 5d`, `parallelism/`)
 
@@ -303,6 +307,7 @@ Pre-built configs cover common scenarios. Use them as starting points:
 | `llm_sft_lora_single_gpu.yaml` | SFT + LoRA on chat data, Qwen2.5-0.5B-Instruct, 6 GB GPU |
 | `llm_dpo_lora_single_gpu.yaml` | DPO + LoRA on UltraFeedback pairs, Qwen2.5-0.5B-Instruct, 6 GB GPU |
 | `llm_grpo_lora_single_gpu.yaml` | GRPO + LoRA (KL via disabled adapters) on GSM8K with the accuracy reward, Qwen2.5-0.5B-Instruct, 6 GB GPU |
+| `llm_ppo_lora_single_gpu.yaml` | PPO + LoRA (value head, KL via disabled adapters) on GSM8K, Qwen2.5-0.5B-Instruct, 6 GB GPU |
 
 ---
 

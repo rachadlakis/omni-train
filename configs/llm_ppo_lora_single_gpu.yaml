@@ -1,0 +1,92 @@
+## PPO with LoRA on one small GPU: grade-school math with verifiable rewards.
+## Each batch becomes a rollout: the model answers the prompts, reward functions (or a reward
+## model) score the answers, then ppo_epochs x num_minibatches gradient steps learn from them.
+## A value head (one linear layer, its own optimizer) predicts the reward; the KL reference is the
+## same model with its LoRA adapters disabled, so no second copy of the weights is kept.
+##   CONFIG_PATH=configs/llm_ppo_lora_single_gpu.yaml bash scripts/launch.sh
+## Watch `reward` climb and `v_err` (the value head's error) fall in the progress line.
+model_name: Qwen/Qwen2.5-0.5B-Instruct
+model_type: llm
+
+dataset:
+  name: openai/gsm8k            ## question + answer ("... #### 72"): the accuracy reward reads the number after ####
+  subset: main
+  split: train[:1000]
+
+algorithm:
+  type: ppo
+  num_generations: 1            ## answers per prompt
+  max_prompt_length: 192        ## prompts are cut from the left
+  max_completion_length: 320    ## tokens generated per answer
+  temperature: 1.0
+  top_p: 1.0
+  beta: 0.05                    ## KL penalty in the reward, against the start model (needs LoRA); 0 = off
+  ppo_epochs: 4                 ## passes over each rollout
+  num_minibatches: 2            ## pieces per pass (must divide batch_size x num_generations)
+  epsilon: 0.2                  ## clip range of the policy
+  gamma: 1.0
+  gae_lambda: 0.95
+  vf_coef: 0.1
+  value_clip: 0.2
+  value_lr: 1.0e-4              ## the value head's own learning rate
+  eos_penalty: 0.0              ## subtracted when an answer is cut at max_completion_length
+  rewards:                      ## accuracy | format | exact_match | contains | length, or "module:function"
+    accuracy: 1.0
+  # reward_model: Skywork/Skywork-Reward-V2-Qwen3-0.6B   ## any HF reward model (1 output), alone or with rewards
+  system_prompt: Please reason step by step, and put your final answer within \boxed{}.
+
+training:
+  epochs: 1
+  batch_size: 8                 ## PROMPTS per GPU per rollout; a gradient step trains on 8 / num_minibatches answers
+  max_length: 512               ## >= max_prompt_length + max_completion_length
+  learning_rate: 2e-5           ## PPO likes small steps: LoRA ~1e-5 to 5e-5, full fine-tune ~1e-6
+  gradient_checkpointing: true
+  warmup_steps: 10
+  lr_scheduler: constant
+  weight_decay: 0.0
+  grad_clip: 1.0
+
+strategy: solo    ## solo | ddp | fsdp (FSDP: generation runs with synced_gpus; not 5d)
+num_gpus: 1
+checkpoint_dir: checkpoints
+save: true
+
+dist_parameters:
+  mixed_precision: true         ## bf16 autocast, fp32 weights
+  param_dtype: bfloat16
+  reduce_dtype: float32
+  output_dtype: bfloat16
+  cast_forward_inputs: false
+  distribute_api: dcp_api
+
+save_load:
+  resume: false
+  resume_path: ""
+  load_model_from_hf: true
+
+prefetch:
+  explicit: false
+  forward: 1
+  backward: 1
+
+peft:
+  enabled: true
+  type: lora
+  r: 16
+  alpha: 32
+  dropout: 0.0                  ## dropout is switched off for PPO anyway (log-probs must match sampling)
+  target_modules: all-linear
+  bias: none
+
+quantization:                   ## enabled: true + peft.type: qlora for QLoRA (solo/ddp only)
+  enabled: false
+  bits: 4
+  quant_type: nf4
+  compute_dtype: bfloat16
+  double_quant: true
+
+wandb:
+  wandb_log_with_train: false
+  wandb_entity: ""
+  wandb_project: "omni-train"
+  wandb_run_name: ""

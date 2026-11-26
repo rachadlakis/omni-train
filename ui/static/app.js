@@ -177,6 +177,8 @@ const DEFAULT_DATA = {
   custom_transformer: { name: 'synthetic', subset: null, split: 'train' },
 };
 
+const isRL = (a) => a === 'grpo' || a === 'ppo';
+
 function defaultConfig() {
   return {
     model_name: 'Qwen/Qwen2.5-0.5B-Instruct',
@@ -185,6 +187,8 @@ function defaultConfig() {
     algorithm: { type: 'pretrain', beta: 0.1, dpo_loss: 'sigmoid', label_smoothing: 0, simpo_gamma: 0.5, max_prompt_length: 256, completion_only: true,
       num_generations: 4, max_completion_length: 320, temperature: 1.0, top_p: 1.0, epsilon: 0.2, epsilon_high: 0.28,
       loss_type: 'dapo', scale_rewards: true, rewards: { accuracy: 1.0 }, custom_reward: '',
+      ppo_epochs: 4, num_minibatches: 2, gamma: 1.0, gae_lambda: 0.95, vf_coef: 0.1, value_clip: 0.2, value_lr: 1e-4, eos_penalty: 0,
+      reward_model: '', reward_model_weight: 1,
       system_prompt: 'Please reason step by step, and put your final answer within \\boxed{}.' },
     training: { epochs: 1, batch_size: 4, max_length: 512, learning_rate: 2e-4, gradient_checkpointing: true,
       warmup_steps: 20, lr_scheduler: 'cosine', weight_decay: 0.0, grad_clip: 1.0 },
@@ -210,8 +214,13 @@ function loadConfig(raw) {
   if (!src.peft) cfg.peft.enabled = false;
   const algo = src.algorithm || {};
   if (!src.algorithm) cfg.algorithm.type = 'pretrain';
-  if (algo.type === 'grpo') {
-    const spec = algo.rewards ?? ['accuracy'];
+  if (isRL(algo.type)) {
+    const rm = algo.reward_model;                       // a name, or {name, weight, max_length, batch_size}
+    cfg.algorithm.reward_model = (rm && typeof rm === 'object' ? rm.name : rm) || '';
+    cfg.algorithm.reward_model_weight = rm && typeof rm === 'object' ? (rm.weight ?? 1) : 1;
+    cfg.algorithm.reward_model_extra = rm && typeof rm === 'object'
+      ? Object.fromEntries(Object.entries(rm).filter(([k]) => k !== 'name' && k !== 'weight')) : {};
+    const spec = algo.rewards ?? (rm ? {} : ['accuracy']);
     cfg.algorithm.rewards = Array.isArray(spec) || typeof spec === 'string'
       ? Object.fromEntries([].concat(spec).map((n) => [String(n), 1])) : { ...spec };
     if (algo.system_prompt === undefined || algo.system_prompt === null) cfg.algorithm.system_prompt = '';
@@ -220,6 +229,10 @@ function loadConfig(raw) {
     const len = (src.training || {}).max_length;
     if (len && algo.max_prompt_length === undefined) cfg.algorithm.max_prompt_length = Math.floor(len / 2);
     if (len && algo.max_completion_length === undefined) cfg.algorithm.max_completion_length = len - cfg.algorithm.max_prompt_length;
+    if (algo.type === 'ppo') {                          // the trainer's defaults, not the wizard's
+      if (algo.num_generations === undefined) cfg.algorithm.num_generations = 1;
+      if (algo.num_minibatches === undefined) cfg.algorithm.num_minibatches = 1;
+    }
     ['epsilon', 'loss_type'].forEach((k) => { if (algo[k] === undefined) cfg.algorithm[k] = { epsilon: 0.2, loss_type: 'grpo' }[k]; });
     if (algo.epsilon_high === undefined) cfg.algorithm.epsilon_high = cfg.algorithm.epsilon;
   }
@@ -231,7 +244,7 @@ const goalOf = (cfg) => {
   const a = cfg.algorithm.type;
   if (a === 'sft') return 'sft';
   if (['dpo', 'simpo', 'orpo'].includes(a)) return 'preference';
-  if (a === 'grpo') return 'rl';
+  if (isRL(a)) return 'rl';
   return 'pretrain';
 };
 
@@ -247,18 +260,27 @@ function exportConfig(cfg) {
     if (a === 'dpo') { algo.dpo_loss = c.algorithm.dpo_loss; if (c.algorithm.dpo_loss === 'sigmoid' && Number(c.algorithm.label_smoothing)) algo.label_smoothing = Number(c.algorithm.label_smoothing); }
     if (a === 'simpo') algo.simpo_gamma = Number(c.algorithm.simpo_gamma);
   }
-  if (a === 'grpo') {
+  if (isRL(a)) {
     const g = c.algorithm;
     Object.assign(algo, {
       num_generations: Number(g.num_generations), max_prompt_length: Number(g.max_prompt_length),
       max_completion_length: Number(g.max_completion_length), temperature: Number(g.temperature), top_p: Number(g.top_p),
-      beta: c.peft.enabled ? Number(g.beta) : 0, epsilon: Number(g.epsilon), epsilon_high: Number(g.epsilon_high),
-      loss_type: g.loss_type, scale_rewards: !!g.scale_rewards,
+      beta: c.peft.enabled ? Number(g.beta) : 0, epsilon: Number(g.epsilon),
     });
+    if (Number(g.top_k)) algo.top_k = Number(g.top_k);
+    if (a === 'grpo') Object.assign(algo, { epsilon_high: Number(g.epsilon_high), loss_type: g.loss_type, scale_rewards: !!g.scale_rewards });
+    else ['ppo_epochs', 'num_minibatches', 'gamma', 'gae_lambda', 'vf_coef', 'value_clip', 'value_lr', 'eos_penalty'].forEach((k) => { algo[k] = Number(g[k]); });
+    const rmName = String(g.reward_model || '').trim();
+    const rmWeight = Number(g.reward_model_weight);
+    if (rmName) {
+      const extra = g.reward_model_extra || {};
+      algo.reward_model = rmWeight === 1 && !Object.keys(extra).length ? rmName : { name: rmName, weight: rmWeight, ...extra };
+    }
     const rewards = {};
     for (const [name, w] of Object.entries(g.rewards || {})) if (w !== null && w !== '' && Number(w)) rewards[name] = Number(w);
     if (g.custom_reward && g.custom_reward.includes(':')) rewards[g.custom_reward.trim()] = 1.0;
-    algo.rewards = Object.keys(rewards).length ? rewards : { accuracy: 1.0 };
+    if (Object.keys(rewards).length) algo.rewards = rewards;
+    else if (!rmName) algo.rewards = { accuracy: 1.0 };
     if (g.system_prompt && String(g.system_prompt).trim()) algo.system_prompt = String(g.system_prompt).trim();
     c.training.max_length = Math.max(Number(c.training.max_length), algo.max_prompt_length + algo.max_completion_length);
   }
@@ -1017,13 +1039,15 @@ function stepGoal() {
     ['pretrain', 'Pretrain', 'Next-token training on raw text, or the task loss of a vision, detection, VLM or embedding model. Every strategy, including 5D.', 'Solo, DDP, FSDP, 5D'],
     ['sft', 'Supervised fine-tuning', 'Teach a model to follow instructions or chat. Loss on the assistant turns only.', 'Solo, DDP, FSDP'],
     ['preference', 'Preference alignment', 'DPO, SimPO or ORPO on chosen / rejected answer pairs. No reward model needed.', 'DPO, SimPO, ORPO'],
-    ['rl', 'Reinforcement learning', 'GRPO: the model writes answers, reward functions score them, and it learns from the best of each group.', 'GRPO now, PPO planned'],
+    ['rl', 'Reinforcement learning', 'The model writes answers, reward functions or a reward model score them, and it learns from the scores.', 'GRPO, PPO'],
   ];
   const algo = W.cfg.algorithm.type;
   const cat = S.catalog.algorithms;
   const prefAlgo = ['dpo', 'simpo', 'orpo'].includes(algo) ? algo : W.ui.algo;
   setTimeout(() => {
     $$('.choice[data-goal]').forEach((b) => { b.onclick = () => setGoal(b.dataset.goal); });
+    const rlSeg = $('[data-seg="rlalgo"]');
+    if (rlSeg) rlSeg.onclick = (e) => { const b = e.target.closest('button'); if (b && !b.disabled) setGoal('rl', b.dataset.val); };
     const seg = $('[data-seg="algo"]');
     if (seg) seg.onclick = (e) => { const b = e.target.closest('button'); if (b && !b.disabled) { W.ui.algo = b.dataset.val; setGoal('preference', b.dataset.val); } };
     $('#tpl-list') && loadTemplates();
@@ -1046,8 +1070,8 @@ function stepGoal() {
     </section>` : ''}
     ${goal === 'rl' ? `<section class="step-section">
       <h3>RL method</h3>
-      <p>${esc((cat.find((a) => a.id === 'grpo') || {}).summary || '')}</p>
-      ${segmented('rlalgo', [['grpo', 'GRPO'], ['ppo', 'PPO (planned)', true, 'Needs a reward model and a value head']], 'grpo')}
+      <p>${esc((cat.find((a) => a.id === W.cfg.algorithm.type) || {}).summary || '')}</p>
+      ${segmented('rlalgo', [['grpo', 'GRPO'], ['ppo', 'PPO']], W.cfg.algorithm.type)}
     </section>` : ''}
     <section class="step-section">
       <h3>Or start from a template</h3>
@@ -1059,7 +1083,7 @@ function stepGoal() {
 function setGoal(goal, algo) {
   const c = W.cfg;
   const prev = c.algorithm.type;
-  const type = goal === 'pretrain' ? 'pretrain' : goal === 'sft' ? 'sft' : goal === 'rl' ? 'grpo' : (algo || W.ui.algo || 'dpo');
+  const type = goal === 'pretrain' ? 'pretrain' : goal === 'sft' ? 'sft' : goal === 'rl' ? (algo || (isRL(prev) ? prev : 'grpo')) : (algo || W.ui.algo || 'dpo');
   c.algorithm.type = type;
   const info = S.catalog.algorithms.find((a) => a.id === type);
   if (goal !== 'pretrain') {
@@ -1068,10 +1092,11 @@ function setGoal(goal, algo) {
       c.dataset = { name: info.example_dataset.name, subset: info.example_dataset.subset || null, split: info.example_dataset.split };
     }
     if (info && info.beta) c.algorithm.beta = info.beta;
-    if (type === 'grpo' && methodOf(c) === 'full') setMethod(c, 'lora');
-    if (type === 'grpo' && prev !== 'grpo') c.algorithm.max_prompt_length = 192;
-    if (type !== 'grpo' && prev === 'grpo') c.algorithm.max_prompt_length = 256;
-    if (type === 'grpo' && prev !== 'grpo') c.training.batch_size = Math.min(c.training.batch_size, 2);  // x G answers each
+    if (isRL(type) && methodOf(c) === 'full') setMethod(c, 'lora');
+    if (isRL(type) && !isRL(prev)) c.algorithm.max_prompt_length = 192;
+    if (!isRL(type) && isRL(prev)) c.algorithm.max_prompt_length = 256;
+    if (type === 'grpo' && prev !== 'grpo') { c.training.batch_size = Math.min(c.training.batch_size, 2); c.algorithm.num_generations = 4; }  // x G answers each
+    if (type === 'ppo' && prev !== 'ppo') { c.training.batch_size = 8; c.algorithm.num_generations = 1; c.algorithm.num_minibatches = 2; }
     if (c.strategy === '5d') c.strategy = c.num_gpus > 1 ? 'fsdp' : 'solo';
   } else if (prev !== 'pretrain' && c.model_type === 'llm') {
     c.dataset = clone(DEFAULT_DATA.llm);
@@ -1451,16 +1476,16 @@ function stepTraining() {
   const c = W.cfg;
   const a = c.algorithm.type;
   const pref = ['dpo', 'simpo', 'orpo'].includes(a);
-  const grpo = a === 'grpo';
+  const rl = isRL(a);
   const betaHint = { dpo: 'KL strength against the reference; 0.1 typical', simpo: 'Reward scale; 2.0 typical', orpo: 'Weight λ of the odds-ratio term; 0.1 typical' }[a];
   return `
     <section class="step-section">
       <h3>Optimisation</h3>
-      <p>${pref ? `${ALGO_LABEL[a]} wants a lower learning rate than SFT: about 1e-5 to 1e-4 with LoRA, 5e-7 to 5e-6 for a full fine-tune.` : grpo ? 'GRPO likes small steps: about 1e-5 to 5e-5 with LoRA, around 1e-6 for a full fine-tune.' : 'AdamW with linear warmup, then the chosen schedule.'}</p>
+      <p>${pref ? `${ALGO_LABEL[a]} wants a lower learning rate than SFT: about 1e-5 to 1e-4 with LoRA, 5e-7 to 5e-6 for a full fine-tune.` : rl ? `${ALGO_LABEL[a]} likes small steps: about 1e-5 to 5e-5 with LoRA, around 1e-6 for a full fine-tune.` : 'AdamW with linear warmup, then the chosen schedule.'}</p>
       <div class="grid">
         ${field('Epochs', 'training.epochs', { type: 'int', min: 1 })}
-        ${field(pref ? 'Pairs per GPU' : grpo ? 'Prompts per GPU' : 'Batch per GPU', 'training.batch_size', { type: 'int', min: 1, hint: pref ? 'Each pair runs chosen + rejected' : grpo ? `Each prompt is answered ${c.algorithm.num_generations} times` : '' })}
-        ${c.model_type === 'custom_transformer' || pref || grpo ? '' : field('Max sequence tokens', 'training.max_length', { type: 'int', min: 8 })}
+        ${field(pref ? 'Pairs per GPU' : rl ? 'Prompts per GPU' : 'Batch per GPU', 'training.batch_size', { type: 'int', min: 1, hint: pref ? 'Each pair runs chosen + rejected' : rl ? (a === 'ppo' ? 'Prompts answered per rollout' : `Each prompt is answered ${c.algorithm.num_generations} times`) : '' })}
+        ${c.model_type === 'custom_transformer' || pref || rl ? '' : field('Max sequence tokens', 'training.max_length', { type: 'int', min: 8 })}
         ${field('Learning rate', 'training.learning_rate', { type: 'float' })}
         ${select('Schedule', 'training.lr_scheduler', [['cosine', 'Cosine'], ['linear', 'Linear'], ['constant', 'Constant']])}
         ${field('Warmup steps', 'training.warmup_steps', { type: 'int', min: 0 })}
@@ -1477,7 +1502,7 @@ function stepTraining() {
         ${a === 'dpo' && c.algorithm.dpo_loss === 'sigmoid' ? field('Label smoothing', 'algorithm.label_smoothing', { type: 'float', hint: 'Assumed share of flipped labels, < 0.5' }) : ''}
         ${a === 'simpo' ? field('Target margin (γ)', 'algorithm.simpo_gamma', { type: 'float' }) : ''}
       </div></section>` : ''}
-    ${grpo ? grpoSettings(c) : ''}
+    ${rl ? rlSettings(c) : ''}
     <section class="step-section">
       <h3>Saving and tracking</h3>
       <div class="grid">
@@ -1547,8 +1572,9 @@ const REWARD_INFO = {
   length: 'Penalty for running into the token limit',
 };
 
-function grpoSettings(c) {
+function rlSettings(c) {
   const g = c.algorithm;
+  const ppo = g.type === 'ppo';
   const lora = c.peft.enabled;
   setTimeout(() => {
     $$('[data-reward]').forEach((el) => {
@@ -1571,8 +1597,22 @@ function grpoSettings(c) {
       <input type="text" inputmode="decimal" data-reward="${esc(name)}" value="${w || 1}" aria-label="${esc(name)} weight" ${w ? '' : 'disabled'}></div>`;
   }).join('');
   return `<section class="step-section">
-      <h3>GRPO settings</h3>
-      <p>Each step samples a group of answers per prompt; answers that score above their group's average are reinforced. The progress line shows <code>reward</code>; the loss itself stays near 0.</p>
+      <h3>${ALGO_LABEL[g.type]} settings</h3>
+      ${ppo ? `<p>Each batch of prompts is answered once (the rollout), then several gradient steps learn from the answers. The progress line shows <code>reward</code> and <code>v_err</code>, the value head's error.</p>
+      <div class="grid">
+        ${field('Answers per prompt', 'algorithm.num_generations', { type: 'int', min: 1, rerender: true })}
+        ${field('Passes per rollout', 'algorithm.ppo_epochs', { type: 'int', min: 1, hint: '4 typical' })}
+        ${field('Minibatches per pass', 'algorithm.num_minibatches', { type: 'int', min: 1, hint: `Must divide prompts × answers (${Number(c.training.batch_size) * Number(g.num_generations)})` })}
+        ${field('Temperature', 'algorithm.temperature', { type: 'float', hint: '1.0 keeps exploration' })}
+        ${field('KL beta', 'algorithm.beta', { type: 'float', hint: lora ? 'Penalty for leaving the start model; 0.05 typical, 0 = off' : 'Needs LoRA (the reference is the model without adapters); 0 for a full fine-tune' })}
+        ${field('Clip ε', 'algorithm.epsilon', { type: 'float' })}
+        ${field('GAE λ', 'algorithm.gae_lambda', { type: 'float', hint: '0.95 typical' })}
+        ${field('Discount γ', 'algorithm.gamma', { type: 'float' })}
+        ${field('Value loss weight', 'algorithm.vf_coef', { type: 'float' })}
+        ${field('Value learning rate', 'algorithm.value_lr', { type: 'float', hint: "The value head's own optimizer" })}
+        ${field('Value clip', 'algorithm.value_clip', { type: 'float', hint: '0 = off' })}
+        ${field('Cut-answer penalty', 'algorithm.eos_penalty', { type: 'float', hint: 'Subtracted when an answer hits the token limit' })}
+      </div>` : `<p>Each step samples a group of answers per prompt; answers that score above their group's average are reinforced. The progress line shows <code>reward</code>; the loss itself stays near 0.</p>
       <div class="grid">
         ${field('Answers per prompt (G)', 'algorithm.num_generations', { type: 'int', min: 2, hint: '4–16 typical; more = better signal, slower', rerender: true })}
         ${field('Temperature', 'algorithm.temperature', { type: 'float', hint: '1.0 keeps exploration' })}
@@ -1581,11 +1621,13 @@ function grpoSettings(c) {
         ${field('Clip ε (high)', 'algorithm.epsilon_high', { type: 'float', hint: '0.28 = DAPO clip-higher' })}
         ${select('Loss normalisation', 'algorithm.loss_type', [['dapo', 'DAPO (per token)'], ['grpo', 'GRPO (per answer)'], ['dr_grpo', 'Dr. GRPO (fixed length)']])}
       </div>
-      <div style="margin-top:14px">${check('Scale advantages by the group std', 'algorithm.scale_rewards', 'Off = Dr. GRPO (no bias towards very easy or very hard prompts)')}</div>
+      <div style="margin-top:14px">${check('Scale advantages by the group std', 'algorithm.scale_rewards', 'Off = Dr. GRPO (no bias towards very easy or very hard prompts)')}</div>`}
       <h3 style="margin-top:20px">Rewards</h3>
-      <p>Weighted sum of the selected functions. Accuracy needs a reference-answer column.</p>
+      <p>Weighted sum of the selected functions and the reward model, if any. Accuracy needs a reference-answer column.</p>
       <div class="stack" style="gap:10px">${rows}</div>
-      <div class="grid two" style="margin-top:14px">${field('Custom reward function', 'algorithm.custom_reward', { placeholder: 'my_pkg.rewards:is_polite', hint: 'Importable module:function(prompts, completions, answers, **info) -> list of floats' })}</div>
+      <div class="grid two" style="margin-top:14px">${field('Custom reward function', 'algorithm.custom_reward', { placeholder: 'my_pkg.rewards:is_polite', hint: 'Importable module:function(prompts, completions, answers, **info) -> list of floats' })}
+        ${field('Reward model', 'algorithm.reward_model', { placeholder: 'Skywork/Skywork-Reward-V2-Qwen3-0.6B', hint: 'Optional Hugging Face reward model (one output). Kept frozen on every GPU; alone if no function is selected.' })}
+        ${field('Reward model weight', 'algorithm.reward_model_weight', { type: 'float' })}</div>
     </section>`;
 }
 
@@ -1781,7 +1823,7 @@ async function renderPlanner(main) {
           <input id="p-model" class="q-wide" type="text" list="p-presets" value="${esc(P.model)}" spellcheck="false" autocomplete="off" aria-label="Model">
           <datalist id="p-presets">${catalog.models.map((m) => `<option value="${esc(m.name)}">${fmt.params(m.params)}</option>`).join('')}</datalist>
           <span>for</span>
-          <select id="p-algorithm" aria-label="Goal">${opt(['pretrain', 'sft', 'dpo', 'simpo', 'orpo', 'grpo'].map((a) => [a, ALGO_LABEL[a]]), P.algorithm)}</select>
+          <select id="p-algorithm" aria-label="Goal">${opt(['pretrain', 'sft', 'dpo', 'simpo', 'orpo', 'grpo', 'ppo'].map((a) => [a, ALGO_LABEL[a]]), P.algorithm)}</select>
           <span>on</span>
           <select id="p-gpu" class="q-wide" aria-label="GPU type">${opt(gpuOpts, P.gpu)}</select>
           <span>GPUs.</span>
@@ -1825,7 +1867,7 @@ async function renderPlanner(main) {
     c.model_name = P.model; c.algorithm.type = P.algorithm;
     setMethod(c, change.method || P.method);
     c.training.batch_size = P.batch; c.training.max_length = change.seq_len || P.seq; c.training.gradient_checkpointing = true;
-    if (P.algorithm === 'grpo') {
+    if (isRL(P.algorithm)) {
       c.algorithm.max_prompt_length = Math.floor(c.training.max_length / 2);
       c.algorithm.max_completion_length = c.training.max_length - c.algorithm.max_prompt_length;
     }

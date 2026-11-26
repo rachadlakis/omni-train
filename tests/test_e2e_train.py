@@ -216,6 +216,37 @@ def test_grpo_reward_goes_up(tiny_model_dir, tmp_path, strategy, nproc):
 
 
 @pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
+def test_ppo_reward_goes_up_resumes_and_exports(tiny_model_dir, tmp_path, strategy, nproc):
+    rows = [{"prompt": p["prompt"], "answer": p["chosen"]} for p in PAIRS] * 8
+    data = _write_jsonl(tmp_path / "ppo.jsonl", rows)
+    algo = {"type": "ppo", "num_generations": 8, "max_prompt_length": 16, "max_completion_length": 8, "rewards": ["contains"],
+            "ppo_epochs": 2, "num_minibatches": 2, "value_lr": 0.01}
+    cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=6, algorithm=algo,
+               training__batch_size=4 // nproc, training__learning_rate=5e-3, save=True, save_load__export_hf=True)
+    out = _train(cfg, tmp_path, f"ppo_{strategy}")
+    rewards = [float(r) for r in re.findall(r"\| reward: ([-0-9.]+)", out)]
+    assert len(rewards) == 6 * 8 * 2 * 2                        # epochs x batches x ppo_epochs x minibatches
+    n = len(rewards) // 4
+    first, last = sum(rewards[:n]) / n, sum(rewards[-n:]) / n
+    assert last > first + 0.05, (first, last)
+
+    (ckpt,) = glob.glob(str(tmp_path / "ckpt" / strategy / "*.pt"))
+    assert os.path.exists(ckpt[:-3] + ".value_head")
+    (export,) = glob.glob(str(tmp_path / "ckpt" / "hf" / "*"))   # a plain policy: no trace of the value head
+    from safetensors import safe_open
+    with safe_open(os.path.join(export, "model.safetensors"), "pt") as f:
+        assert not any("value" in k for k in f.keys())
+    assert torch.isfinite(_logits(export, IDS)).all()
+    again = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc, training__epochs=1, algorithm=algo,
+                 training__batch_size=4 // nproc, training__learning_rate=1e-5,
+                 save_load__resume=True, save_load__resume_path=ckpt)
+    out = _train(again, tmp_path, f"ppo_resume_{strategy}")
+    assert "Value head restored" in out and "Optimizer state restored" in out
+    resumed = [float(r) for r in re.findall(r"\| reward: ([-0-9.]+)", out)]
+    assert sum(resumed) / len(resumed) > first                   # it continues from the trained policy
+
+
+@pytest.mark.parametrize("strategy,nproc", [("solo", 1), ("ddp", 2)])
 def test_dpo_starts_at_ln2_and_learns(tiny_model_dir, tmp_path, strategy, nproc):
     data = _write_jsonl(tmp_path / "pairs.jsonl", PAIRS * 8)
     cfg = _cfg(tiny_model_dir, data, tmp_path, strategy=strategy, nproc=nproc,

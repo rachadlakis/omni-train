@@ -4,7 +4,8 @@ A reward function scores a group of completions:
 
     fn(prompts: list[str], completions: list[str], answers: list[str | None], **info) -> list[float]
 
-``info`` carries ``completion_lengths`` (tokens) and ``max_completion_length``. Pick them in
+``info`` carries ``completion_lengths`` (tokens), ``max_completion_length`` and ``conversations``
+(the prompt as chat messages, or None). Pick them in
 YAML by name, optionally with weights; the total reward is the weighted sum:
 
     algorithm:

@@ -81,10 +81,10 @@ def test_plan_endpoint_evaluates_selected_5d_layout(client):
     assert j["selected"]["strategy"] == "5d" and "EP2" in j["selected"]["label"]
 
 
-def test_catalog_lists_algorithms_grpo_ready_ppo_planned(client):
+def test_catalog_lists_every_algorithm_as_ready(client):
     j = client.get("/api/catalog").json()
     status = {a["id"]: a["status"] for a in j["algorithms"]}
-    assert status["sft"] == status["dpo"] == status["grpo"] == "ready" and status["ppo"] == "planned"
+    assert status["sft"] == status["dpo"] == status["grpo"] == status["ppo"] == "ready"
     assert any(m["five_d_ready"] for m in j["models"]) and j["gpus"]
 
 

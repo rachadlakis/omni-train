@@ -282,6 +282,8 @@ def main(args):
             from post_training.objectives import build_objective
             objective = build_objective(args, tokenizer)
             pt_dataset, pt_collate, dataloader = get_post_training_data(args, tokenizer, rank, world_size)
+            if hasattr(objective, "wrap_loader"):   # PPO: one batch -> a rollout, then several gradient steps
+                dataloader = objective.wrap_loader(dataloader, model, device)
         else:
             dataloader = get_dataloader(
                 args.dataset, 
@@ -346,6 +348,12 @@ def main(args):
 
         if objective is not None and objective.prepare(model):
             print_on_rank_0(rank, f"Dropout disabled for {args.algorithm.upper()} (noisy log-probs otherwise)", "🔇")
+        if hasattr(objective, "wrap_loader"):
+            objective.autocast_ctx = autocast_ctx
+        if hasattr(objective, "load_extra") and args.resume:
+            start = checkpointer.last_folder() if checkpointer is not None else args.resume_path
+            found = bool(start) and objective.load_extra(start)
+            print_on_rank_0(rank, "Value head restored ✓" if found else "No saved value head next to the checkpoint: it starts fresh", "♻️")
         if objective is not None and objective.needs_reference:
             print_banner_on_rank_0(rank, "REFERENCE LOG-PROBS")
             print_on_rank_0(rank, "Scoring every pair with the initial model (= the DPO reference); "
@@ -436,6 +444,8 @@ def main(args):
                         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
                     scaler.step(optimizer)
+                    if hasattr(objective, "step_extra"):   # PPO's value head
+                        objective.step_extra(scaler, args.grad_clip)
                     scaler.update()
                     if scheduler is not None:
                         scheduler.step()
@@ -483,7 +493,7 @@ def main(args):
         if not args.save:
             print_on_rank_0(rank, "Checkpoint saving skipped (--save not specified)", "⚠️")
         else:
-            save_checkpoint(
+            saved_to = save_checkpoint(
                 args.strategy, 
                 model, 
                 optimizer, 
@@ -491,6 +501,8 @@ def main(args):
                 args, 
                 checkpointer=checkpointer   # type: ignore
             )
+            if hasattr(objective, "save_extra") and rank == 0:
+                objective.save_extra(saved_to)
 
         if args.export_hf:
             from export import export_hf

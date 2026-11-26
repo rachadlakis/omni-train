@@ -15,7 +15,7 @@ bash scripts/launch.sh        # reads strategy + GPU count from config.yaml
 ## Highlights
 
 - **Four execution modes** — `solo` (single GPU), `ddp` (Distributed Data Parallel), `fsdp` (Fully Sharded Data Parallel), and `5d`: any mix of data, tensor (+sequence), context, pipeline and expert parallelism, set in YAML.
-- **Post-training** — SFT, preference optimisation (DPO, IPO, hinge, SimPO, ORPO) and online RL with **GRPO** (verifiable rewards, DAPO / Dr. GRPO variants), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA. PPO is next.
+- **Post-training** — SFT, preference optimisation (DPO, IPO, hinge, SimPO, ORPO) and online RL with **GRPO** (verifiable rewards, DAPO / Dr. GRPO variants) and **PPO** (value head, reward functions or a reward model), chosen with an `algorithm:` block and run on solo / DDP / FSDP, with or without LoRA.
 - **Parameter-efficient fine-tuning** — LoRA and QLoRA with 4-bit (NF4) / 8-bit quantization via `bitsandbytes`.
 - **Memory-efficient FSDP2** — parameter, gradient, and optimizer-state sharding with meta-device initialization to avoid CPU RAM spikes.
 - **Distributed checkpointing** — both DCP and DTensor APIs.
@@ -360,7 +360,7 @@ machines (plain `torchrun`, no scheduler) and for SLURM clusters, and submits to
 bash ui/launch_ui.sh          # http://127.0.0.1:8787   (REST docs: /docs)
 ```
 
-- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO, or GRPO reinforcement learning; PPO is listed as planned), a model,
+- **New run**: pick a goal (pretrain, SFT, DPO / SimPO / ORPO, or GRPO / PPO reinforcement learning), a model,
   data and hyperparameters. The strategy is automatic unless you choose one (solo, DDP, FSDP or a 5D layout with a
   live rank map). The data step measures your dataset, and a plan panel says in plain words whether one GPU is
   enough, what to do if not, and what would be simpler or cheaper, each with a button to use it.
@@ -389,7 +389,7 @@ memory of every strategy split into weights, gradients, AdamW states, activation
 layout (including a `parallelism:` block for 5D), the fewest GPUs each strategy needs and what-if fixes
 (gradient checkpointing, LoRA, QLoRA, shorter sequences). The same plan is served at `POST /api/plan`.
 Estimates follow this repo's precision rules (fp32 trainable weights, bf16 frozen LoRA base outside FSDP)
-and match measured single-GPU peaks (RTX 4050: full, SFT, DPO, GRPO) within 15%. DDP, FSDP, 5D and
+and match measured single-GPU peaks (RTX 4050: full, SFT, DPO, GRPO, PPO) within 15%. DDP, FSDP, 5D and
 models above 0.5B parameters have not been measured, so treat those numbers as guidance.
 Times are rougher than memory: one measured run (SFT + LoRA, Qwen2.5-0.5B, RTX 4050) took 0.26 s per step
 where the planner said 0.15 s, so expect real runs to take up to about twice the estimate.
@@ -484,7 +484,8 @@ omni-train/
       vocab-parallel cross-entropy, zig-zag ring attention, interleaved pipeline schedules
 - [x] `strategy: 5d`, SFT and preference optimisation in the web UI
 - [x] GRPO (online RL with reward functions), in the trainer and the web UI
-- [ ] PPO (reward model + value head)
+- [x] PPO (value head, reward functions or a Hugging Face reward model)
+- [ ] Reward-model training
 
 ---
 

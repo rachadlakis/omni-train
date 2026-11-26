@@ -50,9 +50,16 @@ class Checkpointer:
         # run_tag is appended to newly written checkpoint folder names
         # so checkpoints remain self-descriptive (for example, __qlora_q4).
         self.run_tag: str = run_tag
+        self.saved_folder: str | None = None   # set by save() on rank 0
         self.last_training_time = get_latest_checkpoint_folder(
             f"{folder}/fsdp/{'dcp_api' if dcp_api else 'dtensor_api'}"
         )
+
+    def last_folder(self) -> str | None:
+        """The checkpoint a resume loads from (the newest one when this run started)."""
+        if self.last_training_time is None:
+            return None
+        return f"{self.folder}/fsdp/{'dcp_api' if self.dcp_api else 'dtensor_api'}/{self.last_training_time}"
 
     def load_model(self, model: FSDPModule):
         last_model_checkpoint = (
@@ -246,5 +253,6 @@ class Checkpointer:
             new_model_checkpoint = f"{new_checkpoint_folder}/{MODEL_CHECKPOINT}"
             new_optim_checkpoint = f"{new_checkpoint_folder}/{OPTIM_CHECKPOINT}"
             os.makedirs(new_checkpoint_folder, exist_ok=True)
+            self.saved_folder = new_checkpoint_folder
             torch.save(model_state_dict, new_model_checkpoint)
             torch.save(optim_state_dict, new_optim_checkpoint)

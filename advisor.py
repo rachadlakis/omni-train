@@ -175,7 +175,7 @@ def _row_lengths(kind: str, cfg: dict, tokenizer):
             t = ptd.tokenize_preference(row, tokenizer, 10 ** 9, max_prompt)
             return [len(t["prompt_ids"]) + len(t[k]) for k in ("chosen_ids", "rejected_ids")]
         return pair
-    if kind == "grpo":
+    if kind in planner.RL_ALGOS:            # grpo / ppo: prompts only, completions are sampled
         return lambda row: [len(ptd.tokenize_grpo(row, tokenizer, 10 ** 9, algo.get("system_prompt"))["prompt_ids"])]
     field = (cfg.get("dataset") or {}).get("text_field") or "text"
 
@@ -230,7 +230,7 @@ def measure_data(cfg: dict, token: str | None = None, sample: int = SAMPLE, scan
     n_rows = None if total is None else max(1, round(total * share_used))
     exact = complete and len(scanned) == n          # every row's text length was read
     limit = max_length
-    if kind == "grpo":
+    if kind in planner.RL_ALGOS:
         limit = int((cfg.get("algorithm") or {}).get("max_prompt_length") or max_length // 2)
     safe = longest_seen if exact else round(longest_seen * 1.25)
 
@@ -256,7 +256,7 @@ def measure_data(cfg: dict, token: str | None = None, sample: int = SAMPLE, scan
 
 def _tips(d: dict, kind: str) -> list[str]:
     tips = []
-    limit, name = d["limit"], "max_prompt_length" if kind == "grpo" else "max_length"
+    limit, name = d["limit"], "max_prompt_length" if kind in planner.RL_ALGOS else "max_length"
     if d["over_limit_pct"] >= 1:
         tips.append(f"{d['over_limit_pct']:g}% of your examples are longer than {name} ({limit:,}) and will be cut. "
                     f"{d['suggested_max_length']:,} keeps {d['suggested_keeps_pct']:g}% of them whole.")

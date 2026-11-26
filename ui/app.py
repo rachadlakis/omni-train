@@ -1042,7 +1042,7 @@ def _plan_grid(payload: GridPayload) -> dict:
         columns = []
         for s in sorted({int(x) for x in (payload.seq_lens or GRID_SEQ_LENS) if 16 <= int(x) <= 1_048_576}):
             change = {"seq_len": s}
-            if base.algorithm == "grpo":
+            if base.algorithm in planner.RL_ALGOS:
                 change["completion_len"] = s // 2
             label = f"{s // 1024}K" if s >= 1024 and s % 1024 == 0 else str(s)
             columns.append({"key": str(s), "label": label, "title": f"{s:,} tokens", "change": change, "why": ""})
@@ -1117,8 +1117,13 @@ ALGORITHM_CATALOG = [
      "status": "ready", "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 2e-5}, "beta": 0.04,
      "rewards": ["accuracy", "format", "exact_match", "contains", "length"],
      "example_dataset": {"name": "openai/gsm8k", "subset": "main", "split": "train[:1000]"}},
-    {"id": "ppo", "stage": "rl", "title": "PPO (RLHF)", "summary": "Online RL with a reward model and value head.",
-     "data": "prompts + reward model", "status": "planned", "strategies": []},
+    {"id": "ppo", "stage": "rl", "title": "PPO",
+     "summary": "Online RL with a value head: sample answers, score them with reward functions or a reward model, "
+                "then take several clipped gradient steps on each batch of answers.",
+     "data": "prompt | question | problem | messages, plus an optional reference answer (answer | solution | ...)",
+     "status": "ready", "strategies": ["solo", "ddp", "fsdp"], "lr": {"full": 1e-6, "lora": 2e-5}, "beta": 0.05,
+     "rewards": ["accuracy", "format", "exact_match", "contains", "length"],
+     "example_dataset": {"name": "openai/gsm8k", "subset": "main", "split": "train[:1000]"}},
 ]
 
 

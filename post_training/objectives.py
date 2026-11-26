@@ -137,9 +137,10 @@ class PreferenceObjective:
 def build_objective(args, tokenizer=None):
     if args.algorithm == "sft":
         return SFTObjective()
-    if args.algorithm == "grpo":
+    if args.algorithm in ("grpo", "ppo"):
         from .grpo import GRPOObjective
+        from .ppo import PPOObjective
         if tokenizer is None:
-            raise ValueError("grpo needs the tokenizer (to decode completions for the rewards)")
-        return GRPOObjective(args, tokenizer)
+            raise ValueError(f"{args.algorithm} needs the tokenizer (to decode completions for the rewards)")
+        return (PPOObjective if args.algorithm == "ppo" else GRPOObjective)(args, tokenizer)
     return PreferenceObjective(args)
