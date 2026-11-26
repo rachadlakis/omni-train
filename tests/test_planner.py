@@ -413,3 +413,23 @@ def test_shorter_examples_are_suggested_from_the_data():
                                            (5400, "about 1.5 hours"), (25200, "about 7 hours"), (3 * 86400, "about 3 days")])
 def test_duration(seconds, text):
     assert P.duration(seconds) == text
+
+
+def test_more_gpus_is_offered_with_a_smaller_batch_when_no_gpu_count_fits_as_configured():
+    """FSDP shards weights, not activations: at batch 4 no GPU count fits a 235B model, at batch 1 some do."""
+    m = P.spec_from_params(235_000_000_000, "big-235b")
+    r = P.plan(m, P.Workload(batch_size=4, seq_len=2048), H100x8)
+    assert r["verdict"] == "infeasible" and r["min_gpus"]["fsdp"] is None
+    changes = {s["change"]: s for s in r["suggestions"]}
+    full = next(s for c, s in changes.items() if c.startswith("Use ") and "batch of 1" in c)
+    assert full["workload"] == {"batch_size": 1, "grad_ckpt": True} and full["result"].startswith("FSDP x")
+    lora = next(s for c, s in changes.items() if c.startswith("Switch to LoRA (r=16) and use"))
+    assert int(lora["result"].split("x")[1]) < int(full["result"].split("x")[1])
+    assert r["advice"]["others"]
+
+
+def test_nothing_fits_at_any_size_says_so():
+    m = P.spec_from_params(235_000_000_000, "big-235b")
+    r = P.plan(m, P.Workload(batch_size=1, seq_len=1_048_576, method="qlora"), H100x8)
+    assert r["verdict"] == "infeasible" and not r["suggestions"]
+    assert "Nothing up to 1,024 GPUs fits" in r["notes"][0]

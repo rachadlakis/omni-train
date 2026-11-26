@@ -640,7 +640,7 @@ def _best_5d(m, w, c, gpus) -> Option | None:
 def min_gpus_fsdp(m, w, c) -> int | None:
     if w.method == "qlora":
         return None
-    for n in [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]:
+    for n in [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, MAX_GPUS_SEARCHED]:
         lay = Layout("fsdp" if n > 1 else "solo", n, dp=n)
         if memory_per_gpu(m, w, lay)["total"] * GB <= c.usable_bytes:
             return n
@@ -820,6 +820,9 @@ def plan(m: ModelSpec, w: Workload, c: Cluster, data: dict | None = None,
             suggestions.append({"change": f"Use {mg_fsdp} GPUs", "result": f"FSDP x{mg_fsdp}", "per_gpu_gb": None, "workload": {}})
         if mg_5d and mg_5d[0] > N and (not mg_fsdp or mg_5d[0] < mg_fsdp):
             suggestions.append({"change": f"Use {mg_5d[0]} GPUs", "result": mg_5d[1].label(), "per_gpu_gb": None, "workload": {}})
+        suggestions += _more_gpus_after_all(m, w, c, mg_fsdp, mg_5d, suggestions)
+        if not suggestions:
+            notes.insert(0, f"Nothing up to {MAX_GPUS_SEARCHED:,} GPUs fits as configured. Shorter sequences are the remaining lever.")
         more = [n for n in (mg_fsdp, mg_5d[0] if mg_5d else None) if n and n > N]
         if N == 1 and more:
             headline = f"Needs distributed training: at least {min(more)} GPUs of {c.gpu_mem_gb:g} GB."
@@ -887,6 +890,32 @@ def plan(m: ModelSpec, w: Workload, c: Cluster, data: dict | None = None,
 
 
 _TIER = {"solo": 0, "ddp": 1, "fsdp": 2, "5d": 3}
+MAX_GPUS_SEARCHED = 1024
+
+
+def _more_gpus_after_all(m, w, c, mg_fsdp, mg_5d, found) -> list[dict]:
+    """When no GPU count works as configured, the GPU counts that work with a smaller batch, and
+    with LoRA. FSDP shards the model but not the activations, so a large batch per GPU can rule out
+    every GPU count (a 235B model at batch 4)."""
+    out, N = [], c.total_gpus
+    small = {"batch_size": 1, "grad_ckpt": True} if (w.batch_size > 1 or not w.grad_ckpt) else {}
+    tries = []
+    if small and not mg_fsdp and not mg_5d:
+        tries.append(("", small))
+    lora_fits_here = any(s["workload"].get("method") in {"lora", "qlora"} for s in found)
+    if w.method == "full" and w.model_type in {"llm", "seq2seq", "encoder", "vlm", "vision"} and not lora_fits_here:
+        tries.append(("Switch to LoRA (r=16) and use", {"method": "lora", "lora_r": 16, **small}))
+    for label, change in tries:
+        w2 = replace(w, **change)
+        n_fsdp = None if w2.needs_5d else min_gpus_fsdp(m, w2, c)
+        n_5d = min_gpus_5d(m, w2, c)
+        best = min((x for x in ((n_fsdp, f"FSDP x{n_fsdp}"), (n_5d[0] if n_5d else None, n_5d[1].label() if n_5d else ""))
+                    if x[0]), default=None)
+        if best and best[0] > N:
+            batch = " with a batch of 1 per GPU" if "batch_size" in change else ""
+            out.append({"change": f"{label or 'Use'} {best[0]} GPUs{batch}".strip(), "result": best[1],
+                        "per_gpu_gb": None, "workload": change})
+    return out
 
 
 def _why_fsdp_fails(fsdp: Option | None) -> str:
@@ -1071,7 +1100,7 @@ def _alternative_words(alt: dict, w: dict) -> dict:
     where = "1 GPU" if where == "SOLO" else f"{m[2]} GPUs ({m[1]})" if m else where
     detail = f"fits on {where}" + (f", {gb_text(alt['per_gpu_gb'])} per GPU" if alt.get("per_gpu_gb") else "")
     if not alt.get("per_gpu_gb"):
-        detail = (f"with {m[1]}" if m else where) + (f", {duration(alt['total_seconds'])}" if alt.get("total_seconds") else "")
+        detail = (f"needs {m[2]} GPUs ({m[1]})" if m else f"needs {where}") + (f", {duration(alt['total_seconds'])}" if alt.get("total_seconds") else "")
     return {"title": title, "detail": detail[0].upper() + detail[1:], "why": why}
 
 
